@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
+import { unlock } from './unlock.mjs';
 
 const PORT = Number(process.env.E2E_PORT ?? 5196);
 const OUT = new URL('./screenshots/', import.meta.url).pathname;
@@ -228,6 +229,7 @@ try {
 
   const venues = Object.keys(VENUE_OFFSET);
   await page.goto(`http://localhost:${PORT}/?base=BTC&venue=binancef&agg=${venues.join(',')}&history=none`);
+  await unlock(page);
   await page.waitForSelector('.topbar');
   await page.waitForTimeout(8000);
 

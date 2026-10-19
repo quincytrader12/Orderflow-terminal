@@ -4,6 +4,15 @@ A browser-based crypto order-flow terminal with a liquid-glass interface. Your b
 
 Modelled on the feature set of [Cryexc](https://cryexc.josedonato.com/) (whose docs and open-source [backend protocol](https://github.com/jose-donato/cryexc-backend) / [history protocol](https://github.com/jose-donato/cryexc-history) informed this build). This is an independent implementation in TypeScript + React + Canvas 2D.
 
+## Secure boot
+
+The app opens on a black lock screen showing the Novus Ordo emblem, "Welcome to Novus Ordo — a construction by Quincy Gininda", and an **ENTER LEDGER KEY** prompt. While it waits, the terminal really loads in the background, and the bottom-right corner lists each asset as it arrives: emblem, typefaces, theme, ledger database, key vault, CCXT connectors, market hub, aggregate venues, history backfill, order-flow collectors and workspace layout. The terminal opens once the 8-digit ledger key is entered.
+
+- Only a salted SHA-256 digest of the key ships with the app.
+- The desktop process enforces the lock on its own side: API keys, trading, bots, wallets, reports and Telegram stay sealed until it verifies the key. Only public market data and trade recording run before that.
+- Five wrong attempts lock input for 30 s, doubling after each further miss.
+- The end-to-end tests read the key from `NOVUS_LEDGER_KEY`, or from a git-ignored `e2e/.ledger-key` file. In CI, add it as the repository secret `NOVUS_LEDGER_KEY`.
+
 ## Desktop app (Windows .exe)
 
 Novus Ordo ships as a desktop app built with Electron. The desktop app adds:

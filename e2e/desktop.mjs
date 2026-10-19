@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as electron } from 'playwright-core';
+import { unlock } from './unlock.mjs';
 
 const require = createRequire(import.meta.url);
 const OUT = new URL('./screenshots/', import.meta.url).pathname;
@@ -34,7 +35,23 @@ try {
   const page = await app.firstWindow();
   page.on('pageerror', (e) => errors.push(e.message));
   await page.setViewportSize({ width: 1600, height: 950 }).catch(() => undefined);
+  step('secure boot: lock screen, sealed vault, ledger key');
+  await page.waitForSelector('.lock-key input', { timeout: 30_000 });
+  const lockText = await page.locator('.lock').innerText();
+  expect(/WELCOME TO NOVUS ORDO/.test(lockText) && /Quincy Gininda/.test(lockText) && /ENTER LEDGER KEY/.test(lockText), 'emblem screen shows welcome, author and ENTER LEDGER KEY');
+  expect(await page.locator('.lock-emblem img').evaluate((img) => img.complete && img.naturalWidth > 500), 'emblem image loaded');
+  await page.waitForFunction(() => document.querySelectorAll('.lock-loader li').length >= 3, null, { timeout: 20_000 });
+  expect(true, 'loader lists assets as they load');
+  const sealed = await page.evaluate(() => window.novus.vault.list().then(() => 'open', (e) => e.message));
+  expect(/sealed/.test(sealed), `vault sealed in the desktop process before unlock (${sealed})`);
+  await page.waitForFunction(() => /ALL SYSTEMS READY/.test(document.querySelector('.lock-loader')?.textContent ?? ''), null, { timeout: 60_000 });
+  await page.screenshot({ path: `${OUT}desktop-lock-screen.png` });
+  await page.locator('.lock-key input').fill('12345678');
+  await page.waitForSelector('.lock-key.denied');
+  expect((await page.locator('.lock-msg').innerText()).includes('ACCESS DENIED'), 'wrong key denied');
+  await unlock(page);
   await page.waitForSelector('.topbar', { timeout: 30_000 });
+  expect(await page.evaluate(() => window.novus.vault.list().then(() => true, () => false)), 'vault opens after the ledger key');
 
   step('desktop bridge and database');
   const info = await page.evaluate(() => window.novus.app.info());

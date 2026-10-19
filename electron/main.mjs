@@ -10,6 +10,8 @@ import { connectPhantom } from './phantom.mjs';
 import { DEFAULT_RPC, recentActivity, SOL_MINT, tokenInfo, walletBalances } from '../src/shared/solana.ts';
 import { TelegramCommands, tgDetectChat, tgMe, tgSendLong, tgSendPhoto } from '../src/shared/telegram.ts';
 import { reportData } from './reports.mjs';
+import { AttemptGate, ledgerMatches, PUBLIC_CHANNELS } from '../src/shared/ledger.ts';
+import { createHash } from 'node:crypto';
 import { Vault } from './vault.mjs';
 
 // bundled to dist-electron/main.mjs; app root is one level up
@@ -74,10 +76,15 @@ function retentionDays() {
   return db.get('retentionDays') ?? 3;
 }
 
+// sealed until the ledger key is entered; only public market data flows before that
+let unlocked = false;
+const attempts = new AttemptGate();
+
 function registerIpc() {
   const handle = (ch, fn) =>
     ipcMain.handle(ch, async (e, ...args) => {
       try {
+        if (!unlocked && !PUBLIC_CHANNELS.has(ch)) throw new Error('Terminal is sealed — enter the ledger key');
         return { ok: true, value: await fn(e, ...args) };
       } catch (err) {
         return { ok: false, error: String(err?.message ?? err) };
@@ -92,6 +99,18 @@ function registerIpc() {
     vaultBackend: vault.backend,
     retentionDays: retentionDays(),
   }));
+  handle('app:locked', () => !unlocked);
+  handle('app:unlock', async (_e, code) => {
+    attempts.check();
+    const ok = await ledgerMatches(String(code ?? ''), (x) => createHash('sha256').update(x).digest('hex'));
+    if (!ok) {
+      attempts.fail();
+      throw new Error(attempts.waitMs() ? `ACCESS DENIED — locked for ${Math.ceil(attempts.waitMs() / 1000)}s` : 'ACCESS DENIED');
+    }
+    attempts.success();
+    unlocked = true;
+    return true;
+  });
   handle('shell:open', (_e, url) => shell.openExternal(httpsOnly(url)));
 
   // generic HTTPS JSON proxy: exchange REST calls from the main process avoid CORS

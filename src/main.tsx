@@ -1,7 +1,8 @@
-import { StrictMode } from 'react';
+import { StrictMode, useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './app/App';
 import { Embed } from './app/Embed';
+import { alreadyUnlocked, LockScreen } from './app/LockScreen';
 import type { VenueId } from './core/types';
 import { ADAPTERS } from './exchanges';
 import { useSettings, type HistorySource } from './store/settings';
@@ -29,6 +30,19 @@ if (filter && FILTERS.some((f) => f.id === filter)) s.set({ filter: filter as Fi
 
 const embed = params.get('embed');
 
+/** The terminal mounts only after the ledger key is accepted. */
+function Gate({ children }: { children: ReactNode }) {
+  const [state, setState] = useState<'checking' | 'locked' | 'open'>('checking');
+  useEffect(() => {
+    void alreadyUnlocked().then((open) => setState(open ? 'open' : 'locked'));
+  }, []);
+  if (state === 'checking') return <div className="lock" />;
+  if (state === 'locked') return <LockScreen onUnlocked={() => setState('open')} />;
+  return <>{children}</>;
+}
+
 createRoot(document.getElementById('root')!).render(
-  <StrictMode>{embed ? <Embed panelId={embed} params={params} /> : <App />}</StrictMode>,
+  <StrictMode>
+    <Gate>{embed ? <Embed panelId={embed} params={params} /> : <App />}</Gate>
+  </StrictMode>,
 );

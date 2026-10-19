@@ -8,3 +8,4 @@ coverage
 *.tsbuildinfo
 dist-electron
 release
+e2e/.ledger-key

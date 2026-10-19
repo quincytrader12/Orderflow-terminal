@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
+import { unlock } from './unlock.mjs';
 
 const PORT = Number(process.env.E2E_PORT ?? 5199);
 const OUT = new URL('./screenshots/', import.meta.url).pathname;
@@ -57,6 +58,11 @@ try {
   });
   const base = `http://localhost:${PORT}/?venue=sim&agg=sim&history=exchange`;
   await page.goto(base);
+  // secure boot: lock screen first, then the ledger key
+  await page.waitForSelector('.lock-key input');
+  await page.waitForFunction(() => /ALL SYSTEMS READY/.test(document.querySelector('.lock-loader')?.textContent ?? ''), null, { timeout: 40_000 });
+  await page.screenshot({ path: `${OUT}lock-screen.png` });
+  await unlock(page);
   await page.waitForSelector('.topbar');
   await page.waitForTimeout(6000);
   await page.screenshot({ path: `${OUT}00-terminal.png` });

@@ -30,6 +30,9 @@ jobs:
       - run: npm ci
       - run: npx playwright-core install --with-deps chromium
       - run: npm run e2e
+        env:
+          # the lock screen's ledger key, stored as a repository secret
+          NOVUS_LEDGER_KEY: ${{ secrets.NOVUS_LEDGER_KEY }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
