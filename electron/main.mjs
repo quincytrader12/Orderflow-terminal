@@ -10,8 +10,8 @@ import { connectPhantom } from './phantom.mjs';
 import { DEFAULT_RPC, recentActivity, SOL_MINT, tokenInfo, walletBalances } from '../src/shared/solana.ts';
 import { TelegramCommands, tgDetectChat, tgMe, tgSendLong, tgSendPhoto } from '../src/shared/telegram.ts';
 import { reportData } from './reports.mjs';
-import { AttemptGate, ledgerMatches, PUBLIC_CHANNELS } from '../src/shared/ledger.ts';
-import { createHash } from 'node:crypto';
+import { AttemptGate, isLedgerRecord, ledgerMatches, makeLedger, PUBLIC_CHANNELS } from '../src/shared/ledger.ts';
+import { createHash, randomBytes } from 'node:crypto';
 import { Vault } from './vault.mjs';
 
 // bundled to dist-electron/main.mjs; app root is one level up
@@ -79,6 +79,12 @@ function retentionDays() {
 // sealed until the ledger key is entered; only public market data flows before that
 let unlocked = false;
 const attempts = new AttemptGate();
+const sha256Hex = (x) => createHash('sha256').update(x).digest('hex');
+/** The owner's own key (salted digest in the database), else the built-in one. */
+const ledgerRecord = () => {
+  const r = db.get('ledger');
+  return isLedgerRecord(r) ? r : undefined;
+};
 
 function registerIpc() {
   const handle = (ch, fn) =>
@@ -102,13 +108,28 @@ function registerIpc() {
   handle('app:locked', () => !unlocked);
   handle('app:unlock', async (_e, code) => {
     attempts.check();
-    const ok = await ledgerMatches(String(code ?? ''), (x) => createHash('sha256').update(x).digest('hex'));
+    const ok = await ledgerMatches(String(code ?? ''), sha256Hex, ledgerRecord());
     if (!ok) {
       attempts.fail();
       throw new Error(attempts.waitMs() ? `ACCESS DENIED — locked for ${Math.ceil(attempts.waitMs() / 1000)}s` : 'ACCESS DENIED');
     }
     attempts.success();
     unlocked = true;
+    return true;
+  });
+  // lock again (renderer shows the lock screen); bots keep running in this process
+  handle('app:seal', () => {
+    unlocked = false;
+    return true;
+  });
+  handle('app:changeKey', async (_e, current, next) => {
+    attempts.check();
+    if (!(await ledgerMatches(String(current ?? ''), sha256Hex, ledgerRecord()))) {
+      attempts.fail();
+      throw new Error('Current ledger key is wrong');
+    }
+    attempts.success();
+    db.set('ledger', await makeLedger(String(next ?? ''), sha256Hex, randomBytes(16).toString('hex')));
     return true;
   });
   handle('shell:open', (_e, url) => shell.openExternal(httpsOnly(url)));

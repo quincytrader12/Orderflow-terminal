@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import emblem from '../assets/emblem.png';
 import { desktop } from '../desktop/bridge';
-import { AttemptGate, LEDGER_LENGTH, ledgerMatches, normalizeKey } from '../shared/ledger';
+import { AttemptGate, isLedgerRecord, LEDGER_LENGTH, ledgerMatches, makeLedger, normalizeKey, type LedgerRecord } from '../shared/ledger';
 import { runBoot, useBoot } from './boot';
 
 const SESSION_FLAG = 'novus-ledger-open';
@@ -13,13 +13,49 @@ async function sha256Hex(s: string) {
 
 // browser builds check the key here; the desktop app checks it in its own process
 const webGate = new AttemptGate();
+const WEB_LEDGER = 'novus-ledger';
+
+function webLedger(): LedgerRecord | undefined {
+  try {
+    const r = JSON.parse(localStorage.getItem(WEB_LEDGER) ?? 'null');
+    return isLedgerRecord(r) ? r : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Replace the ledger key (needs the current one). */
+export async function changeLedgerKey(current: string, next: string): Promise<void> {
+  if (desktop) {
+    await desktop.app.changeKey(current, next);
+    return;
+  }
+  webGate.check();
+  if (!(await ledgerMatches(current, sha256Hex, webLedger()))) {
+    webGate.fail();
+    throw new Error('Current ledger key is wrong');
+  }
+  const salt = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('');
+  localStorage.setItem(WEB_LEDGER, JSON.stringify(await makeLedger(next, sha256Hex, salt)));
+}
+
+/** Lock the terminal now and return to the lock screen. */
+export async function sealTerminal(): Promise<void> {
+  await desktop?.app.seal().catch(() => undefined);
+  try {
+    sessionStorage.removeItem(SESSION_FLAG);
+  } catch {
+    /* private mode */
+  }
+  location.reload();
+}
 
 async function unlock(code: string): Promise<void> {
   if (desktop) {
     await desktop.app.unlock(code);
   } else {
     webGate.check();
-    if (!(await ledgerMatches(code, sha256Hex))) {
+    if (!(await ledgerMatches(code, sha256Hex, webLedger()))) {
       webGate.fail();
       throw new Error(webGate.waitMs() ? `ACCESS DENIED — locked for ${Math.ceil(webGate.waitMs() / 1000)}s` : 'ACCESS DENIED');
     }

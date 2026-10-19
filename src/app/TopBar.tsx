@@ -9,6 +9,7 @@ import { VENUE_COLORS } from '../ui/theme';
 import { FilterSelect, ThemeSwatches } from '../ui/ThemeControls';
 import { desktop, type CcxtExchangeInfo } from '../desktop/bridge';
 import { useAmtLive } from '../desktop/amt';
+import { sealTerminal } from './LockScreen';
 
 /** Pyramid mark with three candles — Novus Ordo. */
 export function Logo({ size = 26 }: { size?: number }) {
@@ -265,6 +266,9 @@ export function TopBar({ onOpen, onFocusChart, alertCount }: { onOpen: (m: Modal
       </button>
       <ThemeSwatches />
       <FilterSelect />
+      <button className="chip seal" onClick={() => void sealTerminal()} title="Seal the terminal — back to the ledger-key lock screen (bots keep running)">
+        ⛨ Seal
+      </button>
       <button className="chip" onClick={() => onOpen('settings')} title="Settings">
         ⚙
       </button>

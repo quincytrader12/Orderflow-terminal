@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
-import { unlock } from './unlock.mjs';
+import { seedWebLedger, unlock } from './unlock.mjs';
 
 const PORT = Number(process.env.E2E_PORT ?? 5196);
 const OUT = new URL('./screenshots/', import.meta.url).pathname;
@@ -201,6 +201,7 @@ const browser = await chromium.launch({ executablePath: findChromium(), args: ['
 let ok = true;
 try {
   const ctx = await browser.newContext({ viewport: { width: 1600, height: 950 } });
+  await seedWebLedger(ctx);
   const page = await ctx.newPage();
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
   const timers = [];

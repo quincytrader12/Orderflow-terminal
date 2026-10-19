@@ -13,21 +13,57 @@ export function normalizeKey(input: string): string {
   return String(input ?? '').replace(/\D/g, '');
 }
 
-export async function ledgerMatches(input: string, sha256Hex: (s: string) => Promise<string> | string): Promise<boolean> {
+/** Salt and SHA-256 digest of a ledger key; the key itself is never stored. */
+export interface LedgerRecord {
+  salt: string;
+  digest: string;
+}
+
+/** Built-in key, used until the owner sets their own in Settings. */
+export const DEFAULT_LEDGER: LedgerRecord = { salt: SALT, digest: LEDGER_DIGEST };
+
+export function isLedgerRecord(x: unknown): x is LedgerRecord {
+  const r = x as LedgerRecord;
+  return Boolean(r && typeof r.salt === 'string' && r.salt.length >= 8 && /^[0-9a-f]{64}$/.test(r.digest ?? ''));
+}
+
+type Sha = (s: string) => Promise<string> | string;
+
+export async function ledgerMatches(input: string, sha256Hex: Sha, rec: LedgerRecord = DEFAULT_LEDGER): Promise<boolean> {
   const digits = normalizeKey(input);
   if (digits.length !== LEDGER_LENGTH) return false;
-  const h = await sha256Hex(SALT + digits);
+  const h = await sha256Hex(rec.salt + digits);
   // constant-time compare
-  let diff = h.length ^ LEDGER_DIGEST.length;
-  for (let i = 0; i < LEDGER_DIGEST.length; i++) diff |= (h.charCodeAt(i) || 0) ^ LEDGER_DIGEST.charCodeAt(i);
+  let diff = h.length ^ rec.digest.length;
+  for (let i = 0; i < rec.digest.length; i++) diff |= (h.charCodeAt(i) || 0) ^ rec.digest.charCodeAt(i);
   return diff === 0;
+}
+
+/** Reasons a new key is refused, or null when it is acceptable. */
+export function weakKeyReason(input: string): string | null {
+  const d = normalizeKey(input);
+  if (d.length !== LEDGER_LENGTH) return `the key must be ${LEDGER_LENGTH} digits`;
+  if (/^(\d)\1+$/.test(d)) return 'all digits are the same';
+  if ('0123456789012345'.includes(d) || '9876543210987654'.includes(d)) return 'digits run in sequence';
+  return null;
+}
+
+/** New record for a key, with a fresh random salt (hex). */
+export async function makeLedger(input: string, sha256Hex: Sha, randomHex: string): Promise<LedgerRecord> {
+  const why = weakKeyReason(input);
+  if (why) throw new Error(`Choose another key: ${why}`);
+  const salt = `novus-ordo/ledger/${randomHex}:`;
+  return { salt, digest: await sha256Hex(salt + normalizeKey(input)) };
 }
 
 /** Wrong attempts lock input for a while: 5 free tries, then 30 s, doubling. */
 export class AttemptGate {
   private fails = 0;
   private until = 0;
-  constructor(private now: () => number = Date.now) {}
+  private now: () => number;
+  constructor(now: () => number = Date.now) {
+    this.now = now;
+  }
   waitMs() {
     return Math.max(0, this.until - this.now());
   }
@@ -47,6 +83,7 @@ export class AttemptGate {
 
 /** IPC channels that only carry public market data and stay open while locked. */
 export const PUBLIC_CHANNELS = new Set([
+  'app:seal',
   'app:info',
   'app:unlock',
   'app:locked',

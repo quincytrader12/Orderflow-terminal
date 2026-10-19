@@ -1,7 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { IJsonModel } from 'flexlayout-react';
 import { byodInfo, type ByodInfo } from '../history/byod';
-import { isDesktop } from '../desktop/bridge';
+import { desktop, isDesktop } from '../desktop/bridge';
+import { LEDGER_LENGTH } from '../shared/ledger';
+import { changeLedgerKey, sealTerminal } from './LockScreen';
 import { ADAPTERS } from '../exchanges';
 import { hub } from '../market/hub';
 import { PANELS, type Category } from '../panels/registry';
@@ -327,11 +329,62 @@ export function AddPanelModal({ onClose, onAdd }: { onClose: () => void; onAdd: 
   );
 }
 
+function LedgerKeySettings() {
+  const [cur, setCur] = useState('');
+  const [next, setNext] = useState('');
+  const [again, setAgain] = useState('');
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const digits = (v: string) => v.replace(/\D/g, '').slice(0, LEDGER_LENGTH);
+  const field = (value: string, set: (v: string) => void, label: string) => (
+    <div className="form-row">
+      <span>{label}</span>
+      <input className="ctl mono" type="password" inputMode="numeric" autoComplete="off" value={value} maxLength={LEDGER_LENGTH} onChange={(e) => set(digits(e.target.value))} style={{ width: 160 }} />
+    </div>
+  );
+  const change = async () => {
+    setMsg(null);
+    if (next !== again) return setMsg({ ok: false, text: 'The new keys do not match.' });
+    try {
+      await changeLedgerKey(cur, next);
+      setCur('');
+      setNext('');
+      setAgain('');
+      setMsg({ ok: true, text: 'Ledger key changed. Use the new key from now on.' });
+    } catch (e) {
+      setMsg({ ok: false, text: String((e as Error).message ?? e) });
+    }
+  };
+  return (
+    <div className="ledger-settings">
+      <div className="section-title">Ledger key (lock screen)</div>
+      {field(cur, setCur, 'Current key')}
+      {field(next, setNext, `New key (${LEDGER_LENGTH} digits)`)}
+      {field(again, setAgain, 'Repeat new key')}
+      <div className="form-row">
+        <span />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className="btn" disabled={cur.length !== LEDGER_LENGTH || next.length !== LEDGER_LENGTH || again.length !== LEDGER_LENGTH} onClick={() => void change()}>
+            Change key
+          </button>
+          <button className="btn ghost" onClick={() => void sealTerminal()} title="Back to the lock screen; bots keep running">
+            Seal now
+          </button>
+          {msg && <span className={msg.ok ? 'up' : 'down'}>{msg.text}</span>}
+        </div>
+      </div>
+      <div className="muted" style={{ fontSize: 11, lineHeight: 1.5 }}>
+        Only a salted SHA-256 digest of the key is stored{desktop ? ' (in the app database, checked by the desktop process)' : ' (in this browser)'}. If you forget it, the built-in key stops working too — keep it somewhere safe.
+      </div>
+    </div>
+  );
+}
+
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const s = useSettings();
   return (
     <Modal title="Settings" onClose={onClose} width={820}>
       <AppearanceSettings />
+      <LedgerKeySettings />
       <div className="section-title">Display</div>
       <div className="form-row">
         <span>FPS counter</span>

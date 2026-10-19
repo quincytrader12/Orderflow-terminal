@@ -9,7 +9,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as electron } from 'playwright-core';
-import { unlock } from './unlock.mjs';
+import { seedDesktopLedger, TEST_KEY, unlock } from './unlock.mjs';
 
 const require = createRequire(import.meta.url);
 const OUT = new URL('./screenshots/', import.meta.url).pathname;
@@ -26,6 +26,8 @@ const expect = (cond, msg) => {
   } else console.error(`  ✓ ${msg}`);
 };
 
+// a throwaway ledger key for this run (the owner's key is never used in tests)
+await seedDesktopLedger(userData);
 const app = await electron.launch({
   executablePath: require('electron'),
   args: ['.', '--no-sandbox'],
@@ -253,6 +255,28 @@ try {
   expect((await page.locator('.flexlayout__tabset-maximized').count()) === 1, 'chart maximised');
   await page.screenshot({ path: `${OUT}desktop-focus.png` });
   await page.click('button[title^="Maximise the main chart"]');
+
+  step('ledger key: change it, seal, old key denied, new key opens');
+  const NEW_KEY = '73914062';
+  await page.click('button[title="Settings"]');
+  const keyInputs = page.locator('.ledger-settings input');
+  await keyInputs.nth(0).fill(TEST_KEY);
+  await keyInputs.nth(1).fill(NEW_KEY);
+  await keyInputs.nth(2).fill(NEW_KEY);
+  await page.click('.ledger-settings button:text-is("Change key")');
+  await page.waitForSelector('.ledger-settings .up');
+  expect(true, 'ledger key changed');
+  await page.click('.modal header .x');
+  await page.click('button.chip.seal');
+  await page.waitForSelector('.lock-key input', { timeout: 30_000 });
+  const resealed = await page.evaluate(() => window.novus.vault.list().then(() => 'open', (e) => e.message));
+  expect(/sealed/.test(resealed), 'seal re-locks the desktop process');
+  await page.locator('.lock-key input').fill(TEST_KEY);
+  await page.waitForSelector('.lock-key.denied');
+  expect(true, 'old key denied after the change');
+  await unlock(page, NEW_KEY);
+  await page.waitForSelector('.topbar', { timeout: 30_000 });
+  expect(true, 'new key opens the terminal');
 
   expect((await page.locator('text=crashed').count()) === 0, 'no panel crashed');
 } catch (e) {

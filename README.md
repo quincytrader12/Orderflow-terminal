@@ -11,7 +11,9 @@ The app opens on a black lock screen showing the Novus Ordo emblem, "Welcome to 
 - Only a salted SHA-256 digest of the key ships with the app.
 - The desktop process enforces the lock on its own side: API keys, trading, bots, wallets, reports and Telegram stay sealed until it verifies the key. Only public market data and trade recording run before that.
 - Five wrong attempts lock input for 30 s, doubling after each further miss.
-- The end-to-end tests read the key from `NOVUS_LEDGER_KEY`, or from a git-ignored `e2e/.ledger-key` file. In CI, add it as the repository secret `NOVUS_LEDGER_KEY`.
+- **Settings → Ledger key** changes the key. It needs the current key, and a new 8-digit key that isn't all one digit or a straight run. The new key is stored as a digest with a fresh random salt, and the built-in key stops working.
+- **⛨ Seal** in the top bar returns to the lock screen immediately. AMT bots keep running while the terminal is sealed.
+- The tests never use the owner's key: each run seeds a throwaway key, so CI needs no secret.
 
 ## Desktop app (Windows .exe)
 
