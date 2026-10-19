@@ -75,3 +75,21 @@ export async function tokenInfo(mints: string[], fetchImpl: FetchLike = fetch): 
   }
   return { prices, meta };
 }
+
+export interface WalletActivity {
+  signature: string;
+  time: number | null;
+  ok: boolean;
+  memo: string | null;
+}
+
+/** Most recent transactions touching the address (newest first). */
+export async function recentActivity(address: string, rpcUrl = DEFAULT_RPC, limit = 25, fetchImpl: FetchLike = fetch): Promise<WalletActivity[]> {
+  const rows = (await rpc(rpcUrl, 'getSignaturesForAddress', [address, { limit, commitment: 'confirmed' }], fetchImpl)) as {
+    signature: string;
+    blockTime: number | null;
+    err: unknown;
+    memo: string | null;
+  }[];
+  return rows.map((r) => ({ signature: r.signature, time: r.blockTime ? r.blockTime * 1000 : null, ok: r.err === null || r.err === undefined, memo: r.memo }));
+}

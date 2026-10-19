@@ -4,6 +4,7 @@ import { autoResolution } from '../core/heatmap';
 import { cvdSeries, flowWindow } from '../core/indicators';
 import { fmtPrice, fmtUsd } from '../core/format';
 import type { Liquidation, Trade } from '../core/types';
+import { forwardAlert } from '../desktop/telegram';
 import { hub, type Feed } from '../market/hub';
 import { getSettings, uid, useSettings, type AlertRule, type AlertType } from '../store/settings';
 
@@ -106,6 +107,7 @@ export class AlertEngine {
     const meta = ALERT_TYPES.find((a) => a.type === r.type)!;
     useSettings.getState().pushFired({ id: uid(), ruleId: r.id, type: r.type, time: now, message, price });
     useToasts.getState().push({ title: meta.label + (r.note ? ` — ${r.note}` : ''), message, tone });
+    forwardAlert(meta.label + (r.note ? ` — ${r.note}` : ''), message);
     if (r.sound && getSettings().soundEnabled) beep(tone === 'sell' ? 520 : tone === 'buy' ? 980 : 760);
     if (r.notify && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
       try {

@@ -22,7 +22,13 @@ Build them yourself on Windows with `npm ci && npm run dist:win` (outputs to `re
 
 Development: `npm run desktop:dev` (Vite + Electron with hot reload) or `npm run desktop` (production build).
 
+- **Yahoo Finance**: stocks, ETFs, indices (^GSPC), futures (NQ=F, GC=F), FX (EURUSD=X) and crypto in the **Yahoo Finance** panel — quote board, symbol search and candles (1d → 5y). Yahoo blocks browser requests, so this panel needs the desktop app; quotes may be delayed depending on the exchange.
+- **Telegram bot**: create a bot with @BotFather, add its token in 🔑 Keys (**+ Telegram bot**), press Start on your bot, then **Detect chat** and **Send test message** in the **Telegram Bot** panel. Fired alerts are forwarded to your chat, and you can let the bot answer `/price`, `/status` and `/help` — only from your own chat, while the app is open.
+- **Phantom data**: the wallet panel reads your address's SOL and SPL token balances, their USD value and the 25 most recent transactions (Activity tab, linked to Solscan) from the Solana blockchain. Phantom itself only shares your public address and a signature; nothing can read or move funds.
+
 The layout defaults to **Chart Center**: the footprint chart in the middle, DOM and book on the left, tape, summary and wallet on the right. Every split is draggable; **⤢ Chart** maximises the main chart and **🔓/🔒** locks tabs in place (splits stay resizable).
+
+**Put anything anywhere.** Drag any tab by its title onto the top, bottom, left, right or centre of any panel, or onto the window edge. **+ Panel** also asks where to place it: as a tab in the active area, a new column on the left or right, a new row at the bottom, or in a collapsible **left / right / bottom dock**. Panels redraw to whatever size they are given, and you can open the same panel type several times with different settings. Layouts save automatically; name and reload them under ▦ Layouts.
 
 ## Themes, filters and glass
 
@@ -92,7 +98,7 @@ Some venues are geo-restricted (e.g. Binance in the US); pick a venue that works
   - *Live only*.
 - **Layouts** — dockable tabs/splits (drag tabs, double-click a header to maximise). Layout, per-panel settings, alerts, journal and watchlist persist in your browser. A gallery of presets (Terminal, Flow Desk, Scalper, Liquidity, Derivatives, Market Overview, Whale Watch, Options), named saved layouts and JSON import/export are under **▦ Layouts**.
 
-## Panels (24)
+## Panels (29)
 
 | Category | Panel | Highlights |
 |---|---|---|
@@ -117,7 +123,12 @@ Some venues are geo-restricted (e.g. Binance in the US); pick a venue that works
 | | **Screener** | All perps on a venue (Binance, Bybit, OKX, Hyperliquid, Bitget): price, 24h, volume, funding, OI — click to load |
 | | **Watchlist** | Any symbol on any venue |
 | | **News** | Real-time headlines, filter by coin |
-| Tools | **Alerts** | 12 types evaluated in-browser: price above/below, large trade, liquidation, liquidation cascade, CVD divergence, absorption, wall appears, wall pulled, volume spike, delta spike, OI change — sound, browser notifications, cooldowns, log |
+| | **Yahoo Finance** | Stocks, indices, futures, FX: quote board, search, candles (desktop) |
+| Account | **Exchange Accounts** | Balances, positions, open orders and fills from any CCXT exchange (desktop) |
+| | **Phantom Wallet** | Connect Phantom or watch an address: SOL, tokens, USD value, recent activity |
+| | **Database** | Recorded trades per instrument, retention, CSV export |
+| Tools | **Telegram Bot** | Forward alerts, answer /price and /status |
+| | **Alerts** | 12 types evaluated in-browser: price above/below, large trade, liquidation, liquidation cascade, CVD divergence, absorption, wall appears, wall pulled, volume spike, delta spike, OI change — sound, browser notifications, cooldowns, log |
 | | **Journal** | Timestamped notes with price and tags; export Markdown/JSON |
 | | **Calculator** | Risk-based position size with fees and R:R, isolated liquidation estimate, market-cap ↔ price |
 

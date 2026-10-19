@@ -1,4 +1,4 @@
-import { DEFAULT_RPC, tokenInfo, walletBalances, type TokenInfo, type WalletBalances } from '../shared/solana';
+import { DEFAULT_RPC, recentActivity, tokenInfo, walletBalances, type TokenInfo, type WalletActivity, type WalletBalances } from '../shared/solana';
 import { desktop } from './bridge';
 import { vault } from './vault';
 
@@ -71,6 +71,12 @@ export async function balancesFor(address: string, rpcSecretId?: string): Promis
   if (desktop) return desktop.wallet.balances(address, rpcSecretId || undefined);
   const url = rpcSecretId ? (await vault.webFields(rpcSecretId)).url : DEFAULT_RPC;
   return walletBalances(address, url || DEFAULT_RPC);
+}
+
+export async function activityFor(address: string, rpcSecretId?: string): Promise<WalletActivity[]> {
+  if (desktop) return desktop.wallet.activity(address, rpcSecretId || undefined);
+  const url = rpcSecretId ? (await vault.webFields(rpcSecretId)).url : DEFAULT_RPC;
+  return recentActivity(address, url || DEFAULT_RPC);
 }
 
 export async function infoFor(mints: string[]): Promise<TokenInfo> {

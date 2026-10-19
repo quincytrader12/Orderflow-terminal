@@ -104,6 +104,20 @@ try {
   expect(walletText.includes('vine'), 'watched address shown');
   await page.screenshot({ path: `${OUT}desktop-wallet-db.png` });
 
+  step('new panels placed anywhere: Yahoo Finance (right column) and Telegram (bottom dock)');
+  for (const [where, panel] of [
+    ['New column — right', 'Yahoo Finance'],
+    ['Bottom dock (collapsible)', 'Telegram Bot'],
+  ]) {
+    await page.click('button[title="Add a panel"]');
+    await page.click(`.modal .chip:text-is("${where}")`);
+    await page.click(`.panel-item:has(b:text-is("${panel}"))`);
+    await page.waitForTimeout(1500);
+  }
+  expect((await page.locator('text=Detect chat').count()) === 1, 'Telegram setup steps rendered');
+  expect((await page.locator('input[placeholder^="Search stocks"]').count()) === 1, 'Yahoo Finance search rendered');
+  await page.screenshot({ path: `${OUT}desktop-yahoo-telegram.png` });
+
   step('layout lock and focus');
   await page.click('button[title^="Lock the layout"]');
   expect((await page.locator('button.chip.locked').count()) === 1, 'layout locked');

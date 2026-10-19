@@ -16,7 +16,7 @@ export function mask(value) {
 }
 
 /** Fields that are not secret and may be shown in full (e.g. an RPC host). */
-const PUBLIC_FIELDS = new Set(['url', 'address', 'walletAddress', 'note']);
+const PUBLIC_FIELDS = new Set(['url', 'address', 'walletAddress', 'note', 'chatId']);
 
 export class Vault {
   /**

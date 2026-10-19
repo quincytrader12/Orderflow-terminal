@@ -274,9 +274,33 @@ export function LayoutsModal({ onClose, onApply, current }: { onClose: () => voi
 
 const CATS: Category[] = ['Charts', 'Orderflow', 'Order book', 'Derivatives', 'Market', 'Account', 'Tools'];
 
-export function AddPanelModal({ onClose, onAdd }: { onClose: () => void; onAdd: (id: string) => void }) {
+export type Placement = 'active' | 'left' | 'right' | 'bottom' | 'dock-left' | 'dock-right' | 'dock-bottom';
+
+const PLACEMENTS: { id: Placement; label: string }[] = [
+  { id: 'active', label: 'Active area (as a tab)' },
+  { id: 'left', label: 'New column — left' },
+  { id: 'right', label: 'New column — right' },
+  { id: 'bottom', label: 'New row — bottom' },
+  { id: 'dock-left', label: 'Left dock (collapsible)' },
+  { id: 'dock-right', label: 'Right dock (collapsible)' },
+  { id: 'dock-bottom', label: 'Bottom dock (collapsible)' },
+];
+
+export function AddPanelModal({ onClose, onAdd }: { onClose: () => void; onAdd: (id: string, where: Placement) => void }) {
+  const [where, setWhere] = useState<Placement>('active');
   return (
     <Modal title="Add panel" onClose={onClose} width={820}>
+      <div className="section-title">Place in</div>
+      <div className="chip-row">
+        {PLACEMENTS.map((p) => (
+          <button key={p.id} className={`chip ${where === p.id ? 'active' : ''}`} onClick={() => setWhere(p.id)}>
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <div className="muted" style={{ marginBottom: 4 }}>
+        You can also drag any tab by its title onto any side of any panel or the window edge; drag the gaps between panels to resize.
+      </div>
       {CATS.map((cat) => (
         <div key={cat}>
           <div className="section-title">{cat}</div>
@@ -286,7 +310,7 @@ export function AddPanelModal({ onClose, onAdd }: { onClose: () => void; onAdd: 
                 key={p.id}
                 className="panel-item"
                 onClick={() => {
-                  onAdd(p.id);
+                  onAdd(p.id, where);
                   onClose();
                 }}
               >

@@ -71,6 +71,31 @@ try {
     console.error(`preset ${id}: ok`);
   }
 
+  // place panels everywhere: new columns/rows at each edge and the collapsible docks
+  const placements = [
+    ['New column — left', 'Footprint Chart'],
+    ['New column — right', 'Liquidity Heatmap'],
+    ['New row — bottom', 'CVD'],
+    ['Left dock (collapsible)', 'DOM Ladder'],
+    ['Right dock (collapsible)', 'Depth Chart'],
+    ['Bottom dock (collapsible)', 'Trades Tape'],
+  ];
+  for (const [where, panel] of placements) {
+    await page.click('button[title="Add a panel"]');
+    await page.click(`.modal .chip:text-is("${where}")`);
+    await page.click(`.panel-item:has(b:text-is("${panel}"))`);
+    await page.waitForTimeout(1200);
+  }
+  await page.waitForTimeout(2000);
+  const tiny = await page.$$eval('.canvas-host canvas', (cs) =>
+    cs.filter((c) => c.offsetParent !== null).map((c) => [c.clientWidth, c.clientHeight]).filter(([w, h]) => w < 20 || h < 20),
+  );
+  if (tiny.length) errors.push(`${tiny.length} visible canvases rendered too small: ${JSON.stringify(tiny)}`);
+  const borders = await page.$$eval('.flexlayout__border', (els) => els.filter((e) => e.getBoundingClientRect().width > 0).length);
+  if (borders < 3) errors.push(`expected 3 dock edges in use, found ${borders}`);
+  await page.screenshot({ path: `${OUT}placement-everywhere.png` });
+  console.error(`placement: ${placements.length} panels placed, ${borders} docks`);
+
   // every panel in isolation via embed mode
   const panels = await page.evaluate(async () => (await import('/src/panels/registry.tsx')).PANELS.map((p) => p.id));
   for (const id of panels) {

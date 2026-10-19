@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { CcxtService, listExchanges } from './ccxt-service.mjs';
 import { Db } from './db.mjs';
 import { connectPhantom } from './phantom.mjs';
-import { DEFAULT_RPC, tokenInfo, walletBalances } from '../src/shared/solana.ts';
+import { DEFAULT_RPC, recentActivity, tokenInfo, walletBalances } from '../src/shared/solana.ts';
+import { TelegramCommands, tgDetectChat, tgMe, tgSend } from '../src/shared/telegram.ts';
 import { Vault } from './vault.mjs';
 
 // bundled to dist-electron/main.mjs; app root is one level up
@@ -169,6 +170,51 @@ function registerIpc() {
     return walletBalances(address, httpsOnly(url ?? DEFAULT_RPC));
   });
   handle('wallet:tokenInfo', (_e, mints) => tokenInfo(mints));
+  handle('wallet:activity', (_e, address, rpcSecretId) => {
+    const url = rpcSecretId ? vault.reveal(rpcSecretId).fields.url : DEFAULT_RPC;
+    return recentActivity(address, httpsOnly(url ?? DEFAULT_RPC));
+  });
+
+  // telegram: the bot token never leaves the main process
+  const tg = (id) => {
+    const s = vault.reveal(id);
+    if (s.kind !== 'telegram' || !s.fields.token) throw new Error('choose a Telegram bot key');
+    return s;
+  };
+  let commands = null;
+  let tgStatus = { price: 'No data yet', status: 'No data yet' };
+  handle('telegram:me', (_e, id) => tgMe(tg(id).fields.token));
+  handle('telegram:detect', async (_e, id) => {
+    const s = tg(id);
+    const wasRunning = commands;
+    commands?.stop();
+    try {
+      const chat = await tgDetectChat(s.fields.token);
+      vault.save({ id, label: s.label, kind: s.kind, exchange: null, fields: { chatId: chat.id } });
+      return chat;
+    } finally {
+      if (wasRunning) startCommands(id);
+    }
+  });
+  handle('telegram:send', (_e, id, html) => {
+    const s = tg(id);
+    return tgSend(s.fields.token, s.fields.chatId, html);
+  });
+  function startCommands(id) {
+    const s = tg(id);
+    if (!s.fields.chatId) throw new Error('detect the chat first');
+    commands = new TelegramCommands(s.fields.token, s.fields.chatId, () => tgStatus, fetch, (e) => console.warn('telegram', e?.message ?? e));
+    void commands.run();
+  }
+  handle('telegram:commands', (_e, id) => {
+    commands?.stop();
+    commands = null;
+    if (id) startCommands(id);
+    return Boolean(commands);
+  });
+  handle('telegram:setStatus', (_e, snap) => {
+    tgStatus = snap;
+  });
 }
 
 app.whenReady().then(() => {

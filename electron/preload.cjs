@@ -56,5 +56,13 @@ contextBridge.exposeInMainWorld('novus', {
     remove: (address) => call('wallet:remove', address),
     balances: (address, rpcSecretId) => call('wallet:balances', address, rpcSecretId),
     tokenInfo: (mints) => call('wallet:tokenInfo', mints),
+    activity: (address, rpcSecretId) => call('wallet:activity', address, rpcSecretId),
+  },
+  telegram: {
+    me: (id) => call('telegram:me', id),
+    detect: (id) => call('telegram:detect', id),
+    send: (id, html) => call('telegram:send', id, html),
+    commands: (id) => call('telegram:commands', id),
+    setStatus: (snap) => call('telegram:setStatus', snap),
   },
 });

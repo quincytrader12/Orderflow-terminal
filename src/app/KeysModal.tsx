@@ -3,7 +3,7 @@ import { desktop, isDesktop, type CcxtExchangeInfo, type SecretKind, type Secret
 import { vault } from '../desktop/vault';
 import { Modal } from './Modals';
 
-const KIND_LABEL: Record<SecretKind, string> = { exchange: 'Exchange (CCXT)', 'solana-rpc': 'Solana RPC', api: 'Other API key' };
+const KIND_LABEL: Record<SecretKind, string> = { exchange: 'Exchange (CCXT)', 'solana-rpc': 'Solana RPC', telegram: 'Telegram bot', api: 'Other API key' };
 
 const FIELD_LABEL: Record<string, string> = {
   apiKey: 'API key',
@@ -16,6 +16,7 @@ const FIELD_LABEL: Record<string, string> = {
   walletAddress: 'Wallet address',
   token: 'Token',
   url: 'RPC URL',
+  chatId: 'Chat id',
   key: 'Key',
 };
 
@@ -33,7 +34,14 @@ const blank = (kind: SecretKind): Draft => ({
   label: '',
   exchange: '',
   sandbox: false,
-  fields: kind === 'exchange' ? [{ name: 'apiKey', value: '' }, { name: 'secret', value: '' }] : kind === 'solana-rpc' ? [{ name: 'url', value: '' }] : [{ name: 'key', value: '' }],
+  fields:
+    kind === 'exchange'
+      ? [{ name: 'apiKey', value: '' }, { name: 'secret', value: '' }]
+      : kind === 'solana-rpc'
+        ? [{ name: 'url', value: '' }]
+        : kind === 'telegram'
+          ? [{ name: 'token', value: '' }]
+          : [{ name: 'key', value: '' }],
 });
 
 export function KeysModal({ onClose }: { onClose: () => void }) {
@@ -178,7 +186,7 @@ export function KeysModal({ onClose }: { onClose: () => void }) {
               <div style={{ display: 'flex', gap: 6 }}>
                 <input
                   className="ctl mono"
-                  type={f.name === 'url' ? 'text' : 'password'}
+                  type={f.name === 'url' || f.name === 'chatId' ? 'text' : 'password'}
                   autoComplete="off"
                   spellCheck={false}
                   value={f.value}

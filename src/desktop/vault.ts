@@ -58,7 +58,7 @@ export function maskValue(v: string): string {
   return `${v.slice(0, 4)}${'•'.repeat(Math.min(12, v.length - 8))}${v.slice(-4)}`;
 }
 
-const PUBLIC_FIELDS = new Set(['url', 'address', 'walletAddress', 'note']);
+const PUBLIC_FIELDS = new Set(['url', 'address', 'walletAddress', 'note', 'chatId']);
 
 async function webDecrypt(db: IDBDatabase, rec: StoredWeb): Promise<Record<string, string>> {
   const key = await aesKey(db);

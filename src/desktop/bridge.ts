@@ -1,5 +1,5 @@
 import type { Kline } from '../core/types';
-import type { TokenInfo, WalletBalances } from '../shared/solana';
+import type { TokenInfo, WalletActivity, WalletBalances } from '../shared/solana';
 
 /** Shapes returned by the desktop main process (electron/*.mjs). */
 export interface SecretRecord {
@@ -13,7 +13,7 @@ export interface SecretRecord {
   backend: 'os' | 'local' | 'browser';
 }
 
-export type SecretKind = 'exchange' | 'solana-rpc' | 'api';
+export type SecretKind = 'exchange' | 'solana-rpc' | 'telegram' | 'api';
 
 export interface SecretInput {
   id?: string;
@@ -121,6 +121,15 @@ export interface NovusApi {
     remove(address: string): Promise<void>;
     balances(address: string, rpcSecretId?: string): Promise<WalletBalances>;
     tokenInfo(mints: string[]): Promise<TokenInfo>;
+    activity(address: string, rpcSecretId?: string): Promise<WalletActivity[]>;
+  };
+  telegram: {
+    me(id: string): Promise<{ username: string; name: string }>;
+    detect(id: string): Promise<{ id: string; title: string }>;
+    send(id: string, html: string): Promise<void>;
+    /** start answering commands for this bot key, or stop with null */
+    commands(id: string | null): Promise<boolean>;
+    setStatus(snap: { price: string; status: string }): Promise<void>;
   };
 }
 

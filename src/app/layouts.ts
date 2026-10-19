@@ -23,6 +23,8 @@ export const GLOBAL: IJsonModel['global'] = {
   tabSetMinWidth: 160,
   tabSetMinHeight: 90,
   tabSetEnableMaximize: true,
+  enableEdgeDock: true,
+  borderEnableAutoHide: true,
 };
 
 export interface Preset {
@@ -34,7 +36,10 @@ export interface Preset {
   build: () => IJsonModel;
 }
 
-const model = (layout: IJsonRowNode): IJsonModel => ({ global: GLOBAL, borders: [], layout });
+/** Collapsible dock edges; hidden until a panel is placed in them. */
+export const BORDERS: IJsonModel['borders'] = (['left', 'right', 'bottom'] as const).map((location) => ({ type: 'border', location, enableAutoHide: true, size: location === 'bottom' ? 260 : 340, children: [] }));
+
+const model = (layout: IJsonRowNode): IJsonModel => ({ global: GLOBAL, borders: BORDERS, layout });
 
 export const PRESETS: Preset[] = [
   {
@@ -189,7 +194,9 @@ export function sanitize(json: IJsonModel): IJsonModel {
     if (n.children) n.children = n.children.map(walk).filter(Boolean);
     return n;
   };
-  return { ...json, global: { ...GLOBAL, ...(json.global ?? {}) }, layout: walk(json.layout) };
+  const borders = (json.borders ?? []).map((b) => walk(b));
+  for (const def of BORDERS ?? []) if (!borders.some((b: { location: string }) => b.location === def.location)) borders.push(def);
+  return { ...json, global: { ...GLOBAL, ...(json.global ?? {}) }, borders, layout: walk(json.layout) };
 }
 
 export function saveLayout(json: IJsonModel) {

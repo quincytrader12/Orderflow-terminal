@@ -104,6 +104,10 @@ export interface Settings {
   recordScope: 'primary' | 'aggregate';
   layoutLocked: boolean;
   wallets: SavedWallet[];
+  /** Telegram bot (vault key id), alert forwarding and command replies */
+  telegramSecretId: string;
+  telegramAlerts: boolean;
+  telegramCommands: boolean;
   byodUrl: string;
   byodToken: string;
   backfillMinutes: number;
@@ -156,6 +160,9 @@ const initial: Settings = {
   recordScope: 'primary',
   layoutLocked: false,
   wallets: [],
+  telegramSecretId: '',
+  telegramAlerts: true,
+  telegramCommands: false,
   byodUrl: 'http://localhost:8080',
   byodToken: '',
   backfillMinutes: 30,

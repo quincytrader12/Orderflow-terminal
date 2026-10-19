@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Actions, Layout, Model, type IJsonModel, type ILayoutApi, type TabNode } from 'flexlayout-react';
+import { Actions, DockLocation, Layout, Model, type BorderNode, type IJsonModel, type ILayoutApi, type TabNode } from 'flexlayout-react';
 import 'flexlayout-react/style/dark.css';
 import { startAlerts, useToasts } from '../alerts/engine';
+import { startTelegramService } from '../desktop/telegram';
 import { startCollectors } from '../market/collectors';
 import { hub } from '../market/hub';
 import { useSettings } from '../store/settings';
 import { applyTheme } from '../ui/theme';
 import { loadLayout, sanitize, saveLayout, tab } from './layouts';
-import { AddPanelModal, ConnectionModal, LayoutsModal, SettingsModal } from './Modals';
+import { AddPanelModal, ConnectionModal, LayoutsModal, SettingsModal, type Placement } from './Modals';
 import { KeysModal } from './KeysModal';
 import { PanelHost } from './PanelHost';
 import { TopBar, type ModalKind } from './TopBar';
@@ -45,6 +46,7 @@ export function App() {
     hub();
     startCollectors();
     startAlerts();
+    startTelegramService();
   }, []);
 
   const applyLayout = useCallback((json: IJsonModel) => {
@@ -69,10 +71,27 @@ export function App() {
     if (target) model.doAction(Actions.maximizeToggle(target));
   }, [model]);
 
-  const addPanel = (id: string) => {
+  /** Add a panel to the active area, a new column/row at an edge, or a dock edge. */
+  const addPanel = (id: string, where: Placement = 'active') => {
     const json = tab(id);
     const l = layoutRef.current;
     if (!l) return;
+    const edge = { left: DockLocation.LEFT, right: DockLocation.RIGHT, bottom: DockLocation.BOTTOM } as const;
+    if (where === 'left' || where === 'right' || where === 'bottom') {
+      model.doAction(Actions.addNode(json, model.getRootRow()!.getId(), edge[where], -1, true));
+      return;
+    }
+    if (where.startsWith('dock-')) {
+      const loc = edge[where.slice(5) as keyof typeof edge];
+      let border: BorderNode | undefined;
+      model.visitNodes((n) => {
+        if (!border && n.getType() === 'border' && (n as BorderNode).getLocation() === loc) border = n as BorderNode;
+      });
+      if (border) {
+        model.doAction(Actions.addNode(json, border.getId(), DockLocation.CENTER, -1, true));
+        return;
+      }
+    }
     if (!l.addTabToActiveTabSet(json)) {
       const first = model.getFirstTabSet();
       if (first) l.addTabToTabSet(first.getId(), json);

@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { fmtNum, fmtUsd } from '../core/format';
 import { desktop, isDesktop, type SecretRecord } from '../desktop/bridge';
 import { vault } from '../desktop/vault';
-import { balancesFor, BASE58, connectPhantom, infoFor } from '../desktop/wallet';
-import { SOL_MINT, type TokenInfo, type WalletBalances } from '../shared/solana';
+import { activityFor, balancesFor, BASE58, connectPhantom, infoFor } from '../desktop/wallet';
+import { SOL_MINT, type TokenInfo, type WalletActivity, type WalletBalances } from '../shared/solana';
 import { useSettings } from '../store/settings';
 import { Empty, Select, Spacer, Toolbar, type PanelProps } from '../ui/controls';
 
@@ -11,9 +11,10 @@ export interface WalletConfig {
   address: string;
   rpcSecretId: string;
   hideDust: boolean;
+  tab: 'tokens' | 'activity';
 }
 
-export const WALLET_DEFAULTS: WalletConfig = { address: '', rpcSecretId: '', hideDust: true };
+export const WALLET_DEFAULTS: WalletConfig = { address: '', rpcSecretId: '', hideDust: true, tab: 'tokens' };
 
 const short = (a: string) => `${a.slice(0, 4)}…${a.slice(-4)}`;
 
@@ -37,6 +38,7 @@ export function WalletPanel({ config: c, setConfig }: PanelProps<WalletConfig>) 
   const [err, setErr] = useState('');
   const [status, setStatus] = useState('');
   const [watch, setWatch] = useState('');
+  const [activity, setActivity] = useState<WalletActivity[] | null>(null);
 
   const address = c.address || wallets[0]?.address || '';
 
@@ -58,6 +60,8 @@ export function WalletPanel({ config: c, setConfig }: PanelProps<WalletConfig>) 
         setErr('');
         const i = await infoFor(b.tokens.map((t) => t.mint));
         if (alive) setInfo(i);
+        const a = await activityFor(address, c.rpcSecretId).catch(() => null);
+        if (alive && a) setActivity(a);
       } catch (e) {
         if (alive) setErr(String((e as Error).message ?? e));
       }
@@ -105,9 +109,20 @@ export function WalletPanel({ config: c, setConfig }: PanelProps<WalletConfig>) 
           <PhantomIcon /> Connect Phantom
         </button>
         {wallets.length > 0 && (
-          <Select value={address} options={wallets.map((w) => ({ value: w.address, label: `${short(w.address)}${w.verified ? ' ✓' : ' (watch)'}` }))} onChange={(a) => setConfig({ address: a })} width={130} />
+          <Select
+            value={address}
+            options={wallets.map((w) => ({ value: w.address, label: `${short(w.address)}${w.verified ? ' ✓' : ' (watch)'}` }))}
+            onChange={(a) => setConfig({ address: a })}
+            width={130}
+          />
         )}
-        <Select value={c.rpcSecretId} options={[{ value: '', label: 'Public RPC' }, ...rpcs.map((r) => ({ value: r.id, label: r.label }))]} onChange={(rpcSecretId) => setConfig({ rpcSecretId })} title="Solana RPC (add a private one in 🔑 Keys)" width={110} />
+        <Select
+          value={c.rpcSecretId}
+          options={[{ value: '', label: 'Public RPC' }, ...rpcs.map((r) => ({ value: r.id, label: r.label }))]}
+          onChange={(rpcSecretId) => setConfig({ rpcSecretId })}
+          title="Solana RPC (add a private one in 🔑 Keys)"
+          width={110}
+        />
         <Spacer />
         {address && (
           <button
@@ -124,12 +139,23 @@ export function WalletPanel({ config: c, setConfig }: PanelProps<WalletConfig>) 
           </button>
         )}
       </Toolbar>
-      {status && <div className="muted" style={{ padding: '6px 10px' }}>{status}</div>}
-      {err && !address && <div className="down" style={{ padding: '6px 10px' }}>{err}</div>}
+      {status && (
+        <div className="muted" style={{ padding: '6px 10px' }}>
+          {status}
+        </div>
+      )}
+      {err && !address && (
+        <div className="down" style={{ padding: '6px 10px' }}>
+          {err}
+        </div>
+      )}
       {!address ? (
         <div className="scroll">
           <Empty>
-            Connect Phantom to see your Solana balances. {isDesktop ? 'The app opens a one-time page in your default browser where Phantom is installed; you sign a message proving ownership — it cannot move funds.' : 'You will sign a message proving ownership — it cannot move funds.'}
+            Connect Phantom to see your Solana balances.{' '}
+            {isDesktop
+              ? 'The app opens a one-time page in your default browser where Phantom is installed; you sign a message proving ownership — it cannot move funds.'
+              : 'You will sign a message proving ownership — it cannot move funds.'}
             <div style={{ display: 'flex', gap: 6, justifyContent: 'center', marginTop: 12 }}>
               <input className="ctl mono" placeholder="…or watch any address" value={watch} onChange={(e) => setWatch(e.target.value.trim())} style={{ width: 260 }} />
               <button
@@ -175,36 +201,81 @@ export function WalletPanel({ config: c, setConfig }: PanelProps<WalletConfig>) 
               <div className="s">{rows.length} tokens</div>
             </div>
           </div>
-          {err && <div className="down" style={{ padding: '4px 10px' }}>{err}</div>}
+          {err && (
+            <div className="down" style={{ padding: '4px 10px' }}>
+              {err}
+            </div>
+          )}
           <div className="toolbar" style={{ borderBottom: 'none' }}>
+            <button className={`chip ${c.tab !== 'activity' ? 'active' : ''}`} onClick={() => setConfig({ tab: 'tokens' })}>
+              Tokens
+            </button>
+            <button className={`chip ${c.tab === 'activity' ? 'active' : ''}`} onClick={() => setConfig({ tab: 'activity' })}>
+              Activity
+            </button>
+            <span style={{ width: 8 }} />
             <label className="check">
               <input type="checkbox" checked={c.hideDust} onChange={(e) => setConfig({ hideDust: e.target.checked })} /> hide tokens under $1
             </label>
           </div>
-          <table className="grid">
-            <thead>
-              <tr>
-                <th>Token</th>
-                <th>Amount</th>
-                <th>Price</th>
-                <th>Value</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((t) => (
-                <tr key={t.mint}>
-                  <td className="l" title={t.mint}>
-                    <b>{t.meta?.symbol ?? short(t.mint)}</b> <span className="muted">{t.meta?.name ?? ''}</span>
-                  </td>
-                  <td>{fmtNum(t.amount, 4)}</td>
-                  <td className="muted">{t.price !== undefined ? fmtUsd(t.price, 4) : '—'}</td>
-                  <td>{isFinite(t.usd) ? fmtUsd(t.usd) : '—'}</td>
+          {c.tab === 'activity' ? (
+            <table className="grid">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Transaction</th>
+                  <th>Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {(activity ?? []).map((a) => (
+                  <tr key={a.signature}>
+                    <td className="muted">{a.time ? new Date(a.time).toLocaleString() : '—'}</td>
+                    <td className="mono">
+                      <a href={`https://solscan.io/tx/${a.signature}`} target="_blank" rel="noreferrer noopener">
+                        {a.signature.slice(0, 10)}…{a.signature.slice(-6)}
+                      </a>
+                      {a.memo && <span className="muted"> {a.memo}</span>}
+                    </td>
+                    <td className={a.ok ? 'up' : 'down'}>{a.ok ? 'success' : 'failed'}</td>
+                  </tr>
+                ))}
+                {activity && activity.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="muted">
+                      No transactions yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          ) : (
+            <table className="grid">
+              <thead>
+                <tr>
+                  <th>Token</th>
+                  <th>Amount</th>
+                  <th>Price</th>
+                  <th>Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((t) => (
+                  <tr key={t.mint}>
+                    <td className="l" title={t.mint}>
+                      <b>{t.meta?.symbol ?? short(t.mint)}</b> <span className="muted">{t.meta?.name ?? ''}</span>
+                    </td>
+                    <td>{fmtNum(t.amount, 4)}</td>
+                    <td className="muted">{t.price !== undefined ? fmtUsd(t.price, 4) : '—'}</td>
+                    <td>{isFinite(t.usd) ? fmtUsd(t.usd) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
           <div className="empty" style={{ textAlign: 'left', padding: '8px 10px' }}>
-            Read-only: Novus Ordo stores only your public address. Prices from Jupiter; balances from {c.rpcSecretId ? 'your RPC' : 'the public Solana RPC (rate-limited — add your own in 🔑 Keys)'}.
+            Read-only: Novus Ordo stores only your public address. Prices from Jupiter; balances from{' '}
+            {c.rpcSecretId ? 'your RPC' : 'the public Solana RPC (rate-limited — add your own in 🔑 Keys)'}.
           </div>
         </div>
       )}
