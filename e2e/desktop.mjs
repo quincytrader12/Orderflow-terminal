@@ -156,6 +156,52 @@ try {
   expect((await page.locator('input[placeholder^="Search stocks"]').count()) === 1, 'Yahoo Finance search rendered');
   await page.screenshot({ path: `${OUT}desktop-yahoo-telegram.png` });
 
+  step('AMT scalper: create, backtest on recorded trades, switch on/off, kill switch');
+  page.on('dialog', (d) => void d.accept());
+  const recorded = await page.evaluate(() => {
+    // 40 min balance around 100, then an accepted breakout and a rally
+    let s = 3;
+    const r = () => ((s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296);
+    const t0 = Date.now() - 2 * 3_600_000;
+    const out = [];
+    for (let t = t0; t < t0 + 40 * 60_000; t += 500) out.push({ t, p: Number((100 + (r() + r() - 1) * 0.5).toFixed(2)), q: 0.1 + r() * 0.2, s: r() < 0.5 ? 'buy' : 'sell' });
+    let t = t0 + 40 * 60_000;
+    for (let i = 0; i < 540; i++, t += 1000 / 6) out.push({ t, p: Number((100.3 + 0.2 * (i / 540)).toFixed(2)), q: 0.8, s: 'buy' });
+    for (let i = 0; i < 240; i++, t += 500) out.push({ t, p: Number((100.5 + 0.8 * (i / 240)).toFixed(2)), q: 0.3, s: 'buy' });
+    return window.novus.db.record('binancef', 'AMTTEST', out);
+  });
+  expect(recorded > 5000, `recorded ${recorded} synthetic trades for the backtest`);
+  await page.click('button[title="Add a panel"]');
+  await page.click('.modal .chip:text-is("New column — right")');
+  await page.click('.panel-item:has(b:text-is("AMT Scalper"))');
+  await page.waitForSelector('.amt-intro');
+  await page.click('.amt-intro button:text-is("Create a bot")');
+  await page.waitForSelector('.amt-settings');
+  expect((await page.locator('.amt-settings input[type="number"]').count()) >= 25, 'all AMT parameters editable');
+  await page.click('.amt-settings button:text-is("Save")');
+  await page.click('.amt .toolbar button:text-is("Backtest")');
+  await page.selectOption('.amt-backtest select', 'binancef|AMTTEST');
+  await page.click('.amt-backtest button:text-is("Run backtest")');
+  await page.waitForSelector('.amt-backtest .amt-cards', { timeout: 30_000 });
+  const bt = await page.locator('.amt-backtest').innerText();
+  expect(/Trades\s*[1-9]/.test(bt) && /breakout/.test(bt), 'backtest found the breakout trade');
+  await page.screenshot({ path: `${OUT}desktop-amt-backtest.png` });
+  await page.click('.amt .toolbar button:text-is("Monitor")');
+  await page.click('.amt .algo-switch');
+  await page.waitForSelector('.amt .algo-switch.on');
+  await page.waitForSelector('.chip.algo-kill', { timeout: 5000 });
+  expect((await page.locator('.amt-ev.ev-started').count()) === 1, 'bot started (paper)');
+  await page.screenshot({ path: `${OUT}desktop-amt-monitor.png` });
+  await page.click('.amt .algo-switch');
+  await page.waitForSelector('.amt .algo-switch:not(.on)');
+  expect((await page.locator('.chip.algo-kill').count()) === 0, 'switched off from the panel');
+  await page.click('.amt .algo-switch');
+  await page.waitForSelector('.chip.algo-kill', { timeout: 5000 });
+  await page.click('.chip.algo-kill');
+  await page.waitForSelector('.amt .algo-switch:not(.on)');
+  const bots = await page.evaluate(() => window.novus.amt.list());
+  expect(bots.length === 1 && !bots[0].running, 'top-bar kill switch stopped the bot');
+
   step('layout lock and focus');
   await page.click('button[title^="Lock the layout"]');
   expect((await page.locator('button.chip.locked').count()) === 1, 'layout locked');

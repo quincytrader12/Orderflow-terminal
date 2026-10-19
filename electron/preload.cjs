@@ -9,6 +9,12 @@ async function call(channel, ...args) {
 }
 
 const ccxtListeners = new Set();
+const amtListeners = { status: new Set(), event: new Set() };
+for (const ch of ['status', 'event']) ipcRenderer.on(`amt:${ch}`, (_e, msg) => amtListeners[ch].forEach((fn) => fn(msg)));
+const listen = (set, fn) => {
+  set.add(fn);
+  return () => set.delete(fn);
+};
 ipcRenderer.on('ccxt:event', (_e, msg) => {
   for (const fn of ccxtListeners) fn(msg);
 });
@@ -47,6 +53,20 @@ contextBridge.exposeInMainWorld('novus', {
     limits: () => call('trade:limits'),
     setLimits: (l) => call('trade:setLimits', l),
     log: (limit) => call('trade:log', limit),
+  },
+  amt: {
+    list: () => call('amt:list'),
+    defaults: () => call('amt:defaults'),
+    save: (cfg) => call('amt:save', cfg),
+    remove: (id) => call('amt:remove', id),
+    start: (id) => call('amt:start', id),
+    stop: (id, flatten) => call('amt:stop', id, flatten),
+    stopAll: () => call('amt:stopAll'),
+    snapshot: (id) => call('amt:snapshot', id),
+    events: (id) => call('amt:events', id),
+    backtest: (params, venue, symbol, from) => call('amt:backtest', params, venue, symbol, from),
+    onStatus: (fn) => listen(amtListeners.status, fn),
+    onEvent: (fn) => listen(amtListeners.event, fn),
   },
   db: {
     info: () => call('db:info'),

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Actions, DockLocation, Layout, Model, type BorderNode, type IJsonModel, type ILayoutApi, type TabNode } from 'flexlayout-react';
 import 'flexlayout-react/style/dark.css';
 import { startAlerts, useToasts } from '../alerts/engine';
+import { startAmtService } from '../desktop/amt';
 import { startTelegramService } from '../desktop/telegram';
 import { startCollectors } from '../market/collectors';
 import { hub } from '../market/hub';
@@ -47,6 +48,7 @@ export function App() {
     startCollectors();
     startAlerts();
     startTelegramService();
+    startAmtService();
   }, []);
 
   const applyLayout = useCallback((json: IJsonModel) => {

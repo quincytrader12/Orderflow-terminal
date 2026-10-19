@@ -3,6 +3,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, shel
 import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { BotManager } from './amt/bots.mjs';
 import { CcxtService, listExchanges } from './ccxt-service.mjs';
 import { Db } from './db.mjs';
 import { connectPhantom } from './phantom.mjs';
@@ -24,6 +25,7 @@ let win = null;
 let db;
 let vault;
 let ccxtSvc;
+let bots;
 
 function createWindow() {
   win = new BrowserWindow({
@@ -142,6 +144,17 @@ function registerIpc() {
   handle('trade:limits', () => ccxtSvc.limits());
   handle('trade:setLimits', (_e, l) => ccxtSvc.setLimits(l));
   handle('trade:log', (_e, limit) => db.orderLog(Math.min(500, Number(limit) || 100)));
+  // AMT scalper bots
+  handle('amt:list', () => bots.list());
+  handle('amt:defaults', () => bots.defaults());
+  handle('amt:save', (_e, cfg) => bots.save(cfg));
+  handle('amt:remove', (_e, id) => bots.remove(id));
+  handle('amt:start', (_e, id) => bots.start(id));
+  handle('amt:stop', (_e, id, flatten) => bots.stop(id, { flatten: Boolean(flatten), reason: flatten ? 'stopped and flattened by you' : 'stopped by you' }));
+  handle('amt:stopAll', () => bots.stopAll('kill switch'));
+  handle('amt:snapshot', (_e, id) => bots.snapshot(id));
+  handle('amt:events', (_e, id) => bots.eventsFor(id));
+  handle('amt:backtest', (_e, params, venue, symbol, from) => bots.backtest(params, venue, symbol, from));
   handle('ccxt:subscribe', (e, sid, id, symbol) => {
     const wc = e.sender;
     ccxtSvc.subscribe(sid, id, symbol, (msg) => {
@@ -238,6 +251,13 @@ app.whenReady().then(() => {
   db = new Db(join(userData, 'novus-ordo.sqlite'));
   vault = new Vault(db, safeStorage, join(userData, 'vault.key'));
   ccxtSvc = new CcxtService(vault, { db });
+  bots = new BotManager({
+    ccxt: ccxtSvc,
+    db,
+    emit: (ch, payload) => {
+      for (const w of BrowserWindow.getAllWindows()) if (!w.webContents.isDestroyed()) w.webContents.send(`amt:${ch}`, payload);
+    },
+  });
   db.pruneTrades(Date.now() - retentionDays() * DAY);
   setInterval(() => db.pruneTrades(Date.now() - retentionDays() * DAY), 3_600_000);
   Menu.setApplicationMenu(
@@ -261,6 +281,8 @@ app.on('second-instance', () => {
 });
 
 app.on('window-all-closed', () => {
+  // bots need the app open; stop them before their streams go away
+  void bots?.stopAll('app closed');
   ccxtSvc?.closeAll();
   if (process.platform !== 'darwin') app.quit();
 });

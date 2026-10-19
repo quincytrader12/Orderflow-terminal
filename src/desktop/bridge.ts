@@ -90,6 +90,7 @@ export interface OrderResult {
   side: 'buy' | 'sell';
   type: OrderType;
   amount: number;
+  baseQty: number;
   price: number | null;
   filled: number | null;
   notionalUsd: number;
@@ -149,6 +150,130 @@ export interface OrderLogRow {
   message: string | null;
 }
 
+export interface AmtParams {
+  profileMinutes: number;
+  valueAreaPct: number;
+  binBps: number;
+  sessionHours: number;
+  warmupMinutes: number;
+  flowSec: number;
+  deltaThreshold: number;
+  intensityMin: number;
+  useBook: boolean;
+  bookBandBps: number;
+  bookImbalanceMin: number;
+  maxSpreadBps: number;
+  probeBins: number;
+  acceptSec: number;
+  rejectSec: number;
+  reentrySec: number;
+  setups: { fade: boolean; breakout: boolean; reentry: boolean };
+  stopBufferBins: number;
+  minRR: number;
+  maxHoldSec: number;
+  breakevenAtR: number;
+  cooldownSec: number;
+  riskUsd: number;
+  maxPositionUsd: number;
+  maxDailyLossUsd: number;
+  maxTradesPerHour: number;
+  allowShort: boolean;
+  feeBps: number;
+  slippageBps: number;
+}
+
+export interface AmtBot {
+  id: string;
+  name: string;
+  mode: 'paper' | 'live';
+  exchangeId: string;
+  symbol: string;
+  secretId: string | null;
+  exchangeStop: boolean;
+  params: AmtParams;
+  updated: number;
+  running: boolean;
+  feed: string | null;
+}
+
+export type AmtBotInput = Omit<AmtBot, 'id' | 'updated' | 'running' | 'feed'> & { id?: string };
+
+export interface AmtTrade {
+  side: 'buy' | 'sell';
+  setup: string;
+  entry: number;
+  exit: number;
+  qty: number;
+  pnl: number;
+  fees: number;
+  opened: number;
+  closed: number;
+  reason: string;
+  why: string;
+}
+
+export interface AmtStats {
+  trades: number;
+  wins: number;
+  losses: number;
+  pnl: number;
+  fees: number;
+  grossWin: number;
+  grossLoss: number;
+  maxDrawdown: number;
+  pnlToday: number;
+  winRate: number | null;
+  profitFactor: number | null;
+}
+
+export interface AmtSnapshot {
+  id: string;
+  running: boolean;
+  mode: 'paper' | 'live';
+  symbol: string;
+  exchange: string;
+  sandbox: boolean;
+  feed: string;
+  feedError: string | null;
+  startedAt: number;
+  state: string;
+  t: number;
+  last: number;
+  bin: number;
+  va: { vah: number; val: number; poc: number } | null;
+  prior: { vah: number; val: number; poc: number } | null;
+  probe: { dir: number; extreme: number; outsideSec: number; accepted: boolean } | null;
+  flow: { deltaRatio: number; intensity: number | null } | null;
+  book: { imbalance: number; spreadBps: number } | null;
+  position: { side: 'buy' | 'sell'; entry: number; qty: number; stop: number; target: number; setup: string; why: string; t: number; upnl: number; be: boolean } | null;
+  pending: string | null;
+  stats: AmtStats;
+  halted: string | null;
+  warmupSec: number;
+  lastSignal: { t: number; setup: string; side: string; price: number; why: string } | null;
+  lastSkip: { t: number; event: string; reason: string } | null;
+  trades: AmtTrade[];
+  /** [price, volume, delta] around the last price */
+  profile: [number, number, number][];
+}
+
+export interface AmtEvent {
+  id: string;
+  t: number;
+  kind: 'started' | 'stopped' | 'entry' | 'exit' | 'skip' | 'warn' | 'error';
+  text: string;
+}
+
+export interface AmtBacktest {
+  stats: AmtStats;
+  trades: AmtTrade[];
+  equity: [number, number][];
+  from: number | null;
+  to: number | null;
+  count: number;
+  bin: number;
+}
+
 export interface DbInfo {
   file: string;
   size: number;
@@ -197,6 +322,20 @@ export interface NovusApi {
     limits(): Promise<TradingLimits>;
     setLimits(l: Partial<TradingLimits>): Promise<TradingLimits>;
     log(limit?: number): Promise<OrderLogRow[]>;
+  };
+  amt: {
+    list(): Promise<AmtBot[]>;
+    defaults(): Promise<AmtParams>;
+    save(cfg: AmtBotInput): Promise<string>;
+    remove(id: string): Promise<void>;
+    start(id: string): Promise<boolean>;
+    stop(id: string, flatten?: boolean): Promise<boolean>;
+    stopAll(): Promise<number>;
+    snapshot(id: string): Promise<AmtSnapshot | null>;
+    events(id: string): Promise<AmtEvent[]>;
+    backtest(params: AmtParams, venue: string, symbol: string, from?: number): Promise<AmtBacktest>;
+    onStatus(fn: (s: AmtSnapshot) => void): () => void;
+    onEvent(fn: (e: AmtEvent) => void): () => void;
   };
   db: {
     info(): Promise<DbInfo>;

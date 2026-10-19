@@ -135,7 +135,7 @@ export class CcxtService {
    * Start streaming trades, book and stats for one market. `emit` receives
    * {kind:'status'|'trades'|'book'|'stats', ...}.
    */
-  subscribe(sid, exchangeId, symbol, emit) {
+  subscribe(sid, exchangeId, symbol, emit, opts = {}) {
     this.unsubscribe(sid);
     const state = { stop: false, ex: null };
     this.streams.set(sid, state);
@@ -144,10 +144,12 @@ export class CcxtService {
       status('connecting');
       let ex;
       try {
-        const pro = Boolean(ccxt.pro[exchangeId]);
-        const Cls = pro ? ccxt.pro[exchangeId] : ccxt[exchangeId];
+        const pro = Boolean(this.lib.pro[exchangeId]);
+        const Cls = pro ? this.lib.pro[exchangeId] : this.lib[exchangeId];
         if (!Cls) throw new Error(`unknown exchange ${exchangeId}`);
         ex = new Cls({ enableRateLimit: true, newUpdates: true });
+        // testnet bots must read testnet prices, not the live market
+        if (opts.sandbox) ex.setSandboxMode(true);
         state.ex = ex;
         await ex.loadMarkets();
         if (!ex.markets[symbol]) throw new Error(`${symbol} not listed on ${ex.name}`);
@@ -460,7 +462,8 @@ export class CcxtService {
         side: o.side,
         type: req.type,
         amount: o.amount,
-        price: o.price ?? res?.average ?? res?.price ?? null,
+        baseQty: o.baseQty,
+        price: res?.average ?? o.price ?? res?.price ?? null,
         filled: res?.filled ?? null,
         notionalUsd: o.notionalUsd,
         exchange: ex.name,

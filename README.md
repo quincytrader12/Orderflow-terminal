@@ -20,6 +20,7 @@ Novus Ordo ships as a desktop app built with Electron. The desktop app adds:
   - every attempt — placed, rejected or failed — is written to the `orders_log` table in the database and shown in the ticket's order log; placed orders are also forwarded to Telegram when alert forwarding is on.
 
   Start on a testnet key. Create exchange keys with trade permission only — never enable withdrawals.
+- **AMT Scalper** (panel → Algo): an Auction Market Theory scalping bot you can run on any symbol of any CCXT exchange, one bot per symbol, each with its own **ON/OFF switch**. It builds a rolling volume profile (POC, 70 % value area), tracks balance → probe → acceptance/rejection, and trades three setups when order flow (aggressor delta, volume intensity, book imbalance) agrees: **responsive fade** of a rejected probe back to POC, **initiative breakout** after acceptance outside value, and the **80 % rule** re-entry into prior value. Size comes from risk per trade; breakeven at 1R, a time stop, cooldown, trades-per-hour and a daily loss limit that switches the bot off. **Paper** mode (default) simulates fills with fees and slippage; **Live** mode trades through the same protected path as the Order Ticket and places a reduce-only exchange stop on derivatives. Any failed live order switches the bot off. The top bar shows **ALGO n · PnL ⏹** while bots run — click it to stop all. **Backtest** replays trades the terminal recorded in its database. Theory, sources and an honest note on what “HFT” means from a laptop: [docs/AMT.md](docs/AMT.md).
 - **Phantom wallet**: **Connect Phantom** in the **Phantom Wallet** panel opens a one-time local page in your default browser (where the Phantom extension lives). You approve the connection and sign a message; the app verifies the ed25519 signature before saving the address. It is read-only — the app never sees a private key and cannot move funds — and shows SOL, SPL tokens and USD value (Jupiter prices). You can also watch any address, and add a private RPC in the vault.
 
 ### Get the .exe
@@ -107,7 +108,7 @@ Some venues are geo-restricted (e.g. Binance in the US); pick a venue that works
   - *Live only*.
 - **Layouts** — dockable tabs/splits (drag tabs, double-click a header to maximise). Layout, per-panel settings, alerts, journal and watchlist persist in your browser. A gallery of presets (Terminal, Flow Desk, Scalper, Liquidity, Derivatives, Market Overview, Whale Watch, Options), named saved layouts and JSON import/export are under **▦ Layouts**.
 
-## Panels (30)
+## Panels (31)
 
 | Category | Panel | Highlights |
 |---|---|---|
@@ -137,6 +138,7 @@ Some venues are geo-restricted (e.g. Binance in the US); pick a venue that works
 | | **Exchange Accounts** | Balances, positions, open orders and fills from any CCXT exchange; cancel orders and close positions (desktop) |
 | | **Phantom Wallet** | Connect Phantom or watch an address: SOL, tokens, USD value, recent activity |
 | | **Database** | Recorded trades per instrument, retention, CSV export |
+| Algo | **AMT Scalper** | Auction Market Theory bot for any symbol: value area, acceptance/rejection, order-flow confirmation, paper/live, on/off switch, backtest (desktop) |
 | Tools | **Telegram Bot** | Forward alerts, answer /price and /status |
 | | **Alerts** | 12 types evaluated in-browser: price above/below, large trade, liquidation, liquidation cascade, CVD divergence, absorption, wall appears, wall pulled, volume spike, delta spike, OI change — sound, browser notifications, cooldowns, log |
 | | **Journal** | Timestamped notes with price and tags; export Markdown/JSON |
@@ -204,9 +206,9 @@ src/exchanges/   one adapter per venue + reconnecting WebSocket, Deribit options
 src/market/      MarketHub (feeds for primary + aggregate set, tape, heatmap recorders, backfill), whale collector
 src/history/     BYOD v1 client
 src/alerts/      alert engine (12 types), toasts, sound
-src/panels/      30 panels (canvas renderers for charts, React tables elsewhere) + registry
+src/panels/      31 panels (canvas renderers for charts, React tables elsewhere) + registry
 src/app/         top bar, docking layout, presets, modals, embed mode
-electron/        desktop main process: CCXT service, order rules (trading.mjs), SQLite database, key vault, Phantom
+electron/        desktop main process: CCXT service, order rules (trading.mjs), AMT engine and bots (amt/), SQLite database, key vault, Phantom
 src/desktop/     renderer side of the desktop bridge (vault, wallet, Telegram, order ticket helpers)
 server/          self-hosted history server
 e2e/             browser and desktop tests

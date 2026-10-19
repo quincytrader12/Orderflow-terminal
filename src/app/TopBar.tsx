@@ -8,6 +8,7 @@ import { Select, useHubVersion, useTicker } from '../ui/controls';
 import { VENUE_COLORS } from '../ui/theme';
 import { FilterSelect, ThemeSwatches } from '../ui/ThemeControls';
 import { desktop, type CcxtExchangeInfo } from '../desktop/bridge';
+import { useAmtLive } from '../desktop/amt';
 
 /** Pyramid mark with three candles — Novus Ordo. */
 export function Logo({ size = 26 }: { size?: number }) {
@@ -185,6 +186,26 @@ function AggregateChips() {
   );
 }
 
+/** Running AMT bots with a one-click kill switch; hidden when none run. */
+function AlgoKill() {
+  const snaps = useAmtLive((s) => s.snaps);
+  const list = Object.values(snaps);
+  if (!desktop || !list.length) return null;
+  const live = list.some((b) => b.mode === 'live');
+  const pnl = list.reduce((a, b) => a + (b.stats?.pnl ?? 0) + (b.position?.upnl ?? 0), 0);
+  return (
+    <button
+      className={`chip algo-kill ${live ? 'live' : ''}`}
+      title={`${list.map((b) => `${b.mode.toUpperCase()} ${b.symbol}`).join(', ')} — click to stop every bot`}
+      onClick={() => {
+        if (confirm(`Stop all ${list.length} AMT bot(s) now? Open positions stay open (with their exchange stops).`)) void desktop!.amt.stopAll();
+      }}
+    >
+      <span className="status-dot status-open" /> ALGO {list.length} · <span className={pnl >= 0 ? 'up' : 'down'}>{pnl >= 0 ? '+' : '−'}${Math.abs(pnl).toFixed(2)}</span> ⏹
+    </button>
+  );
+}
+
 export function TopBar({ onOpen, onFocusChart, alertCount }: { onOpen: (m: ModalKind) => void; onFocusChart: () => void; alertCount: number }) {
   const locked = useSettings((s) => s.layoutLocked);
   const setS = useSettings((s) => s.set);
@@ -226,6 +247,7 @@ export function TopBar({ onOpen, onFocusChart, alertCount }: { onOpen: (m: Modal
         )}
       </button>
       <div style={{ flex: 1 }} />
+      <AlgoKill />
       <button className="chip" onClick={() => onOpen('keys')} title="API key vault">
         🔑 Keys
       </button>

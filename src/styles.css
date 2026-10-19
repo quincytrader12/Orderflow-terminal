@@ -1491,3 +1491,230 @@ ol.steps li.done::marker {
   padding: 4px 10px;
   border-bottom: 1px solid var(--row-line);
 }
+
+/* ---------- AMT scalper ---------- */
+.amt-body {
+  padding: 10px;
+}
+.amt-intro h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+.amt-intro p,
+.amt-intro li {
+  font-size: 12px;
+  line-height: 1.55;
+}
+.algo-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px 0 3px;
+  border-radius: 999px;
+  border: 1px solid var(--border2);
+  background: var(--panel2);
+  color: var(--muted);
+  font: 700 11px var(--mono);
+  cursor: pointer;
+}
+.algo-switch .knob {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 0.15s ease;
+}
+.algo-switch.on {
+  background: var(--buy);
+  border-color: var(--buy);
+  color: #fff;
+  flex-direction: row-reverse;
+  padding: 0 3px 0 10px;
+}
+.algo-switch.on .knob {
+  background: #fff;
+}
+.amt-confirm {
+  margin: 8px 10px 0;
+}
+.amt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.amt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.amt-field .ctl {
+  width: 100%;
+  height: 28px;
+}
+.amt-settings {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+.amt-settings .seg {
+  display: flex;
+  gap: 4px;
+}
+.amt-adv summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  margin: 6px 0;
+}
+.amt-warn,
+.amt-hint {
+  font-size: 12px;
+  margin: 6px 0;
+  line-height: 1.45;
+}
+.amt-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.amt-head b {
+  font-size: 14px;
+}
+.amt-state {
+  margin: 8px 0;
+  font-size: 12px;
+}
+.amt-state-pill {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  font-weight: 600;
+}
+.amt-state-pill.st-balance {
+  border-color: var(--accent);
+}
+.amt-state-pill.st-probe-up,
+.amt-state-pill.st-probe-down {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.amt-state-pill.st-accepted-up {
+  border-color: var(--buy);
+  color: var(--buy);
+}
+.amt-state-pill.st-accepted-down {
+  border-color: var(--sell);
+  color: var(--sell);
+}
+.amt-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 6px;
+  margin: 8px 0;
+}
+.amt-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--muted);
+  min-width: 0;
+}
+.amt-stat b {
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.amt-stat b.up {
+  color: var(--buy);
+}
+.amt-stat b.down {
+  color: var(--sell);
+}
+.amt-profile {
+  height: 180px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.amt-pos {
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  margin: 8px 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.amt-pos.buy {
+  border-left-color: var(--buy);
+}
+.amt-pos.sell {
+  border-left-color: var(--sell);
+}
+.tag.ev-tag-entry,
+.tag.ev-tag-started {
+  color: var(--buy);
+}
+.tag.ev-tag-exit {
+  color: var(--accent);
+}
+.tag.ev-tag-error,
+.tag.ev-tag-stopped {
+  color: var(--sell);
+}
+.tag.ev-tag-warn {
+  color: var(--warn);
+}
+.amt-ev.ev-skip {
+  opacity: 0.7;
+}
+.amt-equity {
+  width: 100%;
+  height: 80px;
+  margin: 6px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.amt-equity path {
+  fill: none;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.amt-equity path.up {
+  stroke: var(--buy);
+}
+.amt-equity path.down {
+  stroke: var(--sell);
+}
+.amt-equity .zero {
+  stroke: var(--border2);
+  stroke-dasharray: 2 2;
+  vector-effect: non-scaling-stroke;
+}
+.chip.algo-kill {
+  border-color: var(--warn);
+}
+.chip.algo-kill.live {
+  border-color: var(--sell);
+}
