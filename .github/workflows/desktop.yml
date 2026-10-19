@@ -1,0 +1,40 @@
+name: Desktop app
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: dist:win
+          - os: macos-latest
+            target: dist:mac
+          - os: ubuntu-latest
+            target: dist:linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run ${{ matrix.target }}
+        env:
+          # unsigned builds; add CSC_LINK / CSC_KEY_PASSWORD secrets to sign
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: novus-ordo-${{ matrix.os }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.AppImage
+          if-no-files-found: error

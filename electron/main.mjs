@@ -1,0 +1,206 @@
+// Novus Ordo desktop shell (Electron main process).
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, shell } from 'electron';
+import { writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { CcxtService, listExchanges } from './ccxt-service.mjs';
+import { Db } from './db.mjs';
+import { connectPhantom } from './phantom.mjs';
+import { DEFAULT_RPC, tokenInfo, walletBalances } from '../src/shared/solana.ts';
+import { Vault } from './vault.mjs';
+
+// bundled to dist-electron/main.mjs; app root is one level up
+const here = dirname(fileURLToPath(import.meta.url));
+const root = join(here, '..');
+const DAY = 86_400_000;
+
+// NOVUS_USER_DATA relocates the database, vault and settings (tests, portable installs)
+if (process.env.NOVUS_USER_DATA) app.setPath('userData', process.env.NOVUS_USER_DATA);
+
+if (!app.requestSingleInstanceLock()) app.quit();
+
+let win = null;
+let db;
+let vault;
+let ccxtSvc;
+
+function createWindow() {
+  win = new BrowserWindow({
+    width: 1600,
+    height: 1000,
+    minWidth: 960,
+    minHeight: 600,
+    title: 'Novus Ordo — by Quincy Gininda',
+    backgroundColor: '#4b5058',
+    icon: join(root, 'build', 'icon.png'),
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: join(root, 'electron', 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  // external links open in the default browser, never inside the app
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//.test(url)) void shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (e, url) => {
+    if (!url.startsWith('file://') && !url.startsWith(process.env.VITE_DEV_SERVER_URL ?? '\0')) {
+      e.preventDefault();
+      if (/^https?:\/\//.test(url)) void shell.openExternal(url);
+    }
+  });
+  if (process.env.VITE_DEV_SERVER_URL) void win.loadURL(process.env.VITE_DEV_SERVER_URL);
+  else void win.loadFile(join(root, 'dist', 'index.html'));
+  win.on('closed', () => {
+    win = null;
+    ccxtSvc?.closeAll();
+  });
+}
+
+const httpsOnly = (url) => {
+  const u = new URL(url);
+  if (u.protocol !== 'https:') throw new Error('only https URLs are allowed');
+  return u.toString();
+};
+
+function retentionDays() {
+  return db.get('retentionDays') ?? 3;
+}
+
+function registerIpc() {
+  const handle = (ch, fn) =>
+    ipcMain.handle(ch, async (e, ...args) => {
+      try {
+        return { ok: true, value: await fn(e, ...args) };
+      } catch (err) {
+        return { ok: false, error: String(err?.message ?? err) };
+      }
+    });
+
+  handle('app:info', () => ({
+    version: app.getVersion(),
+    platform: process.platform,
+    userData: app.getPath('userData'),
+    db: db.info(),
+    vaultBackend: vault.backend,
+    retentionDays: retentionDays(),
+  }));
+  handle('shell:open', (_e, url) => shell.openExternal(httpsOnly(url)));
+
+  // generic HTTPS JSON proxy: exchange REST calls from the main process avoid CORS
+  handle('net:fetchJson', async (_e, url, init) => {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 20_000);
+    try {
+      const res = await fetch(httpsOnly(url), { method: init?.method ?? 'GET', headers: init?.headers, body: init?.body, signal: ctrl.signal });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText} — ${url}`);
+      return await res.json();
+    } finally {
+      clearTimeout(t);
+    }
+  });
+
+  // vault
+  handle('vault:list', () => vault.list());
+  handle('vault:save', (_e, rec) => vault.save(rec));
+  handle('vault:remove', (_e, id) => vault.remove(id));
+  handle('vault:copy', (_e, id, field) => {
+    const v = vault.reveal(id).fields[field];
+    if (v === undefined) throw new Error(`no field ${field}`);
+    clipboard.writeText(v);
+    // clear the clipboard after 30s if it still holds the secret
+    setTimeout(() => clipboard.readText() === v && clipboard.clear(), 30_000);
+    return true;
+  });
+  handle('vault:test', (_e, id) => ccxtSvc.testKey(id));
+
+  // ccxt
+  let exchangesCache = null;
+  handle('ccxt:exchanges', () => (exchangesCache ??= listExchanges()));
+  handle('ccxt:markets', (_e, id) => ccxtSvc.markets(id));
+  handle('ccxt:ohlcv', (_e, id, symbol, tf, limit) => ccxtSvc.ohlcv(id, symbol, tf, limit));
+  handle('ccxt:tickers', (_e, id) => ccxtSvc.tickers(id));
+  handle('ccxt:ticker', (_e, id, symbol) => ccxtSvc.ticker(id, symbol));
+  handle('ccxt:account', (_e, secretId, symbol) => ccxtSvc.account(secretId, symbol));
+  handle('ccxt:subscribe', (e, sid, id, symbol) => {
+    const wc = e.sender;
+    ccxtSvc.subscribe(sid, id, symbol, (msg) => {
+      if (!wc.isDestroyed()) wc.send('ccxt:event', { sid, ...msg });
+      else ccxtSvc.unsubscribe(sid);
+    });
+    return true;
+  });
+  handle('ccxt:unsubscribe', (_e, sid) => ccxtSvc.unsubscribe(sid));
+
+  // database
+  handle('db:info', () => ({ ...db.info(), retentionDays: retentionDays() }));
+  handle('db:record', (_e, venue, symbol, rows) => db.recordTrades(venue, symbol, rows));
+  handle('db:query', (_e, venue, symbol, from, to) => db.queryTrades(venue, symbol, from, to));
+  handle('db:stats', () => db.tradeStats());
+  handle('db:prune', (_e, days) => db.pruneTrades(Date.now() - (days ?? retentionDays()) * DAY));
+  handle('db:deleteInstrument', (_e, venue, symbol) => db.deleteInstrument(venue, symbol));
+  handle('db:vacuum', () => db.vacuum());
+  handle('db:setRetention', (_e, days) => db.set('retentionDays', Math.max(1, Math.min(365, Number(days) || 3))));
+  handle('db:exportCsv', async (_e, venue, symbol) => {
+    const r = await dialog.showSaveDialog(win, { defaultPath: `${venue}-${symbol.replace(/[^\w.-]+/g, '_')}-trades.csv`, filters: [{ name: 'CSV', extensions: ['csv'] }] });
+    if (r.canceled || !r.filePath) return null;
+    const rows = db.queryTrades(venue, symbol, 0, Date.now());
+    writeFileSync(r.filePath, 'timestamp_ms,price,quantity,side\n' + rows.map((t) => `${t.time},${t.price},${t.qty},${t.side}`).join('\n'));
+    return { path: r.filePath, rows: rows.length };
+  });
+
+  // wallets
+  handle('wallet:connectPhantom', async () => {
+    const r = await connectPhantom((url) => shell.openExternal(url));
+    db.putWallet(r.address, 'solana', true);
+    return r;
+  });
+  handle('wallet:watch', (_e, address) => {
+    db.putWallet(address, 'solana', false);
+    return true;
+  });
+  handle('wallet:list', () => db.listWallets());
+  handle('wallet:remove', (_e, address) => db.deleteWallet(address));
+  handle('wallet:balances', (_e, address, rpcSecretId) => {
+    const url = rpcSecretId ? vault.reveal(rpcSecretId).fields.url : DEFAULT_RPC;
+    return walletBalances(address, httpsOnly(url ?? DEFAULT_RPC));
+  });
+  handle('wallet:tokenInfo', (_e, mints) => tokenInfo(mints));
+}
+
+app.whenReady().then(() => {
+  const userData = app.getPath('userData');
+  db = new Db(join(userData, 'novus-ordo.sqlite'));
+  vault = new Vault(db, safeStorage, join(userData, 'vault.key'));
+  ccxtSvc = new CcxtService(vault);
+  db.pruneTrades(Date.now() - retentionDays() * DAY);
+  setInterval(() => db.pruneTrades(Date.now() - retentionDays() * DAY), 3_600_000);
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
+      { role: 'editMenu' },
+      { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' }] },
+      { role: 'windowMenu' },
+    ]),
+  );
+  registerIpc();
+  createWindow();
+  app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
+});
+
+app.on('second-instance', () => {
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  }
+});
+
+app.on('window-all-closed', () => {
+  ccxtSvc?.closeAll();
+  if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('will-quit', () => db?.close());

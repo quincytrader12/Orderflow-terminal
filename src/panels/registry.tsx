@@ -1,6 +1,9 @@
 import type { ReactElement } from 'react';
 import type { PanelProps } from '../ui/controls';
+import { AccountsPanel, ACCOUNTS_DEFAULTS } from './AccountsPanel';
 import { AlertsPanel, ALERTS_DEFAULTS } from './AlertsPanel';
+import { DatabasePanel, DATABASE_DEFAULTS } from './DatabasePanel';
+import { WalletPanel, WALLET_DEFAULTS } from './WalletPanel';
 import { Calculator, CALC_DEFAULTS } from './Calculator';
 import { CvdChart, CVD_DEFAULTS } from './CvdChart';
 import { DepthChart, DEPTH_DEFAULTS } from './DepthChart';
@@ -25,7 +28,7 @@ import { VolumeProfilePanel, VPROFILE_DEFAULTS } from './VolumeProfilePanel';
 import { Watchlist, WATCHLIST_DEFAULTS } from './Watchlist';
 import { WhaleTracker, WHALES_DEFAULTS } from './WhaleTracker';
 
-export type Category = 'Charts' | 'Orderflow' | 'Order book' | 'Derivatives' | 'Market' | 'Tools';
+export type Category = 'Charts' | 'Orderflow' | 'Order book' | 'Derivatives' | 'Market' | 'Account' | 'Tools';
 
 export interface PanelDef {
   id: string;
@@ -60,6 +63,9 @@ export const PANELS: PanelDef[] = [
   { id: 'screener', title: 'Screener', category: 'Market', component: Screener, defaults: { ...SCREENER_DEFAULTS }, description: 'All perps on a venue: price, change, volume, funding, OI.' },
   { id: 'watchlist', title: 'Watchlist', category: 'Market', component: Watchlist, defaults: { ...WATCHLIST_DEFAULTS }, description: 'Prices for any symbol on any supported venue.' },
   { id: 'news', title: 'News', category: 'Market', component: NewsFeed, defaults: { ...NEWS_DEFAULTS }, description: 'Real-time headlines (Tree of Alpha) filtered by coin.' },
+  { id: 'accounts', title: 'Exchange Accounts', category: 'Account', component: AccountsPanel, defaults: { ...ACCOUNTS_DEFAULTS }, description: 'Balances, positions, open orders and fills from any CCXT exchange using keys in your vault.' },
+  { id: 'wallet', title: 'Phantom Wallet', category: 'Account', component: WalletPanel, defaults: { ...WALLET_DEFAULTS }, description: 'Connect Phantom (signed proof of ownership) or watch any Solana address: SOL, tokens and USD value.' },
+  { id: 'database', title: 'Database', category: 'Account', component: DatabasePanel, defaults: { ...DATABASE_DEFAULTS }, description: 'Local SQLite: recorded trades per instrument, retention, CSV export, key and wallet counts.' },
   { id: 'alerts', title: 'Alerts', category: 'Tools', component: AlertsPanel, defaults: { ...ALERTS_DEFAULTS }, description: 'Twelve alert types evaluated in your browser against the live feed.' },
   { id: 'journal', title: 'Journal', category: 'Tools', component: Journal, defaults: { ...JOURNAL_DEFAULTS }, description: 'Timestamped trading notes stored in your browser.' },
   { id: 'calculator', title: 'Calculator', category: 'Tools', component: Calculator, defaults: { ...CALC_DEFAULTS }, description: 'Position size, risk/reward, liquidation estimate and market-cap math.' },

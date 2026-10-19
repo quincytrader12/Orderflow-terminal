@@ -7,6 +7,7 @@ import { useSettings } from '../store/settings';
 import { Select, useHubVersion, useTicker } from '../ui/controls';
 import { VENUE_COLORS } from '../ui/theme';
 import { FilterSelect, ThemeSwatches } from '../ui/ThemeControls';
+import { desktop, type CcxtExchangeInfo } from '../desktop/bridge';
 
 /** Pyramid mark with three candles — Novus Ordo. */
 export function Logo({ size = 26 }: { size?: number }) {
@@ -26,7 +27,7 @@ export function Logo({ size = 26 }: { size?: number }) {
   );
 }
 
-export type ModalKind = 'connection' | 'layouts' | 'add' | 'settings' | null;
+export type ModalKind = 'connection' | 'layouts' | 'add' | 'settings' | 'keys' | null;
 
 function useFps() {
   const [fps, setFps] = useState(0);
@@ -53,6 +54,7 @@ function SymbolPicker() {
   const base = useSettings((s) => s.base);
   const venue = useSettings((s) => s.primaryVenue);
   const setPrimary = useSettings((s) => s.setPrimary);
+  const aggHasCcxt = useSettings((s) => s.aggregateVenues.includes('ccxt'));
   const [text, setText] = useState(base);
   useEffect(() => setText(base), [base]);
   const commit = () => {
@@ -77,8 +79,57 @@ function SymbolPicker() {
           <option key={b} value={b} />
         ))}
       </datalist>
-      <Select value={venue} options={VENUE_IDS.map((v) => ({ value: v, label: ADAPTERS[v].name }))} onChange={(v) => setPrimary(base, v)} title="Primary venue" width={130} />
+      <Select value={venue} options={VENUE_IDS.map((v) => ({ value: v, label: v === 'ccxt' ? 'CCXT (any exchange)' : ADAPTERS[v].name }))} onChange={(v) => setPrimary(base, v)} title="Primary venue" width={130} />
+      {(venue === 'ccxt' || aggHasCcxt) && <CcxtPicker />}
     </div>
+  );
+}
+
+/** Exchange / market type for the CCXT venue (any of CCXT's 100+ exchanges). */
+function CcxtPicker() {
+  const s = useSettings();
+  const [list, setList] = useState<CcxtExchangeInfo[]>([]);
+  const [text, setText] = useState(s.ccxtExchange);
+  useEffect(() => setText(s.ccxtExchange), [s.ccxtExchange]);
+  useEffect(() => {
+    desktop?.ccxt.exchanges().then(setList).catch(() => undefined);
+  }, []);
+  if (!desktop) return <span className="chip" title="CCXT runs in the desktop app">CCXT: desktop app</span>;
+  const commit = () => {
+    const id = text.trim().toLowerCase();
+    if (list.some((x) => x.id === id)) s.set({ ccxtExchange: id });
+    else setText(s.ccxtExchange);
+  };
+  return (
+    <>
+      <input
+        className="ctl"
+        list="ccxt-ex-top"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+        style={{ width: 92 }}
+        title={`CCXT exchange (${list.length} available)`}
+      />
+      <datalist id="ccxt-ex-top">
+        {list.map((x) => (
+          <option key={x.id} value={x.id}>
+            {x.name}
+            {x.pro ? '' : ' (REST polling)'}
+          </option>
+        ))}
+      </datalist>
+      <Select
+        value={s.ccxtType}
+        options={[
+          { value: 'spot', label: 'Spot' },
+          { value: 'swap', label: 'Perp' },
+        ]}
+        onChange={(ccxtType) => s.set({ ccxtType })}
+      />
+      <Select value={s.ccxtQuote} options={['USDT', 'USDC', 'USD']} onChange={(ccxtQuote) => s.set({ ccxtQuote })} />
+    </>
   );
 }
 
@@ -134,7 +185,9 @@ function AggregateChips() {
   );
 }
 
-export function TopBar({ onOpen, alertCount }: { onOpen: (m: ModalKind) => void; alertCount: number }) {
+export function TopBar({ onOpen, onFocusChart, alertCount }: { onOpen: (m: ModalKind) => void; onFocusChart: () => void; alertCount: number }) {
+  const locked = useSettings((s) => s.layoutLocked);
+  const setS = useSettings((s) => s.set);
   useTicker(500);
   useHubVersion();
   const showFps = useSettings((s) => s.showFps);
@@ -173,8 +226,17 @@ export function TopBar({ onOpen, alertCount }: { onOpen: (m: ModalKind) => void;
         )}
       </button>
       <div style={{ flex: 1 }} />
+      <button className="chip" onClick={() => onOpen('keys')} title="API key vault">
+        🔑 Keys
+      </button>
       <button className="chip" onClick={() => onOpen('add')} title="Add a panel">
         + Panel
+      </button>
+      <button className="chip" onClick={onFocusChart} title="Maximise the main chart (click again to restore)">
+        ⤢ Chart
+      </button>
+      <button className={`chip ${locked ? 'locked' : ''}`} onClick={() => setS({ layoutLocked: !locked })} title={locked ? 'Layout locked — click to unlock' : 'Lock the layout (splits stay resizable)'}>
+        {locked ? '🔒' : '🔓'}
       </button>
       <button className="chip" onClick={() => onOpen('layouts')} title="Layout gallery & saved layouts">
         ▦ Layouts

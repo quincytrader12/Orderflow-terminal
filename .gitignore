@@ -6,3 +6,5 @@ e2e/screenshots
 server/data
 coverage
 *.tsbuildinfo
+dist-electron
+release

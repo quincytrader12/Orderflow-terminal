@@ -6,6 +6,7 @@ import type { Connection, VenueAdapter } from '../exchanges/adapter';
 import { ADAPTERS } from '../exchanges';
 import { byodLiquidations, byodTrades } from '../history/byod';
 import { getSettings, useSettings } from '../store/settings';
+import { desktop, DesktopOnlyError } from '../desktop/bridge';
 
 export interface SeriesPoint {
   time: number;
@@ -180,11 +181,13 @@ export class MarketHub {
   constructor() {
     this.syncFromSettings();
     useSettings.subscribe((s, prev) => {
-      if (s.base !== prev.base || s.primaryVenue !== prev.primaryVenue || s.aggregateVenues.join() !== prev.aggregateVenues.join()) this.syncFromSettings();
+      const ccxtChanged = s.ccxtExchange !== prev.ccxtExchange || s.ccxtType !== prev.ccxtType || s.ccxtQuote !== prev.ccxtQuote;
+      if (s.base !== prev.base || s.primaryVenue !== prev.primaryVenue || s.aggregateVenues.join() !== prev.aggregateVenues.join() || ccxtChanged) this.syncFromSettings();
       else if (s.historySource !== prev.historySource || s.byodUrl !== prev.byodUrl || s.byodToken !== prev.byodToken || s.backfillMinutes !== prev.backfillMinutes)
         void this.runBackfill();
     });
     this.timer = setInterval(() => this.tick(), 100);
+    if (typeof window !== 'undefined') window.addEventListener('beforeunload', () => this.flushRecords());
   }
 
   dispose() {
@@ -265,6 +268,7 @@ export class MarketHub {
   emitTrade(t: Trade, feed: Feed) {
     if (!this.aggregate.includes(feed)) return;
     this.tape.push(t);
+    this.record(t, feed);
     for (const l of this.tradeListeners) l(t, feed);
   }
 
@@ -310,6 +314,34 @@ export class MarketHub {
     }
   }
 
+  // ---- local database recorder (desktop) ----
+  private recordBuf = new Map<string, { venue: string; symbol: string; rows: { p: number; q: number; s: 'buy' | 'sell'; t: number }[] }>();
+  private recordTimer: ReturnType<typeof setInterval> | null = null;
+
+  private record(t: Trade, feed: Feed) {
+    if (!desktop) return;
+    const s = getSettings();
+    if (!s.recordTrades || feed.inst.venue === 'sim') return;
+    if (s.recordScope === 'primary' && feed !== this.primary) return;
+    let b = this.recordBuf.get(feed.key);
+    if (!b) {
+      b = { venue: feed.inst.venue, symbol: feed.inst.symbol, rows: [] };
+      this.recordBuf.set(feed.key, b);
+    }
+    b.rows.push({ p: t.price, q: t.qty, s: t.side, t: t.time });
+    this.recordTimer ??= setInterval(() => this.flushRecords(), 2000);
+  }
+
+  flushRecords() {
+    if (!desktop) return;
+    for (const b of this.recordBuf.values()) {
+      if (!b.rows.length) continue;
+      const rows = b.rows;
+      b.rows = [];
+      desktop.db.record(b.venue, b.symbol, rows).catch((e) => console.warn('record failed', e));
+    }
+  }
+
   async runBackfill() {
     this.backfillAbort?.abort();
     const ctrl = new AbortController();
@@ -330,7 +362,19 @@ export class MarketHub {
     set({ state: 'loading', progress: 0, message: 'Loading history…', count: 0 });
     try {
       let trades;
-      if (s.historySource === 'byod') {
+      if (s.historySource === 'local') {
+        if (!desktop) throw new DesktopOnlyError('The local database');
+        const local = await desktop.db.query(feed.inst.venue, feed.inst.symbol, from, to);
+        set({ progress: 0.5, message: `Loaded ${local.length.toLocaleString()} trades from the local database` });
+        trades = local;
+        // fill the gap between the last recorded trade and now from the exchange
+        const lastLocal = local.length ? local[local.length - 1].time : from;
+        if (feed.adapter.backfillTrades && to - lastLocal > 60_000) {
+          const gap = await feed.adapter.backfillTrades(feed.inst.symbol, lastLocal + 1, to, (p) => set({ progress: 0.5 + p / 2 }), ctrl.signal);
+          trades = [...local, ...gap];
+          if (gap.length && s.recordTrades) void desktop.db.record(feed.inst.venue, feed.inst.symbol, gap.map((g) => ({ p: g.price, q: g.qty, s: g.side, t: g.time })));
+        }
+      } else if (s.historySource === 'byod') {
         trades = await byodTrades(s.byodUrl, s.byodToken, feed.inst.venue, feed.inst.symbol, from, to, (p) => set({ progress: p }), ctrl.signal);
         byodLiquidations(s.byodUrl, s.byodToken, feed.inst.venue, feed.inst.symbol, from, to)
           .then((liqs) => {

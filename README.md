@@ -4,13 +4,33 @@ A browser-based crypto order-flow terminal with a liquid-glass interface. Your b
 
 Modelled on the feature set of [Cryexc](https://cryexc.josedonato.com/) (whose docs and open-source [backend protocol](https://github.com/jose-donato/cryexc-backend) / [history protocol](https://github.com/jose-donato/cryexc-history) informed this build). This is an independent implementation in TypeScript + React + Canvas 2D.
 
+## Desktop app (Windows .exe)
+
+Novus Ordo ships as a desktop app built with Electron. The desktop app adds:
+
+- **CCXT**: any of CCXT's 100+ exchanges as a venue (pick **CCXT (any exchange)** as the primary venue or add it to Σ, then choose the exchange, Spot/Perp and quote in the top bar). Streams use ccxt.pro WebSockets where the exchange has them, REST polling otherwise. All REST calls run in the desktop process, so browser CORS limits disappear.
+- **Database**: a local SQLite file (`novus-ordo.sqlite` in the app data folder) holding recorded trades, the encrypted key vault and connected wallets. Live trades of the primary (or all Σ venues) are recorded and used as the **Local database** history source on the next launch, with any gap filled from the exchange. The **Database** panel shows size, instruments and retention, and exports CSV.
+- **Key vault** (top bar → 🔑 Keys): stores any API key — exchange credentials (fields follow each CCXT exchange's requirements, with testnet toggle and a **Test** button), Solana RPC URLs, or any other named key with custom fields. Values are encrypted with the OS keychain (Windows DPAPI, macOS Keychain) before they reach the database; the UI only shows masked values and **copy** puts a value on the clipboard (cleared after 30 s) without displaying it. Exchange keys are used only by CCXT in the desktop process (**Exchange Accounts** panel: balances, positions, open orders, fills). Use read-only keys where your exchange offers them.
+- **Phantom wallet**: **Connect Phantom** in the **Phantom Wallet** panel opens a one-time local page in your default browser (where the Phantom extension lives). You approve the connection and sign a message; the app verifies the ed25519 signature before saving the address. It is read-only — the app never sees a private key and cannot move funds — and shows SOL, SPL tokens and USD value (Jupiter prices). You can also watch any address, and add a private RPC in the vault.
+
+### Get the .exe
+
+- **Portable**: `NovusOrdo-<version>-portable.exe` — double-click to run, nothing to install.
+- **Installer**: `NovusOrdo-<version>-setup.exe` — installs with Start-menu shortcut.
+
+Build them yourself on Windows with `npm ci && npm run dist:win` (outputs to `release/`), or run the **Desktop app** GitHub Actions workflow (Actions → Desktop app → Run workflow, or push a `v*` tag) which builds Windows, macOS and Linux packages and attaches them as artifacts. Builds are unsigned, so Windows SmartScreen shows *More info → Run anyway* the first time.
+
+Development: `npm run desktop:dev` (Vite + Electron with hot reload) or `npm run desktop` (production build).
+
+The layout defaults to **Chart Center**: the footprint chart in the middle, DOM and book on the left, tape, summary and wallet on the right. Every split is draggable; **⤢ Chart** maximises the main chart and **🔓/🔒** locks tabs in place (splits stay resizable).
+
 ## Themes, filters and glass
 
 Switch from the swatches in the top bar or **⚙ Settings → Theme**:
 
 | Theme | Look |
 |---|---|
-| **Grey** (default) | grey gradient backdrop, smoked glass cards |
+| **Grey** (default) | graphite grey workspace with soft glass cards |
 | **White** | bright frosted glass on a pale backdrop |
 | **Black** | deep black with dark glass |
 | **Neon Green** | black-green backdrop, green glow, green heatmap ramp |
@@ -20,7 +40,7 @@ Every theme recolours both the interface and the canvas charts (candles, cluster
 
 **Filters** (top-bar ◐ menu or Settings): None, Vivid, Soft, Mono, Warm, Cool, Night, CRT (scanlines + vignette).
 
-**Glass** levels: Solid, Light, Liquid (default), Frosted. Panels are rounded floating cards with a gradient rim, specular highlight and layered shadows. Menus, modals and toasts always blur what is behind them; *Frosted* also adds a live backdrop blur under every panel, which looks best but is GPU-heavy while charts animate.
+**Glass** levels: Solid, Light, Glass (default), Frosted. Panels are rounded cards with hairline borders, a 1px top highlight and soft shadows. Menus, modals and toasts blur what is behind them; *Frosted* also adds a live backdrop blur under every panel (GPU-heavy while charts animate).
 
 Theme and filter can be set from the URL: `/?theme=neon-orange&filter=crt`.
 
@@ -147,6 +167,7 @@ Then in the terminal: **History → Custom (BYOD)** → URL `http://localhost:80
 npm run typecheck    # tsc
 npm test             # vitest: core engines, adapters (fake WebSocket), alerts, panels, history server + BYOD client
 npm run e2e          # Playwright (playwright-core) against Chromium:
+                     #   e2e/desktop.mjs — launches the Electron app (xvfb-run on Linux): vault, database, CCXT, wallet, layout
                      #   e2e/smoke.mjs  — every layout preset and every panel on the simulator, fails on page errors
                      #   e2e/venues.mjs — mocks all 8 venues' WebSocket/REST in the browser and checks each real adapter streams
 ```

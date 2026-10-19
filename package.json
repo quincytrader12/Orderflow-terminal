@@ -14,25 +14,89 @@
     "e2e": "node e2e/smoke.mjs && node e2e/venues.mjs",
     "history-server": "node server/history-server.mjs",
     "e2e:smoke": "node e2e/smoke.mjs",
-    "e2e:venues": "node e2e/venues.mjs"
+    "e2e:venues": "node e2e/venues.mjs",
+    "build:main": "esbuild electron/main.mjs --bundle --platform=node --format=esm --target=node22 --outfile=dist-electron/main.mjs --external:electron --external:ccxt",
+    "desktop": "npm run build && npm run build:main && electron .",
+    "desktop:dev": "npm run build:main && node scripts/dev-desktop.mjs",
+    "icon": "node scripts/make-icon.mjs",
+    "dist:win": "npm run build && npm run build:main && electron-builder --win portable nsis --x64",
+    "dist:mac": "npm run build && npm run build:main && electron-builder --mac dmg",
+    "dist:linux": "npm run build && npm run build:main && electron-builder --linux AppImage",
+    "e2e:desktop": "npm run build && npm run build:main && node e2e/desktop.mjs"
   },
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
-    "flexlayout-react": "^0.11.1",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1",
-    "zustand": "^5.0.15"
+    "ccxt": "^4.5.88"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "flexlayout-react": "^0.11.1",
     "playwright-core": "^1.64.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "typescript": "^5.9.3",
     "vite": "^8.3.4",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "zustand": "^5.0.15"
+  },
+  "main": "dist-electron/main.mjs",
+  "author": "Quincy Gininda",
+  "homepage": "https://github.com/quincytrader12/Orderflow-terminal",
+  "build": {
+    "appId": "com.quincygininda.novusordo",
+    "productName": "Novus Ordo",
+    "copyright": "Copyright \u00a9 Quincy Gininda",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "electron/preload.cjs",
+      "build/icon.png",
+      "package.json",
+      "!node_modules/bufferutil/**",
+      "!node_modules/utf-8-validate/**",
+      "!**/*.map",
+      "!**/*.d.ts",
+      "!**/*.md"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ],
+      "icon": "build/icon.png"
+    },
+    "portable": {
+      "artifactName": "NovusOrdo-${version}-portable.exe"
+    },
+    "nsis": {
+      "artifactName": "NovusOrdo-${version}-setup.exe",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Novus Ordo"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.finance",
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Finance",
+      "icon": "build/icon.png"
+    },
+    "npmRebuild": false
   }
 }

@@ -28,7 +28,7 @@ export const safeStorage: StateStorage = {
   },
 };
 
-export type HistorySource = 'none' | 'exchange' | 'byod';
+export type HistorySource = 'none' | 'exchange' | 'byod' | 'local';
 
 export type AlertType =
   | 'price_above'
@@ -77,6 +77,14 @@ export interface JournalEntry {
   tags: string[];
 }
 
+export interface SavedWallet {
+  address: string;
+  chain: 'solana';
+  /** true when ownership was proven by a signed message */
+  verified: boolean;
+  label?: string;
+}
+
 export interface WatchItem {
   venue: VenueId;
   symbol: string;
@@ -87,6 +95,15 @@ export interface Settings {
   primaryVenue: VenueId;
   aggregateVenues: VenueId[];
   historySource: HistorySource;
+  /** CCXT venue: exchange id, market type and quote currency */
+  ccxtExchange: string;
+  ccxtType: 'spot' | 'swap';
+  ccxtQuote: string;
+  /** desktop: record trades into the local database */
+  recordTrades: boolean;
+  recordScope: 'primary' | 'aggregate';
+  layoutLocked: boolean;
+  wallets: SavedWallet[];
   byodUrl: string;
   byodToken: string;
   backfillMinutes: number;
@@ -130,7 +147,15 @@ const initial: Settings = {
   base: 'BTC',
   primaryVenue: 'binancef',
   aggregateVenues: ['binancef', 'bybit', 'okx', 'hyperliquid', 'coinbase'],
-  historySource: 'exchange',
+  // the desktop app keeps its own trade database, so it backfills from there first
+  historySource: typeof window !== 'undefined' && (window as { novus?: unknown }).novus ? 'local' : 'exchange',
+  ccxtExchange: 'kucoin',
+  ccxtType: 'spot',
+  ccxtQuote: 'USDT',
+  recordTrades: true,
+  recordScope: 'primary',
+  layoutLocked: false,
+  wallets: [],
   byodUrl: 'http://localhost:8080',
   byodToken: '',
   backfillMinutes: 30,

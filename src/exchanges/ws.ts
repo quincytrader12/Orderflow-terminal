@@ -146,6 +146,12 @@ export class ManagedSocket {
 }
 
 export async function fetchJson<T = any>(url: string, init?: RequestInit, timeoutMs = 15_000): Promise<T> {
+  // in the desktop app REST goes through the main process: no CORS restrictions
+  const bridge = (globalThis as { novus?: { net: { fetchJson(u: string, i?: unknown): Promise<unknown> } } }).novus;
+  if (bridge && url.startsWith('https://')) {
+    if (init?.signal?.aborted) throw new Error('aborted');
+    return (await bridge.net.fetchJson(url, { method: init?.method, headers: init?.headers as Record<string, string> | undefined, body: init?.body as string | undefined })) as T;
+  }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {

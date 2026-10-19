@@ -11,6 +11,7 @@ export type VenueId =
   | 'kraken'
   | 'bitget'
   | 'bitfinex'
+  | 'ccxt'
   | 'sim';
 
 export type Side = 'buy' | 'sell';

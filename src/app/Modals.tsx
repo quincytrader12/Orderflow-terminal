@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { IJsonModel } from 'flexlayout-react';
 import { byodInfo, type ByodInfo } from '../history/byod';
+import { isDesktop } from '../desktop/bridge';
 import { ADAPTERS } from '../exchanges';
 import { hub } from '../market/hub';
 import { PANELS, type Category } from '../panels/registry';
@@ -31,7 +32,8 @@ export function Modal({ title, onClose, children, footer, width }: { title: stri
   );
 }
 
-const SOURCES: { id: HistorySource; name: string; text: string }[] = [
+const SOURCES: { id: HistorySource; name: string; text: string; desktopOnly?: boolean }[] = [
+  { id: 'local', name: 'Local database', text: 'Trades recorded by this app in its SQLite database, with any recent gap filled from the exchange.', desktopOnly: true },
   { id: 'exchange', name: 'Exchange REST backfill', text: 'Pull recent aggregated trades from the venue’s public API on load (Binance spot/futures and the simulator). Other venues start live.' },
   { id: 'byod', name: 'Custom (BYOD)', text: 'Your own history server speaking the v1 protocol (/v1/info, /v1/trades, /v1/liquidations) — e.g. server/history-server.mjs in this repo.' },
   { id: 'none', name: 'Live only', text: 'No history. Footprint and DOM build from the moment the terminal opens.' },
@@ -122,7 +124,7 @@ export function ConnectionModal({ onClose }: { onClose: () => void }) {
       </table>
       <div className="section-title">History source</div>
       <div className="radio-cards">
-        {SOURCES.map((x) => (
+        {SOURCES.filter((x) => !x.desktopOnly || isDesktop).map((x) => (
           <div key={x.id} className={`radio-card ${source === x.id ? 'on' : ''}`} onClick={() => setSource(x.id)} role="radio" aria-checked={source === x.id}>
             <b>{x.name}</b>
             <span>{x.text}</span>
@@ -270,7 +272,7 @@ export function LayoutsModal({ onClose, onApply, current }: { onClose: () => voi
   );
 }
 
-const CATS: Category[] = ['Charts', 'Orderflow', 'Order book', 'Derivatives', 'Market', 'Tools'];
+const CATS: Category[] = ['Charts', 'Orderflow', 'Order book', 'Derivatives', 'Market', 'Account', 'Tools'];
 
 export function AddPanelModal({ onClose, onAdd }: { onClose: () => void; onAdd: (id: string) => void }) {
   return (

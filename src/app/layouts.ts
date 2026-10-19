@@ -38,6 +38,21 @@ const model = (layout: IJsonRowNode): IJsonModel => ({ global: GLOBAL, borders: 
 
 export const PRESETS: Preset[] = [
   {
+    id: 'center',
+    name: 'Chart Center',
+    description: 'The footprint chart in the middle, book on the left, flow and account on the right — every split is draggable.',
+    thumb: { cols: '1fr 3fr 1.3fr', rows: '2.4fr 1fr', cells: [['DOM', '1/1/2/2'], ['Book', '2/1/3/2'], ['CHART', '1/2/2/3'], ['CVD · Liqs', '2/2/3/3'], ['Tape', '1/3/2/4'], ['Summary · Wallet', '2/3/3/4']] },
+    build: () =>
+      model(
+        row(
+          100,
+          row(17, ts(62, tab('dom')), ts(38, tab('orderbook'), tab('obstats'))),
+          row(59, ts(72, tab('footprint'), tab('historical'), tab('heatmap')), ts(28, tab('cvd'), tab('liquidations'), tab('vprofile'), tab('accounts'))),
+          row(24, ts(46, tab('tape'), tab('whales')), ts(30, tab('summary'), tab('flowpulse'), tab('funding')), ts(24, tab('wallet'), tab('alerts'), tab('database'))),
+        ),
+      ),
+  },
+  {
     id: 'terminal',
     name: 'Terminal',
     description: 'Footprint, DOM, tape and heatmap with CVD and symbol summary.',
@@ -146,7 +161,8 @@ export const PRESETS: Preset[] = [
   },
 ];
 
-const LAYOUT_KEY = 'oft-layout';
+// bumped when the default layout changes so existing installs get the new default once
+const LAYOUT_KEY = 'novus-layout-v2';
 const SAVED_KEY = 'oft-saved-layouts';
 
 export function loadLayout(): IJsonModel {

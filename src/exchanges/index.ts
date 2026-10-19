@@ -4,6 +4,7 @@ import { binanceFutures, binanceSpot } from './binance';
 import { bitfinex } from './bitfinex';
 import { bitget } from './bitget';
 import { bybit } from './bybit';
+import { ccxtVenue } from './ccxt';
 import { coinbase } from './coinbase';
 import { hyperliquid } from './hyperliquid';
 import { kraken } from './kraken';
@@ -20,6 +21,7 @@ export const ADAPTERS: Record<VenueId, VenueAdapter> = {
   kraken,
   bitget,
   bitfinex,
+  ccxt: ccxtVenue,
   sim: simulator,
 };
 

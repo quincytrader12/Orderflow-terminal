@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Layout, Model, type IJsonModel, type ILayoutApi, type TabNode } from 'flexlayout-react';
+import { Actions, Layout, Model, type IJsonModel, type ILayoutApi, type TabNode } from 'flexlayout-react';
 import 'flexlayout-react/style/dark.css';
 import { startAlerts, useToasts } from '../alerts/engine';
 import { startCollectors } from '../market/collectors';
@@ -8,6 +8,7 @@ import { useSettings } from '../store/settings';
 import { applyTheme } from '../ui/theme';
 import { loadLayout, sanitize, saveLayout, tab } from './layouts';
 import { AddPanelModal, ConnectionModal, LayoutsModal, SettingsModal } from './Modals';
+import { KeysModal } from './KeysModal';
 import { PanelHost } from './PanelHost';
 import { TopBar, type ModalKind } from './TopBar';
 
@@ -52,6 +53,22 @@ export function App() {
     setModel(m);
   }, []);
 
+  // lock: tabs can't be dragged, docked or closed; splits stay resizable
+  const locked = useSettings((s) => s.layoutLocked);
+  useEffect(() => {
+    model.doAction(Actions.updateModelAttributes({ tabEnableDrag: !locked, tabSetEnableDrag: !locked, tabSetEnableDrop: !locked, tabEnableClose: !locked, tabSetEnableDivide: !locked }));
+  }, [model, locked]);
+
+  /** Maximise (or restore) the tabset holding the main chart. */
+  const focusChart = useCallback(() => {
+    let target: string | undefined;
+    for (const comp of ['footprint', 'historical', 'heatmap'])
+      model.visitNodes((n) => {
+        if (!target && n.getType() === 'tab' && (n as TabNode).getComponent() === comp) target = n.getParent()?.getId();
+      });
+    if (target) model.doAction(Actions.maximizeToggle(target));
+  }, [model]);
+
   const addPanel = (id: string) => {
     const json = tab(id);
     const l = layoutRef.current;
@@ -71,7 +88,7 @@ export function App() {
         <i className="blob b2" />
         <i className="blob b3" />
       </div>
-      <TopBar onOpen={setModal} alertCount={fired.filter((f) => f.time >= sessionStart).length} />
+      <TopBar onOpen={setModal} onFocusChart={focusChart} alertCount={fired.filter((f) => f.time >= sessionStart).length} />
       <div className="layout-host">
         <div className="layout-inner">
           <Layout ref={layoutRef} model={model} factory={factory} onModelChange={(m) => saveLayout(m.toJson())} realtimeResize />
@@ -81,6 +98,7 @@ export function App() {
       {modal === 'layouts' && <LayoutsModal onClose={() => setModal(null)} onApply={applyLayout} current={() => model.toJson()} />}
       {modal === 'add' && <AddPanelModal onClose={() => setModal(null)} onAdd={addPanel} />}
       {modal === 'settings' && <SettingsModal onClose={() => setModal(null)} />}
+      {modal === 'keys' && <KeysModal onClose={() => setModal(null)} />}
       <Toasts />
     </div>
   );
