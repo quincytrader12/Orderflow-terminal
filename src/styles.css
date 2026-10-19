@@ -1,41 +1,38 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap');
 
 :root {
-  --bg: #0b0e13;
-  --panel: #0f131a;
-  --panel2: #141922;
-  --raised: #1a202b;
-  --border: #232a35;
-  --border2: #2e3746;
-  --text: #d6dbe3;
-  --muted: #7d8796;
-  --faint: #4a5361;
-  --buy: #26a69a;
-  --sell: #ef5350;
-  --accent: #4f8cff;
-  --warn: #ffb74d;
-  --poc: #ffd54f;
+  /* defaults = Grey theme; src/ui/theme.ts applies the selected theme at runtime */
+  --bg: #4b5058;
+  --bg-image: linear-gradient(160deg, #70757e 0%, #4d525a 45%, #3a3e45 100%);
+  --glass: rgba(40, 44, 51, 0.5);
+  --glass-strong: rgba(46, 50, 58, 0.86);
+  --glass-border: rgba(255, 255, 255, 0.16);
+  --glass-hi: rgba(255, 255, 255, 0.28);
+  --glass-shadow: 0 20px 44px rgba(0, 0, 0, 0.32), 0 3px 8px rgba(0, 0, 0, 0.22);
+  --panel-fill: var(--glass);
+  --blur: 18px;
+  --card-backdrop: none;
+  --panel: var(--glass);
+  --panel2: rgba(255, 255, 255, 0.07);
+  --raised: rgba(255, 255, 255, 0.13);
+  --border: rgba(255, 255, 255, 0.1);
+  --border2: rgba(255, 255, 255, 0.22);
+  --text: #f0f2f6;
+  --muted: #b0b6c0;
+  --faint: #80868f;
+  --buy: #34d1a5;
+  --sell: #ff6b6b;
+  --accent: #93bbff;
+  --warn: #ffc46b;
+  --poc: #ffe082;
+  --glow: rgba(147, 187, 255, 0.35);
+  --app-filter: none;
+  --radius: 18px;
+  --radius-sm: 10px;
+  --gap: 10px;
   --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --sans: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
   color-scheme: dark;
-}
-
-:root[data-theme='light'] {
-  --bg: #eef0f3;
-  --panel: #ffffff;
-  --panel2: #f6f7f9;
-  --raised: #eceff3;
-  --border: #d9dee5;
-  --border2: #c6cdd7;
-  --text: #1d232c;
-  --muted: #68717f;
-  --faint: #a3abb7;
-  --buy: #0f8a7e;
-  --sell: #d63c39;
-  --accent: #2962ff;
-  --warn: #e08a00;
-  --poc: #c79100;
-  color-scheme: light;
 }
 
 * {
@@ -695,12 +692,12 @@ textarea.ctl {
   width: 100%;
 }
 
-/* flexlayout theme alignment: map the library's global overrides onto our tokens */
+/* flexlayout: map the library's global overrides onto our tokens; cards are styled below */
 :root {
   --flexlayout-color-text: var(--text);
-  --flexlayout-color-background: var(--bg);
-  --flexlayout-color-base: var(--panel);
-  --flexlayout-color-1: var(--panel);
+  --flexlayout-color-background: transparent;
+  --flexlayout-color-base: transparent;
+  --flexlayout-color-1: transparent;
   --flexlayout-color-2: var(--panel2);
   --flexlayout-color-3: var(--raised);
   --flexlayout-color-4: var(--border);
@@ -708,27 +705,31 @@ textarea.ctl {
   --flexlayout-color-6: var(--faint);
   --flexlayout-color-tab-selected: var(--text);
   --flexlayout-color-tab-unselected: var(--muted);
-  --flexlayout-color-tab-content: var(--panel);
-  --flexlayout-color-tabset-background: var(--panel2);
-  --flexlayout-color-tabset-background-selected: var(--panel2);
-  --flexlayout-color-tabset-background-maximized: var(--panel2);
-  --flexlayout-color-tab-selected-background: var(--panel);
+  --flexlayout-color-tab-content: transparent;
+  --flexlayout-color-tabset-background: transparent;
+  --flexlayout-color-tabset-background-selected: transparent;
+  --flexlayout-color-tabset-background-maximized: transparent;
+  --flexlayout-color-tabset-divider-line: transparent;
+  --flexlayout-color-tab-selected-background: var(--raised);
   --flexlayout-color-tab-unselected-background: transparent;
-  --flexlayout-color-splitter: var(--bg);
-  --flexlayout-color-splitter-hover: var(--border2);
+  --flexlayout-color-splitter: transparent;
+  --flexlayout-color-splitter-hover: var(--glass-border);
   --flexlayout-color-splitter-drag: var(--accent);
+  --flexlayout-color-splitter-handle: var(--border2);
   --flexlayout-color-icon: var(--muted);
-  --flexlayout-color-popup-unselected-background: var(--panel);
+  --flexlayout-color-popup-unselected-background: var(--glass-strong);
   --flexlayout-color-popup-unselected: var(--text);
   --flexlayout-color-popup-selected-background: var(--raised);
   --flexlayout-color-popup-selected: var(--text);
-  --flexlayout-color-popup-border: var(--border2);
+  --flexlayout-color-popup-border: var(--glass-border);
   --flexlayout-color-drag1: var(--accent);
   --flexlayout-color-drag2: var(--buy);
+  --flexlayout-color-drag-rect-background: var(--glass-strong);
+  --flexlayout-color-drag-rect-border: var(--glass-border);
   --flexlayout-font-size: 12px;
   --flexlayout-font-family: var(--sans);
-  --flexlayout-splitter-size: 4px;
-  --flexlayout-splitter-active-size: 4px;
+  --flexlayout-splitter-size: var(--gap);
+  --flexlayout-splitter-active-size: var(--gap);
 }
 .flexlayout__layout {
   color: var(--text);
@@ -751,4 +752,479 @@ textarea.ctl {
   .topbar .hide-sm {
     display: none;
   }
+}
+
+/* =====================================================================
+   Novus Ordo — liquid glass
+   Floating rounded cards over a soft gradient backdrop. Each card has a
+   blurred translucent fill, a gradient rim, a specular top highlight and a
+   layered drop shadow for depth. Colours come from the active theme.
+   ===================================================================== */
+
+html,
+body,
+#root {
+  background: var(--bg);
+}
+
+.app {
+  position: relative;
+  isolation: isolate;
+  filter: var(--app-filter);
+  padding: var(--gap);
+  gap: var(--gap);
+}
+
+/* backdrop: theme gradient + three soft light pools the glass refracts */
+.app-bg {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--bg-image), var(--bg);
+  overflow: hidden;
+  pointer-events: none;
+}
+.app-bg .blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(60px);
+  opacity: 0.55;
+}
+.app-bg .b1 {
+  width: 42vw;
+  height: 42vw;
+  left: -8vw;
+  top: -14vw;
+  background: radial-gradient(circle, var(--glass-hi), transparent 70%);
+}
+.app-bg .b2 {
+  width: 36vw;
+  height: 36vw;
+  right: -6vw;
+  bottom: -12vw;
+  background: radial-gradient(circle, var(--glow), transparent 70%);
+}
+.app-bg .b3 {
+  width: 28vw;
+  height: 28vw;
+  left: 38vw;
+  top: 30vh;
+  background: radial-gradient(circle, var(--glass-border), transparent 70%);
+  opacity: 0.35;
+}
+
+/* the shared glass surface */
+.topbar,
+.flexlayout__tabset,
+.modal,
+.popover,
+.toast,
+.flexlayout__popup_menu_container,
+.flexlayout__drag_rect {
+  position: relative;
+  background: linear-gradient(var(--panel-fill), var(--panel-fill)) padding-box,
+    linear-gradient(145deg, var(--glass-hi), var(--glass-border) 30%, transparent 55%, var(--glass-border) 85%, var(--glass-hi)) border-box;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(170%);
+  backdrop-filter: blur(var(--blur)) saturate(170%);
+  box-shadow:
+    var(--glass-shadow),
+    inset 0 1px 0 var(--glass-hi),
+    inset 0 -10px 24px -18px rgba(0, 0, 0, 0.45),
+    inset 0 12px 28px -22px rgba(255, 255, 255, 0.35);
+}
+/* specular sheen across the top of every card */
+.topbar::before,
+.flexlayout__tabset::before,
+.modal::before,
+.toast::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 60% at 20% 0%, rgba(255, 255, 255, 0.16), transparent 55%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), transparent 32%);
+  mix-blend-mode: screen;
+}
+.modal,
+.popover {
+  background: linear-gradient(var(--glass-strong), var(--glass-strong)) padding-box,
+    linear-gradient(145deg, var(--glass-hi), var(--glass-border) 35%, var(--glass-border)) border-box;
+}
+
+/* top bar floats as its own pill */
+.topbar {
+  height: 52px;
+  padding: 0 14px;
+  border-radius: 22px;
+  border-bottom: 1px solid transparent;
+  gap: 12px;
+  overflow: visible;
+  z-index: 20;
+}
+.topbar > * {
+  position: relative;
+}
+.sep {
+  background: var(--border2);
+  opacity: 0.6;
+}
+
+/* brand */
+.brand {
+  gap: 9px;
+  letter-spacing: 0;
+}
+.brand .logo {
+  height: 28px;
+  width: 28px;
+  filter: drop-shadow(0 0 6px var(--glow));
+}
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.05;
+}
+.brand-name {
+  font-family: var(--sans);
+  font-weight: 800;
+  font-size: 14px;
+  letter-spacing: 0.22em;
+  background: linear-gradient(180deg, var(--text), var(--muted));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.brand-by {
+  font-family: var(--sans);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.price-big {
+  font-size: 15px;
+  text-shadow: 0 0 14px var(--glow);
+}
+
+/* layout area: cards separated by the splitter gap */
+.layout-host {
+  border-radius: var(--radius);
+}
+.layout-inner {
+  position: absolute;
+  inset: 0;
+}
+.flexlayout__layout {
+  overflow: visible;
+}
+.flexlayout__tabset {
+  overflow: hidden;
+}
+.flexlayout__tabset_tabbar_outer {
+  background: transparent;
+  border-bottom: 1px solid var(--border);
+  padding: 0 6px;
+}
+.flexlayout__tab_button {
+  border-radius: 9px;
+  margin: 3px 2px;
+  padding: 2px 10px;
+  font-weight: 500;
+}
+.flexlayout__tab_button--selected {
+  background: var(--raised);
+  box-shadow: inset 0 1px 0 var(--glass-hi), 0 1px 6px rgba(0, 0, 0, 0.15);
+}
+/* tab content is an absolutely positioned layer over the card's body */
+.flexlayout__tab {
+  background: transparent;
+  border-radius: 0 0 var(--radius) var(--radius);
+  overflow: hidden;
+}
+.flexlayout__splitter {
+  background: transparent !important;
+}
+.flexlayout__splitter_handle {
+  border-radius: 3px;
+  opacity: 0.6;
+}
+.flexlayout__tabset_maximized {
+  border-radius: var(--radius);
+}
+
+.panel {
+  background: transparent;
+}
+.toolbar {
+  border-bottom: 1px solid var(--border);
+  gap: 5px;
+  padding: 6px 8px;
+  min-height: 36px;
+}
+
+/* controls: small glass pills */
+.ctl,
+.chip {
+  height: 25px;
+  border-radius: var(--radius-sm);
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.12);
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.08s;
+}
+.chip:hover {
+  background: var(--raised);
+  border-color: var(--border2);
+}
+.chip:active {
+  transform: translateY(1px);
+}
+.chip.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 0 12px -2px var(--glow);
+}
+select.ctl option {
+  background: var(--bg);
+  color: var(--text);
+}
+.btn {
+  height: 30px;
+  border-radius: 12px;
+  padding: 0 16px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 100%, white 18%), var(--accent));
+  color: #fff;
+  box-shadow: 0 6px 18px -6px var(--glow), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+.btn.ghost {
+  background: var(--panel2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+.popover {
+  border-radius: 14px;
+  padding: 10px 12px;
+  top: 30px;
+}
+
+/* tables and stat tiles sit on the glass */
+table.grid th {
+  background: var(--glass-strong);
+  border-bottom: 1px solid var(--border);
+}
+table.grid td {
+  border-bottom: 1px solid var(--border);
+}
+table.grid tr.clickable:hover td {
+  background: var(--raised);
+}
+.stat-grid {
+  border-top: none;
+  gap: 8px;
+  padding: 8px;
+}
+.stat {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+.bar-split {
+  height: 7px;
+  border-radius: 4px;
+}
+.list-row {
+  border-bottom: 1px solid var(--border);
+}
+.list-row:hover {
+  background: var(--panel2);
+}
+.tag {
+  border-radius: 6px;
+  background: var(--panel2);
+}
+
+/* modal */
+.modal-back {
+  background: rgba(0, 0, 0, 0.35);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+.modal {
+  border-radius: 24px;
+}
+.modal header,
+.modal .foot {
+  border-color: var(--border);
+}
+.radio-card,
+.gallery-card,
+.panel-item {
+  border-radius: 14px;
+  background: var(--panel2);
+  border-color: var(--border);
+  transition: transform 0.12s, border-color 0.12s;
+}
+.radio-card:hover,
+.gallery-card:hover,
+.panel-item:hover {
+  transform: translateY(-2px);
+}
+.gallery-card .mini div {
+  border-radius: 6px;
+  background: var(--raised);
+}
+.toast {
+  border-radius: 14px;
+  border-left: 1px solid transparent;
+}
+.toast.buy {
+  box-shadow: var(--glass-shadow), inset 3px 0 0 var(--buy);
+}
+.toast.sell {
+  box-shadow: var(--glass-shadow), inset 3px 0 0 var(--sell);
+}
+.toast.warn {
+  box-shadow: var(--glass-shadow), inset 3px 0 0 var(--warn);
+}
+
+/* theme switcher */
+.swatches {
+  display: flex;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 14px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+}
+.swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  padding: 0;
+  box-shadow: inset 0 2px 3px rgba(255, 255, 255, 0.45), inset 0 -2px 4px rgba(0, 0, 0, 0.35), 0 2px 5px rgba(0, 0, 0, 0.3);
+  transition: transform 0.12s;
+}
+.swatch:hover {
+  transform: scale(1.12);
+}
+.swatch.on {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.theme-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.theme-card {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel2);
+  padding: 8px;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.theme-card.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 16px -4px var(--glow);
+}
+.theme-preview {
+  height: 64px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.theme-glass {
+  width: 70%;
+  height: 60%;
+  border-radius: 10px;
+  border: 1px solid;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 5px;
+  padding-bottom: 6px;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+.theme-glass i {
+  width: 6px;
+  height: 14px;
+  border-radius: 2px;
+}
+.theme-glass i:nth-child(2) {
+  height: 22px;
+}
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+/* neon themes glow */
+:root[data-theme^='neon'] .brand-name,
+:root[data-theme^='neon'] .price-big {
+  text-shadow: 0 0 10px var(--glow), 0 0 22px var(--glow);
+}
+:root[data-theme^='neon'] .brand-name {
+  color: var(--accent);
+  background: none;
+}
+:root[data-theme^='neon'] .flexlayout__tabset {
+  box-shadow:
+    var(--glass-shadow),
+    0 0 0 1px var(--glass-border),
+    inset 0 1px 0 var(--glass-hi),
+    inset 0 0 30px -18px var(--glow);
+}
+
+/* cards: live backdrop blur only at the Frosted level (see GLASS_LEVELS) */
+.topbar,
+.flexlayout__tabset {
+  -webkit-backdrop-filter: var(--card-backdrop, none);
+  backdrop-filter: var(--card-backdrop, none);
+}
+:root[data-glass='light'] {
+  --panel-fill: color-mix(in srgb, var(--glass) 70%, transparent);
+}
+
+/* CRT filter: scanlines + vignette over everything */
+:root[data-filter='crt'] .app::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1000;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.18) 0 1px, transparent 1px 3px),
+    radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.45) 100%);
+  mix-blend-mode: multiply;
+}
+
+.embed-root {
+  padding: 8px;
+}
+.embed-root > .panel {
+  inset: 8px;
+  border-radius: var(--radius);
+  background: var(--panel-fill);
+  -webkit-backdrop-filter: var(--card-backdrop, none);
+  backdrop-filter: var(--card-backdrop, none);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-hi);
 }

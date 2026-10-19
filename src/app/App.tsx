@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Layout, Model, type IJsonModel, type ILayoutApi, type TabNode } from 'flexlayout-react';
 import 'flexlayout-react/style/dark.css';
 import { startAlerts, useToasts } from '../alerts/engine';
 import { startCollectors } from '../market/collectors';
 import { hub } from '../market/hub';
 import { useSettings } from '../store/settings';
+import { applyTheme } from '../ui/theme';
 import { loadLayout, sanitize, saveLayout, tab } from './layouts';
 import { AddPanelModal, ConnectionModal, LayoutsModal, SettingsModal } from './Modals';
 import { PanelHost } from './PanelHost';
@@ -12,9 +13,9 @@ import { TopBar, type ModalKind } from './TopBar';
 
 export function useThemeAttr() {
   const theme = useSettings((s) => s.theme);
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
+  const filter = useSettings((s) => s.filter);
+  const glass = useSettings((s) => s.glass);
+  useLayoutEffect(() => applyTheme(theme, filter, glass), [theme, filter, glass]);
 }
 
 function Toasts() {
@@ -65,9 +66,16 @@ export function App() {
 
   return (
     <div className="app">
+      <div className="app-bg" aria-hidden>
+        <i className="blob b1" />
+        <i className="blob b2" />
+        <i className="blob b3" />
+      </div>
       <TopBar onOpen={setModal} alertCount={fired.filter((f) => f.time >= sessionStart).length} />
       <div className="layout-host">
-        <Layout ref={layoutRef} model={model} factory={factory} onModelChange={(m) => saveLayout(m.toJson())} realtimeResize />
+        <div className="layout-inner">
+          <Layout ref={layoutRef} model={model} factory={factory} onModelChange={(m) => saveLayout(m.toJson())} realtimeResize />
+        </div>
       </div>
       {modal === 'connection' && <ConnectionModal onClose={() => setModal(null)} />}
       {modal === 'layouts' && <LayoutsModal onClose={() => setModal(null)} onApply={applyLayout} current={() => model.toJson()} />}

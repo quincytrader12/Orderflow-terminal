@@ -119,7 +119,7 @@ export function Orderbook({ config: c, setConfig }: PanelProps<OrderbookConfig>)
     const spreadY = top + half * rowH;
     const bb = bids[0]?.price;
     const ba = asks[0]?.price;
-    ctx.fillStyle = pal.dark ? '#141922' : '#eef1f5';
+    ctx.fillStyle = pal.header;
     ctx.fillRect(0, spreadY, w, rowH);
     ctx.font = font(11, 700);
     ctx.textAlign = 'left';

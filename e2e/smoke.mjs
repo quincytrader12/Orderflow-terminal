@@ -92,10 +92,27 @@ try {
   await page.waitForTimeout(500);
   await page.screenshot({ path: `${OUT}footprint-delta-heatmap.png` });
 
-  // light theme
-  await page.goto(`${base}&theme=light`);
-  await page.waitForTimeout(4000);
-  await page.screenshot({ path: `${OUT}light-theme.png` });
+  // every theme, every filter, and the settings modal
+  for (const theme of ['grey', 'white', 'black', 'neon-green', 'neon-orange']) {
+    await page.goto(`${base}&theme=${theme}&filter=none`);
+    await page.waitForTimeout(3000);
+    const applied = await page.evaluate(() => document.documentElement.dataset.theme);
+    if (applied !== theme) errors.push(`theme ${theme} not applied (got ${applied})`);
+    await page.screenshot({ path: `${OUT}theme-${theme}.png` });
+    console.error(`theme ${theme}: ok`);
+  }
+  for (const filter of ['vivid', 'soft', 'mono', 'warm', 'cool', 'night', 'crt']) {
+    await page.goto(`${base}&theme=grey&filter=${filter}`);
+    await page.waitForTimeout(1500);
+    const f = await page.evaluate(() => getComputedStyle(document.querySelector('.app')).filter);
+    if (f === 'none') errors.push(`filter ${filter} not applied`);
+    await page.screenshot({ path: `${OUT}filter-${filter}.png` });
+  }
+  await page.goto(`${base}&theme=grey&filter=none`);
+  await page.waitForTimeout(1500);
+  await page.click('button[title="Settings"]');
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: `${OUT}settings-appearance.png` });
 } catch (e) {
   failed = true;
   console.error(e);

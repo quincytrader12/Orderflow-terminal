@@ -7,7 +7,7 @@ import type { Kline } from '../core/types';
 import type { TradeStore } from '../core/tradeStore';
 import { intervalMinutes } from '../exchanges/adapter';
 import { hub } from '../market/hub';
-import { axisTicks, Canvas, font, label, line, type DrawContext, type PointerState } from '../ui/canvas';
+import { axisTicks, Canvas, font, label, line, type DrawContext, type PointerState, mask } from '../ui/canvas';
 import { Check, Chip, Empty, NumberInput, Popover, Select, Spacer, Toolbar, useHubVersion, type PanelProps } from '../ui/controls';
 import { rgba } from '../ui/theme';
 import { baseTick, drawTooltip } from './FootprintChart';
@@ -223,8 +223,7 @@ export function HistoricalChart({ config: c, setConfig }: PanelProps<HistoricalC
     }
 
     // axis
-    ctx.fillStyle = pal.panel;
-    ctx.fillRect(plotW, 0, AXIS_W, h);
+    mask(ctx, pal, plotW, 0, AXIS_W, h);
     line(ctx, plotW + 0.5, 0, plotW + 0.5, h, pal.border);
     ctx.font = font(10);
     ctx.fillStyle = pal.muted;
@@ -325,8 +324,7 @@ export function HistoricalChart({ config: c, setConfig }: PanelProps<HistoricalC
       ctx.font = font(Math.min(11, rowH - 1), 600);
       x += sMax * letterW + 4 * letterW + gap;
     }
-    ctx.fillStyle = pal.panel;
-    ctx.fillRect(plotW, 0, AXIS_W, h);
+    mask(ctx, pal, plotW, 0, AXIS_W, h);
     line(ctx, plotW + 0.5, 0, plotW + 0.5, h, pal.border);
     ctx.font = font(10);
     ctx.fillStyle = pal.muted;

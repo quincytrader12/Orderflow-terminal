@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import type { VenueId } from '../core/types';
+import type { FilterId, GlassLevel, ThemeId } from '../ui/theme';
 
 /** localStorage wrapper that never throws (private mode, blocked storage, previews). */
 export const safeStorage: StateStorage = {
@@ -89,7 +90,9 @@ export interface Settings {
   byodUrl: string;
   byodToken: string;
   backfillMinutes: number;
-  theme: 'dark' | 'light';
+  theme: ThemeId;
+  filter: FilterId;
+  glass: GlassLevel;
   soundEnabled: boolean;
   /** USD thresholds for tape size tiers */
   tierMid: number;
@@ -131,7 +134,9 @@ const initial: Settings = {
   byodUrl: 'http://localhost:8080',
   byodToken: '',
   backfillMinutes: 30,
-  theme: 'dark',
+  theme: 'grey',
+  filter: 'none',
+  glass: 'medium',
   soundEnabled: true,
   tierMid: 50_000,
   tierWhale: 500_000,
@@ -178,7 +183,13 @@ export const useSettings = create<Settings & Actions>()(
     }),
     {
       name: 'oft-settings',
-      version: 1,
+      version: 2,
+      // v1 had dark/light themes only
+      migrate: (persisted, version) => {
+        const p = (persisted ?? {}) as Record<string, unknown>;
+        if (version < 2) p.theme = p.theme === 'light' ? 'white' : 'grey';
+        return p as unknown as Settings & Actions;
+      },
       storage: createJSONStorage(() => safeStorage),
       partialize: (s) => Object.fromEntries(Object.entries(s).filter(([, v]) => typeof v !== 'function')) as Settings,
       merge: (persisted, current) => ({ ...current, ...(persisted as Partial<Settings>) }),

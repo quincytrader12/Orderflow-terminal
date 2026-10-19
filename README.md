@@ -1,8 +1,28 @@
-# Orderflow Terminal
+# Novus Ordo — by Quincy Gininda
 
-A free, browser-based crypto order-flow terminal. Your browser connects directly to each exchange's public WebSocket — no backend, no account, no data leaving your device — and renders footprint charts, a liquidity heatmap, a DOM ladder, the tape, TPO profiles, liquidations, options flow and more in a dockable multi-panel workspace.
+A browser-based crypto order-flow terminal with a liquid-glass interface. Your browser connects directly to each exchange's public WebSocket — no backend, no account, no data leaving your device — and renders footprint charts, a liquidity heatmap, a DOM ladder, the tape, TPO profiles, liquidations, options flow and more in a dockable multi-panel workspace.
 
 Modelled on the feature set of [Cryexc](https://cryexc.josedonato.com/) (whose docs and open-source [backend protocol](https://github.com/jose-donato/cryexc-backend) / [history protocol](https://github.com/jose-donato/cryexc-history) informed this build). This is an independent implementation in TypeScript + React + Canvas 2D.
+
+## Themes, filters and glass
+
+Switch from the swatches in the top bar or **⚙ Settings → Theme**:
+
+| Theme | Look |
+|---|---|
+| **Grey** (default) | grey gradient backdrop, smoked glass cards |
+| **White** | bright frosted glass on a pale backdrop |
+| **Black** | deep black with dark glass |
+| **Neon Green** | black-green backdrop, green glow, green heatmap ramp |
+| **Neon Orange** | black-amber backdrop, orange glow, orange heatmap ramp |
+
+Every theme recolours both the interface and the canvas charts (candles, clusters, heatmap ramp, ladders).
+
+**Filters** (top-bar ◐ menu or Settings): None, Vivid, Soft, Mono, Warm, Cool, Night, CRT (scanlines + vignette).
+
+**Glass** levels: Solid, Light, Liquid (default), Frosted. Panels are rounded floating cards with a gradient rim, specular highlight and layered shadows. Menus, modals and toasts always blur what is behind them; *Frosted* also adds a live backdrop blur under every panel, which looks best but is GPU-heavy while charts animate.
+
+Theme and filter can be set from the URL: `/?theme=neon-orange&filter=crt`.
 
 ## Quick start
 
@@ -90,7 +110,7 @@ Some venues are geo-restricted (e.g. Binance in the US); pick a venue that works
 ### Embed a single panel
 
 ```html
-<iframe src="https://your-host/?embed=footprint&base=BTC&venue=binancef&interval=5m&style=delta" width="900" height="600"></iframe>
+<iframe src="https://your-host/?embed=footprint&base=BTC&venue=binancef&interval=5m&style=delta&theme=black" width="900" height="600"></iframe>
 ```
 
 Any panel id from the table above works (`footprint`, `heatmap`, `dom`, `tape`, `historical`, `cvd`, …), and any panel config key can be passed as a query parameter.

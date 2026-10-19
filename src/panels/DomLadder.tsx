@@ -6,7 +6,7 @@ import { TIME_RANGES } from '../core/types';
 import { hub } from '../market/hub';
 import { Canvas, font, line, type DrawContext } from '../ui/canvas';
 import { Chip, Select, Spacer, Toolbar, type PanelProps } from '../ui/controls';
-import { rgba } from '../ui/theme';
+import { ink, rgba } from '../ui/theme';
 import { baseTick } from './FootprintChart';
 
 export interface DomConfig {
@@ -107,7 +107,7 @@ export function DomLadder({ config: c, setConfig }: PanelProps<DomConfig>) {
     }
 
     // header
-    ctx.fillStyle = pal.dark ? '#141922' : '#f0f2f5';
+    ctx.fillStyle = pal.header;
     ctx.fillRect(0, 0, w, headerH);
     ctx.font = font(10, 600);
     ctx.textBaseline = 'middle';
@@ -127,7 +127,7 @@ export function DomLadder({ config: c, setConfig }: PanelProps<DomConfig>) {
       const aq = asks.get(p) ?? 0;
       const l = prof.levels.get(p);
       if (r % 2 === 0) {
-        ctx.fillStyle = pal.dark ? 'rgba(255,255,255,0.015)' : 'rgba(0,0,0,0.02)';
+        ctx.fillStyle = pal.rowAlt;
         ctx.fillRect(0, y, w, rowH);
       }
       // bid / ask bars
@@ -151,10 +151,10 @@ export function DomLadder({ config: c, setConfig }: PanelProps<DomConfig>) {
       const [px, pw] = colX.price;
       const isLast = p === lastBucket;
       const inSpread = bestBid !== undefined && bestAsk !== undefined && p > bucket(bestBid, tick, 'floor') && p < bucket(bestAsk, tick, 'floor');
-      ctx.fillStyle = isLast ? pal.accent : inSpread ? (pal.dark ? '#1a202b' : '#e9edf2') : pal.dark ? '#11161e' : '#f7f8fa';
+      ctx.fillStyle = isLast ? pal.accent : inSpread ? pal.cellSpread : pal.cell;
       ctx.fillRect(px + 1, y + 1, pw - 2, rowH - 2);
       ctx.textAlign = 'center';
-      ctx.fillStyle = isLast ? '#fff' : bq > 0 ? pal.buy : aq > 0 ? pal.sell : pal.muted;
+      ctx.fillStyle = isLast ? ink(pal.accent) : bq > 0 ? pal.buy : aq > 0 ? pal.sell : pal.muted;
       ctx.font = font(Math.min(12, rowH - 5), isLast ? 700 : 500);
       ctx.fillText(fmtPrice(p, tick), px + pw / 2, ym);
       ctx.font = font(Math.min(12, rowH - 5));

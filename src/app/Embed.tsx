@@ -41,8 +41,9 @@ export function Embed({ panelId, params }: { panelId: string; params: URLSearchP
   const C = def.component;
   return (
     <div className="embed-root">
+      <div className="app-bg" aria-hidden />
       <C config={config} setConfig={(p: Record<string, unknown>) => setConfig((c) => ({ ...c, ...p }))} nodeId="embed" />
-      <div className="embed-brand">Orderflow Terminal</div>
+      <div className="embed-brand">NOVUS ORDO · by Quincy Gininda</div>
     </div>
   );
 }

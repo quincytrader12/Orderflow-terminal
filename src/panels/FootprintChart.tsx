@@ -6,7 +6,7 @@ import { ema, periodLevels, sma } from '../core/indicators';
 import { bucket } from '../core/orderbook';
 import { INTERVALS, TIME_RANGES } from '../core/types';
 import { hub } from '../market/hub';
-import { Canvas, font, label, line, type DrawContext, type PointerState } from '../ui/canvas';
+import { Canvas, font, label, line, type DrawContext, type PointerState, mask } from '../ui/canvas';
 import { Check, Chip, NumberInput, Popover, Select, Spacer, Toolbar, useHubVersion, type PanelProps } from '../ui/controls';
 import { rgba } from '../ui/theme';
 import { HeatmapRaster } from './shared/heatmapRender';
@@ -156,6 +156,7 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
           priceTop: pTop,
           pricePerPx: tick / v.rowH,
           norm: hc.norm,
+          ramp: pal.ramp,
           xToTime: (x) => {
             const fi = indexAtX(x);
             const ci = Math.floor(fi);
@@ -245,11 +246,11 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
             const bImb = imb?.buyImb.has(p);
             ctx.textAlign = 'right';
             ctx.font = font(fsize, sImb ? 700 : 400);
-            ctx.fillStyle = sImb ? '#ff8a80' : pal.text;
+            ctx.fillStyle = sImb ? pal.sell : pal.text;
             ctx.fillText(fmtVol(scale(l.sell, p)), cellX + half - 3, ym);
             ctx.textAlign = 'left';
             ctx.font = font(fsize, bImb ? 700 : 400);
-            ctx.fillStyle = bImb ? '#69f0ae' : pal.text;
+            ctx.fillStyle = bImb ? pal.buy : pal.text;
             ctx.fillText(fmtVol(scale(l.buy, p)), cellX + half + 3, ym);
             break;
           }
@@ -421,8 +422,7 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
     ctx.restore();
 
     // ---- price axis ----
-    ctx.fillStyle = pal.panel;
-    ctx.fillRect(plotW, 0, AXIS_W, plotH);
+    mask(ctx, pal, plotW, 0, AXIS_W, plotH);
     line(ctx, plotW + 0.5, 0, plotW + 0.5, h, pal.border);
     ctx.font = font(10);
     ctx.textAlign = 'left';
@@ -453,8 +453,7 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
           ctx.fillText((d > 0 ? '+' : '') + fmtVol(c.usd ? d * cd.close : d), x0 + v.colW / 2, yCursor + 22);
         }
       }
-      ctx.fillStyle = pal.panel;
-      ctx.fillRect(plotW, yCursor, AXIS_W, statsH);
+      mask(ctx, pal, plotW, yCursor, AXIS_W, statsH);
       ctx.fillStyle = pal.muted;
       ctx.textAlign = 'left';
       ctx.fillText('Vol', plotW + 6, yCursor + 8);
@@ -659,7 +658,7 @@ export function drawTooltip(ctx: CanvasRenderingContext2D, rows: string[], x: nu
   let by = y + 14;
   if (bx + w > maxX) bx = x - w - 14;
   if (by + h > maxY) by = Math.max(0, y - h - 14);
-  ctx.fillStyle = pal.dark ? 'rgba(10,13,18,0.94)' : 'rgba(255,255,255,0.96)';
+  ctx.fillStyle = pal.tooltip;
   ctx.strokeStyle = pal.border;
   ctx.lineWidth = 1;
   ctx.fillRect(bx, by, w, h);

@@ -3,7 +3,7 @@ import { valueArea, volumeProfile } from '../core/footprint';
 import { fmtPrice, fmtTime, fmtVol } from '../core/format';
 import { bucket } from '../core/orderbook';
 import { hub } from '../market/hub';
-import { Canvas, font, label, line, type DrawContext, type PointerState } from '../ui/canvas';
+import { Canvas, font, label, line, type DrawContext, type PointerState, mask } from '../ui/canvas';
 import { Select, Spacer, Toolbar, type PanelProps } from '../ui/controls';
 import { rgba } from '../ui/theme';
 import { baseTick, drawTooltip } from './FootprintChart';
@@ -56,7 +56,7 @@ export function VolumeProfilePanel({ config: c, setConfig }: PanelProps<VProfile
     }
     const va = valueArea(new Map([...levels].map(([p, l]) => [p, l.buy + l.sell])), 0.7);
     if (va) {
-      ctx.fillStyle = pal.dark ? 'rgba(79,140,255,0.06)' : 'rgba(41,98,255,0.06)';
+      ctx.fillStyle = pal.cellSpread;
       ctx.fillRect(0, y(va.vah + tick), plotW, y(va.val) - y(va.vah + tick));
     }
     for (const [p, l] of levels) {
@@ -84,8 +84,7 @@ export function VolumeProfilePanel({ config: c, setConfig }: PanelProps<VProfile
       }
     }
     if (c.mode === 'delta') line(ctx, plotW / 2, 0, plotW / 2, h, pal.muted, 1, [2, 3]);
-    ctx.fillStyle = pal.panel;
-    ctx.fillRect(plotW, 0, axisW, h);
+    mask(ctx, pal, plotW, 0, axisW, h);
     line(ctx, plotW + 0.5, 0, plotW + 0.5, h, pal.border);
     if (va) {
       for (const [p, lbl, col] of [

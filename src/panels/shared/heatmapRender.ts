@@ -1,28 +1,22 @@
 import type { HeatmapRecorder } from '../../core/heatmap';
 
-const RAMP: [number, number, number][] = [
-  [10, 20, 48],
-  [24, 70, 150],
-  [0, 170, 220],
-  [110, 225, 120],
-  [255, 225, 60],
-  [255, 120, 40],
-  [255, 255, 255],
-];
-
-/** 256-entry RGB lookup for the heat ramp. */
-const LUT = (() => {
-  const lut = new Uint8ClampedArray(256 * 3);
+/** 256-entry RGB lookup per colour ramp (cached by ramp identity). */
+const LUTS = new WeakMap<[number, number, number][], Uint8ClampedArray>();
+function lutFor(ramp: [number, number, number][]) {
+  let lut = LUTS.get(ramp);
+  if (lut) return lut;
+  lut = new Uint8ClampedArray(256 * 3);
   for (let i = 0; i < 256; i++) {
-    const x = (i / 255) * (RAMP.length - 1);
+    const x = (i / 255) * (ramp.length - 1);
     const k = Math.floor(x);
     const f = x - k;
-    const a = RAMP[k];
-    const b = RAMP[Math.min(RAMP.length - 1, k + 1)];
+    const a = ramp[k];
+    const b = ramp[Math.min(ramp.length - 1, k + 1)];
     for (let c = 0; c < 3; c++) lut[i * 3 + c] = a[c] + (b[c] - a[c]) * f;
   }
+  LUTS.set(ramp, lut);
   return lut;
-})();
+}
 
 export interface HeatmapView {
   width: number;
@@ -38,6 +32,8 @@ export interface HeatmapView {
   gamma?: number;
   /** background alpha 0..255 for empty cells */
   baseAlpha?: number;
+  /** colour ramp, low → high */
+  ramp: [number, number, number][];
 }
 
 /**
@@ -65,6 +61,7 @@ export class HeatmapRaster {
     const snaps = rec.snapshots;
     const gamma = v.gamma ?? 0.6;
     const baseAlpha = v.baseAlpha ?? 0;
+    const LUT = lutFor(v.ramp);
     let lastIdx = -2;
     for (let x = 0; x < w; x++) {
       const t = v.xToTime(x + 0.5);

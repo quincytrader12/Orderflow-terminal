@@ -1,5 +1,5 @@
 import { useEffect, useRef, type CSSProperties, type MutableRefObject } from 'react';
-import { palette, type Palette } from './theme';
+import { ink, palette, type Palette } from './theme';
 
 export interface DrawContext {
   ctx: CanvasRenderingContext2D;
@@ -33,7 +33,7 @@ export function useCanvas(draw: (d: DrawContext) => void, fps = 30) {
 
   useEffect(() => {
     const canvas = canvasRef.current!;
-    const ctx = canvas.getContext('2d', { alpha: false })!;
+    const ctx = canvas.getContext('2d', { alpha: true })!;
     let raf = 0;
     let last = 0;
     let w = 0;
@@ -60,6 +60,7 @@ export function useCanvas(draw: (d: DrawContext) => void, fps = 30) {
       last = t;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       const pal = palette();
+      ctx.clearRect(0, 0, w, h);
       ctx.fillStyle = pal.panel;
       ctx.fillRect(0, 0, w, h);
       try {
@@ -180,6 +181,13 @@ export function Canvas({ draw, fps = 30, style, onWheel, onDrag, onClick, onDoub
 
 // ---------- drawing helpers ----------
 
+/** Cover a region (axis gutters) so chart content underneath does not show through. */
+export function mask(ctx: CanvasRenderingContext2D, pal: Palette, x: number, y: number, w: number, h: number) {
+  ctx.clearRect(x, y, w, h);
+  ctx.fillStyle = pal.panel;
+  ctx.fillRect(x, y, w, h);
+}
+
 export function font(px: number, weight = 400, mono = true) {
   return `${weight} ${px}px ${mono ? "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" : 'Inter, system-ui, sans-serif'}`;
 }
@@ -207,6 +215,8 @@ export function timeTicks(from: number, to: number, target: number): number[] {
 }
 
 export function label(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, bg: string, fg: string, align: 'left' | 'right' | 'center' = 'left', px = 11) {
+  // '#fff' / '#000' mean "contrast with bg": pick whichever reads on this theme's colour
+  if (fg === '#fff' || fg === '#000') fg = ink(bg);
   ctx.font = font(px, 600);
   const tw = ctx.measureText(text).width + 8;
   const bx = align === 'left' ? x : align === 'right' ? x - tw : x - tw / 2;

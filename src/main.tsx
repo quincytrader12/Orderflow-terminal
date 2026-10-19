@@ -5,11 +5,12 @@ import { Embed } from './app/Embed';
 import type { VenueId } from './core/types';
 import { ADAPTERS } from './exchanges';
 import { useSettings, type HistorySource } from './store/settings';
+import { FILTERS, THEMES, type FilterId, type ThemeId } from './ui/theme';
 import './styles.css';
 
 const params = new URLSearchParams(location.search);
 
-// Shareable state in the URL: ?base=ETH&venue=bybit&agg=binancef,okx&history=none&theme=light
+// Shareable state in the URL: ?base=ETH&venue=bybit&agg=binancef,okx&history=none&theme=neon-green&filter=vivid
 const s = useSettings.getState();
 const venue = params.get('venue') as VenueId | null;
 const base = params.get('base');
@@ -22,7 +23,9 @@ if (agg !== null) {
 const history = params.get('history') as HistorySource | null;
 if (history && ['none', 'exchange', 'byod'].includes(history)) s.set({ historySource: history });
 const theme = params.get('theme');
-if (theme === 'light' || theme === 'dark') s.set({ theme });
+if (theme && theme in THEMES) s.set({ theme: theme as ThemeId });
+const filter = params.get('filter');
+if (filter && FILTERS.some((f) => f.id === filter)) s.set({ filter: filter as FilterId });
 
 const embed = params.get('embed');
 

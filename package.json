@@ -1,8 +1,8 @@
 {
-  "name": "orderflow-terminal",
+  "name": "novus-ordo",
   "version": "1.0.0",
   "private": true,
-  "description": "Browser-based crypto orderflow terminal: footprint, heatmap, DOM, tape, TPO, liquidations, options flow and more over direct exchange WebSockets.",
+  "description": "Novus Ordo by Quincy Gininda \u2014 browser-based crypto orderflow terminal: footprint, heatmap, DOM, tape, TPO, liquidations, options flow and more over direct exchange WebSockets, in a liquid-glass UI with five themes.",
   "type": "module",
   "scripts": {
     "dev": "vite",

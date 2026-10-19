@@ -6,6 +6,25 @@ import { hub } from '../market/hub';
 import { useSettings } from '../store/settings';
 import { Select, useHubVersion, useTicker } from '../ui/controls';
 import { VENUE_COLORS } from '../ui/theme';
+import { FilterSelect, ThemeSwatches } from '../ui/ThemeControls';
+
+/** Pyramid mark with three candles — Novus Ordo. */
+export function Logo({ size = 26 }: { size?: number }) {
+  return (
+    <svg className="logo" width={size} height={size} viewBox="0 0 32 32" aria-hidden>
+      <defs>
+        <linearGradient id="lg-glass" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="rgba(255,255,255,0.55)" />
+          <stop offset="1" stopColor="rgba(255,255,255,0.08)" />
+        </linearGradient>
+      </defs>
+      <path d="M16 3 L29 27 H3 Z" fill="url(#lg-glass)" stroke="var(--accent)" strokeWidth="1.6" strokeLinejoin="round" />
+      <rect x="10" y="17" width="3" height="7" rx="1" fill="var(--buy)" />
+      <rect x="14.5" y="12" width="3" height="12" rx="1" fill="var(--accent)" />
+      <rect x="19" y="15" width="3" height="9" rx="1" fill="var(--sell)" />
+    </svg>
+  );
+}
 
 export type ModalKind = 'connection' | 'layouts' | 'add' | 'settings' | null;
 
@@ -128,13 +147,12 @@ export function TopBar({ onOpen, alertCount }: { onOpen: (m: ModalKind) => void;
   const now = new Date();
   return (
     <div className="topbar">
-      <div className="brand">
-        <span className="logo">
-          <i style={{ height: 14 }} />
-          <i style={{ height: 9 }} />
-          <i style={{ height: 12 }} />
+      <div className="brand" title="Novus Ordo — by Quincy Gininda">
+        <Logo />
+        <span className="brand-text">
+          <span className="brand-name">NOVUS ORDO</span>
+          <span className="brand-by hide-sm">by Quincy Gininda</span>
         </span>
-        ORDERFLOW<span className="muted hide-sm">TERMINAL</span>
       </div>
       <div className="sep" />
       <SymbolPicker />
@@ -161,6 +179,8 @@ export function TopBar({ onOpen, alertCount }: { onOpen: (m: ModalKind) => void;
       <button className="chip" onClick={() => onOpen('layouts')} title="Layout gallery & saved layouts">
         ▦ Layouts
       </button>
+      <ThemeSwatches />
+      <FilterSelect />
       <button className="chip" onClick={() => onOpen('settings')} title="Settings">
         ⚙
       </button>

@@ -6,6 +6,7 @@ import { hub } from '../market/hub';
 import { PANELS, type Category } from '../panels/registry';
 import { useSettings, type HistorySource } from '../store/settings';
 import { NumberInput, useHubVersion } from '../ui/controls';
+import { AppearanceSettings } from '../ui/ThemeControls';
 import { deleteNamed, listSaved, PRESETS, saveNamed, type SavedLayout } from './layouts';
 
 export function Modal({ title, onClose, children, footer, width }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; width?: number }) {
@@ -303,19 +304,9 @@ export function AddPanelModal({ onClose, onAdd }: { onClose: () => void; onAdd: 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const s = useSettings();
   return (
-    <Modal title="Settings" onClose={onClose}>
-      <div className="section-title">Appearance</div>
-      <div className="form-row">
-        <span>Theme</span>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button className={`chip ${s.theme === 'dark' ? 'active' : ''}`} onClick={() => s.set({ theme: 'dark' })}>
-            Dark
-          </button>
-          <button className={`chip ${s.theme === 'light' ? 'active' : ''}`} onClick={() => s.set({ theme: 'light' })}>
-            Light
-          </button>
-        </div>
-      </div>
+    <Modal title="Settings" onClose={onClose} width={820}>
+      <AppearanceSettings />
+      <div className="section-title">Display</div>
       <div className="form-row">
         <span>FPS counter</span>
         <label className="check">

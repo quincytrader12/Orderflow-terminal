@@ -3,7 +3,7 @@ import { fmtPrice, fmtUsd } from '../core/format';
 import { qtyPercentile } from '../core/heatmap';
 import type { VenueId } from '../core/types';
 import { hub } from '../market/hub';
-import { axisTicks, Canvas, drawTimeAxis, font, label, line, type DrawContext, type PointerState } from '../ui/canvas';
+import { axisTicks, Canvas, drawTimeAxis, font, label, line, type DrawContext, type PointerState, mask } from '../ui/canvas';
 import { Chip, NumberInput, Select, Spacer, Toolbar, VenueMask, type PanelProps } from '../ui/controls';
 import { rgba } from '../ui/theme';
 import { drawTooltip } from './FootprintChart';
@@ -72,6 +72,7 @@ export function LiquidityHeatmap({ config: c, setConfig }: PanelProps<HeatmapCon
       priceTop: pTop,
       pricePerPx: ppp,
       norm: norm.current.v / (c.contrast * 1.6),
+      ramp: pal.ramp,
       gamma: 0.55,
       baseAlpha: 255,
     });
@@ -124,8 +125,7 @@ export function LiquidityHeatmap({ config: c, setConfig }: PanelProps<HeatmapCon
     // live book profile
     if (c.showBook) {
       const bx = plotW;
-      ctx.fillStyle = pal.panel;
-      ctx.fillRect(bx, 0, bookW, plotH);
+      mask(ctx, pal, bx, 0, bookW, plotH);
       const rows = new Map<number, { b: number; a: number }>();
       const rowPx = 3;
       for (const f of feeds) {
@@ -154,8 +154,7 @@ export function LiquidityHeatmap({ config: c, setConfig }: PanelProps<HeatmapCon
 
     // price axis
     const ax = plotW + bookW;
-    ctx.fillStyle = pal.panel;
-    ctx.fillRect(ax, 0, AXIS_W, h);
+    mask(ctx, pal, ax, 0, AXIS_W, h);
     line(ctx, ax + 0.5, 0, ax + 0.5, h, pal.border);
     ctx.font = font(10);
     ctx.fillStyle = pal.muted;
