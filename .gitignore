@@ -1,0 +1,8 @@
+node_modules
+dist
+*.log
+.DS_Store
+e2e/screenshots
+server/data
+coverage
+*.tsbuildinfo
