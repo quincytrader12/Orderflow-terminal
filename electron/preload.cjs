@@ -38,6 +38,16 @@ contextBridge.exposeInMainWorld('novus', {
       return () => ccxtListeners.delete(fn);
     },
   },
+  trade: {
+    marketInfo: (secretId, symbol) => call('trade:marketInfo', secretId, symbol),
+    place: (secretId, req) => call('trade:place', secretId, req),
+    cancel: (secretId, orderId, symbol) => call('trade:cancel', secretId, orderId, symbol),
+    cancelAll: (secretId, symbol) => call('trade:cancelAll', secretId, symbol),
+    close: (secretId, symbol, side) => call('trade:close', secretId, symbol, side),
+    limits: () => call('trade:limits'),
+    setLimits: (l) => call('trade:setLimits', l),
+    log: (limit) => call('trade:log', limit),
+  },
   db: {
     info: () => call('db:info'),
     record: (venue, symbol, rows) => call('db:record', venue, symbol, rows),

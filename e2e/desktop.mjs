@@ -82,6 +82,44 @@ try {
   await page.screenshot({ path: `${OUT}desktop-keys.png` });
   await page.click('.modal header .x');
 
+  step('order ticket: read-only key is refused in the main process');
+  const keyId = listed[0].id;
+  const order = { symbol: 'BTC/USDT', side: 'buy', type: 'limit', sizeMode: 'quote', size: 20, price: 50000 };
+  const refused = await page.evaluate((a) => window.novus.trade.place(a.id, a.order).then(() => 'placed', (e) => e.message), { id: keyId, order });
+  expect(/Trading is off/.test(refused), `order refused while trading is off (${refused})`);
+  const limits = await page.evaluate(() => window.novus.trade.setLimits({ maxOrderUsd: 250 }));
+  expect(limits.maxOrderUsd === 250 && limits.maxOrdersPerMinute === 10, 'limits stored');
+  await page.click('.flexlayout__tab_button_content:text-is("Order Ticket")');
+  await page.waitForSelector('.ticket .side-toggle');
+  const submit = page.locator('.ticket .btn.submit');
+  expect(await submit.isDisabled(), 'submit disabled until a market, key and size are ready');
+  // click a DOM level → price lands in the ticket
+  const dom = page.locator('.flexlayout__tab:visible:has(button:text("centre")) canvas').first();
+  const box = await dom.boundingBox();
+  await page.mouse.click(box.x + box.width * 0.25, box.y + box.height * 0.6);
+  await page.waitForTimeout(300);
+  const ticketPrice = await page.locator('.ticket input[placeholder="click a DOM level"]').inputValue();
+  expect(Number(ticketPrice) > 0, `DOM click priced the ticket (${ticketPrice})`);
+  const ticketText = await page.locator('.ticket').innerText();
+  expect(/Buy/.test(ticketText) && /Sell/.test(ticketText) && /Stop limit/.test(ticketText), 'ticket shows sides and order types');
+  await page.screenshot({ path: `${OUT}desktop-ticket.png` });
+
+  step('allow trading on the key through the UI');
+  await page.click('button[title="API key vault"]');
+  await page.click('.vault-row button:text-is("Edit")');
+  await page.check('.trade-switch input[type="checkbox"]');
+  await page.click('text=Save encrypted');
+  await page.waitForSelector('.vault-row .tag-live');
+  const after = await page.evaluate((a) => window.novus.trade.place(a.id, a.order).then(() => 'placed', (e) => e.message), { id: keyId, order });
+  expect(!/Trading is off/.test(after), `trading switch honoured; offline exchange error instead (${after.slice(0, 80)})`);
+  await page.click('.modal header .x');
+  const log = await page.evaluate(() => window.novus.trade.log(10));
+  expect(log.length >= 2 && log.every((r) => r.action === 'place') && log[log.length - 1].status === 'rejected', `${log.length} order attempts audited`);
+  expect(!JSON.stringify(log).includes(SECRET), 'order log holds no secrets');
+  await page.waitForSelector('.ticket .log-row', { timeout: 15_000 });
+  expect((await page.locator('.ticket .log-row').count()) >= 2, 'ticket shows the order log');
+  await page.screenshot({ path: `${OUT}desktop-ticket-log.png` });
+
   step('database recording and panel');
   const n = await page.evaluate(() =>
     window.novus.db.record('binancef', 'BTCUSDT', Array.from({ length: 500 }, (_, i) => ({ p: 100000 + i, q: 0.01, s: i % 2 ? 'buy' : 'sell', t: Date.now() - (500 - i) * 1000 }))),

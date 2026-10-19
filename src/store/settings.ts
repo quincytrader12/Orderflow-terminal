@@ -108,6 +108,8 @@ export interface Settings {
   telegramSecretId: string;
   telegramAlerts: boolean;
   telegramCommands: boolean;
+  /** ask before sending each order from the ticket */
+  confirmOrders: boolean;
   byodUrl: string;
   byodToken: string;
   backfillMinutes: number;
@@ -163,6 +165,7 @@ const initial: Settings = {
   telegramSecretId: '',
   telegramAlerts: true,
   telegramCommands: false,
+  confirmOrders: true,
   byodUrl: 'http://localhost:8080',
   byodToken: '',
   backfillMinutes: 30,

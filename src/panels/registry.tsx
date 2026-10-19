@@ -3,6 +3,7 @@ import type { PanelProps } from '../ui/controls';
 import { AccountsPanel, ACCOUNTS_DEFAULTS } from './AccountsPanel';
 import { AlertsPanel, ALERTS_DEFAULTS } from './AlertsPanel';
 import { DatabasePanel, DATABASE_DEFAULTS } from './DatabasePanel';
+import { OrderTicket, TICKET_DEFAULTS } from './OrderTicket';
 import { WalletPanel, WALLET_DEFAULTS } from './WalletPanel';
 import { YahooPanel, YAHOO_DEFAULTS } from './YahooPanel';
 import { TelegramPanel, TELEGRAM_DEFAULTS } from './TelegramPanel';
@@ -48,7 +49,7 @@ export const PANELS: PanelDef[] = [
   { id: 'heatmap', title: 'Liquidity Heatmap', category: 'Charts', component: LiquidityHeatmap, defaults: { ...HEATMAP_DEFAULTS }, aggregated: true, description: 'Historical depth-of-market heatmap with trade bubbles and live book profile.' },
   { id: 'historical', title: 'Historical Chart', category: 'Charts', component: HistoricalChart, defaults: { ...HISTORICAL_DEFAULTS }, description: 'Candlesticks or TPO market profile with VWAP, session volume profile, MAs and EMA clouds.' },
   { id: 'vprofile', title: 'Volume Profile', category: 'Charts', component: VolumeProfilePanel, defaults: { ...VPROFILE_DEFAULTS }, description: 'Session or rolling volume profile with POC, value area and delta per level.' },
-  { id: 'dom', title: 'DOM Ladder', category: 'Order book', component: DomLadder, defaults: { ...DOM_DEFAULTS }, description: 'Price ladder: resting bids/asks, traded volume, delta and session range.' },
+  { id: 'dom', title: 'DOM Ladder', category: 'Order book', component: DomLadder, defaults: { ...DOM_DEFAULTS }, description: 'Price ladder: resting bids/asks, traded volume, delta and session range. Click a level to price the Order Ticket.' },
   { id: 'orderbook', title: 'Orderbook', category: 'Order book', component: Orderbook, defaults: { ...ORDERBOOK_DEFAULTS }, aggregated: true, description: 'Composite multi-venue order book with per-venue contribution.' },
   { id: 'depth', title: 'Depth Chart', category: 'Order book', component: DepthChart, defaults: { ...DEPTH_DEFAULTS }, aggregated: true, description: 'Cumulative bid/ask depth across venues.' },
   { id: 'obstats', title: 'Orderbook Stats', category: 'Order book', component: OrderbookStats, defaults: { ...OBSTATS_DEFAULTS }, aggregated: true, description: 'Spread, depth within 0.5/2/10% and book imbalance per venue.' },
@@ -66,6 +67,7 @@ export const PANELS: PanelDef[] = [
   { id: 'watchlist', title: 'Watchlist', category: 'Market', component: Watchlist, defaults: { ...WATCHLIST_DEFAULTS }, description: 'Prices for any symbol on any supported venue.' },
   { id: 'yahoo', title: 'Yahoo Finance', category: 'Market', component: YahooPanel, defaults: { ...YAHOO_DEFAULTS }, description: 'Stocks, indices, futures, FX and crypto from Yahoo Finance: quote board, search and candles.' },
   { id: 'news', title: 'News', category: 'Market', component: NewsFeed, defaults: { ...NEWS_DEFAULTS }, description: 'Real-time headlines (Tree of Alpha) filtered by coin.' },
+  { id: 'ticket', title: 'Order Ticket', category: 'Account', component: OrderTicket, defaults: { ...TICKET_DEFAULTS }, description: 'Place market, limit, stop and stop-limit orders on any CCXT exchange, with value cap, confirmation and an order log. Click a DOM level to set the price.' },
   { id: 'accounts', title: 'Exchange Accounts', category: 'Account', component: AccountsPanel, defaults: { ...ACCOUNTS_DEFAULTS }, description: 'Balances, positions, open orders and fills from any CCXT exchange using keys in your vault.' },
   { id: 'wallet', title: 'Phantom Wallet', category: 'Account', component: WalletPanel, defaults: { ...WALLET_DEFAULTS }, description: 'Connect Phantom (signed proof of ownership) or watch any Solana address: SOL, tokens and USD value.' },
   { id: 'database', title: 'Database', category: 'Account', component: DatabasePanel, defaults: { ...DATABASE_DEFAULTS }, description: 'Local SQLite: recorded trades per instrument, retention, CSV export, key and wallet counts.' },

@@ -35,6 +35,25 @@ CREATE TABLE IF NOT EXISTS wallets (
   verified INTEGER NOT NULL,
   connected_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS orders_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  t INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  secret_id TEXT,
+  exchange TEXT,
+  sandbox INTEGER NOT NULL DEFAULT 0,
+  symbol TEXT,
+  side TEXT,
+  type TEXT,
+  amount REAL,
+  price REAL,
+  trigger_price REAL,
+  notional_usd REAL,
+  status TEXT NOT NULL,
+  order_id TEXT,
+  message TEXT
+);
+CREATE INDEX IF NOT EXISTS orders_log_t ON orders_log(t);
 `;
 
 export class Db {
@@ -128,6 +147,20 @@ export class Db {
   }
   deleteWallet(address) {
     this.db.prepare('DELETE FROM wallets WHERE address = ?').run(address);
+  }
+
+  // ---- order audit log (every attempt, accepted or not) ----
+  logOrder(r) {
+    const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+    this.db
+      .prepare(
+        `INSERT INTO orders_log (t, action, secret_id, exchange, sandbox, symbol, side, type, amount, price, trigger_price, notional_usd, status, order_id, message)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(Date.now(), r.action, r.secretId ?? null, r.exchange ?? null, r.sandbox ? 1 : 0, r.symbol ?? null, r.side ?? null, r.type ?? null, n(r.amount), n(r.price), n(r.triggerPrice), n(r.notionalUsd), r.status, r.orderId ?? null, r.message ?? null);
+  }
+  orderLog(limit = 100) {
+    return this.db.prepare('SELECT * FROM orders_log ORDER BY id DESC LIMIT ?').all(limit);
   }
 
   info() {

@@ -15,8 +15,8 @@ export function mask(value) {
   return `${s.slice(0, 4)}${'•'.repeat(Math.min(12, s.length - 8))}${s.slice(-4)}`;
 }
 
-/** Fields that are not secret and may be shown in full (e.g. an RPC host). */
-const PUBLIC_FIELDS = new Set(['url', 'address', 'walletAddress', 'note', 'chatId']);
+/** Fields that are not secret and may be shown in full (e.g. an RPC host, or flags). */
+const PUBLIC_FIELDS = new Set(['url', 'address', 'walletAddress', 'note', 'chatId', 'sandbox', 'trading']);
 
 export class Vault {
   /**

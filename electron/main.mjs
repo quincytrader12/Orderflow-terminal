@@ -106,8 +106,15 @@ function registerIpc() {
 
   // vault
   handle('vault:list', () => vault.list());
-  handle('vault:save', (_e, rec) => vault.save(rec));
-  handle('vault:remove', (_e, id) => vault.remove(id));
+  handle('vault:save', (_e, rec) => {
+    const id = vault.save(rec);
+    ccxtSvc.invalidate(id);
+    return id;
+  });
+  handle('vault:remove', (_e, id) => {
+    ccxtSvc.invalidate(id);
+    return vault.remove(id);
+  });
   handle('vault:copy', (_e, id, field) => {
     const v = vault.reveal(id).fields[field];
     if (v === undefined) throw new Error(`no field ${field}`);
@@ -126,6 +133,15 @@ function registerIpc() {
   handle('ccxt:tickers', (_e, id) => ccxtSvc.tickers(id));
   handle('ccxt:ticker', (_e, id, symbol) => ccxtSvc.ticker(id, symbol));
   handle('ccxt:account', (_e, secretId, symbol) => ccxtSvc.account(secretId, symbol));
+  // trading: every rule (trading switch, value cap, rate limit) is enforced here, not in the UI
+  handle('trade:marketInfo', (_e, secretId, symbol) => ccxtSvc.marketInfo(secretId, symbol));
+  handle('trade:place', (_e, secretId, req) => ccxtSvc.placeOrder(secretId, req));
+  handle('trade:cancel', (_e, secretId, orderId, symbol) => ccxtSvc.cancelOrder(secretId, orderId, symbol));
+  handle('trade:cancelAll', (_e, secretId, symbol) => ccxtSvc.cancelAll(secretId, symbol));
+  handle('trade:close', (_e, secretId, symbol, side) => ccxtSvc.closePosition(secretId, symbol, side));
+  handle('trade:limits', () => ccxtSvc.limits());
+  handle('trade:setLimits', (_e, l) => ccxtSvc.setLimits(l));
+  handle('trade:log', (_e, limit) => db.orderLog(Math.min(500, Number(limit) || 100)));
   handle('ccxt:subscribe', (e, sid, id, symbol) => {
     const wc = e.sender;
     ccxtSvc.subscribe(sid, id, symbol, (msg) => {
@@ -221,7 +237,7 @@ app.whenReady().then(() => {
   const userData = app.getPath('userData');
   db = new Db(join(userData, 'novus-ordo.sqlite'));
   vault = new Vault(db, safeStorage, join(userData, 'vault.key'));
-  ccxtSvc = new CcxtService(vault);
+  ccxtSvc = new CcxtService(vault, { db });
   db.pruneTrades(Date.now() - retentionDays() * DAY);
   setInterval(() => db.pruneTrades(Date.now() - retentionDays() * DAY), 3_600_000);
   Menu.setApplicationMenu(

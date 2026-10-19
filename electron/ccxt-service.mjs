@@ -3,6 +3,7 @@
 // use API keys from the vault. Runs in the Electron main process so there are
 // no CORS limits and keys never reach the renderer.
 import ccxt from 'ccxt';
+import { buildOrder, closeOrderFor, RateGate, sanitizeLimits, USD_QUOTES } from './trading.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const BOOK_DEPTH = 500;
@@ -35,17 +36,26 @@ function credentialsFrom(fields) {
 }
 
 export class CcxtService {
-  constructor(vault) {
+  /**
+   * @param vault Vault (reveal() gives plaintext key fields)
+   * @param opts.db Db for trading limits and the order audit log
+   * @param opts.lib CCXT module (tests pass a fake)
+   */
+  constructor(vault, opts = {}) {
     this.vault = vault;
+    this.db = opts.db ?? null;
+    this.lib = opts.lib ?? ccxt;
     this.publicCache = new Map();
+    this.privateCache = new Map();
     this.streams = new Map();
+    this.gate = new RateGate();
   }
 
   publicExchange(id, pro = false) {
     const key = `${id}|${pro}`;
     let ex = this.publicCache.get(key);
     if (!ex) {
-      const Cls = pro ? ccxt.pro[id] : ccxt[id];
+      const Cls = pro ? this.lib.pro[id] : this.lib[id];
       if (!Cls) throw new Error(`unknown exchange ${id}`);
       ex = new Cls({ enableRateLimit: true });
       this.publicCache.set(key, ex);
@@ -53,14 +63,32 @@ export class CcxtService {
     return ex;
   }
 
+  /** Authenticated exchange for a vault key, cached until the key changes. */
   privateExchange(secretId) {
+    const hit = this.privateCache.get(secretId);
+    if (hit) return hit;
     const s = this.vault.reveal(secretId);
     if (s.kind !== 'exchange' || !s.exchange) throw new Error('this key is not an exchange key');
-    const Cls = ccxt[s.exchange];
+    const Cls = this.lib[s.exchange];
     if (!Cls) throw new Error(`unknown exchange ${s.exchange}`);
     const ex = new Cls({ enableRateLimit: true, ...credentialsFrom(s.fields) });
-    if (s.fields.sandbox === 'true' && ex.has.sandbox !== false) ex.setSandboxMode(true);
+    if (s.fields.sandbox === 'true') {
+      // never fall back to the live exchange when a testnet key was asked for
+      try {
+        ex.setSandboxMode(true);
+      } catch {
+        throw new Error(`${ex.name ?? s.exchange} has no testnet in CCXT — untick “testnet / sandbox” to use the live exchange`);
+      }
+    }
+    this.privateCache.set(secretId, ex);
     return ex;
+  }
+
+  /** Drop the cached client after a key is edited or deleted. */
+  invalidate(secretId) {
+    const ex = this.privateCache.get(secretId);
+    this.privateCache.delete(secretId);
+    void ex?.close?.()?.catch?.(() => undefined);
   }
 
   async markets(id) {
@@ -287,5 +315,243 @@ export class CcxtService {
       }
     }
     return out;
+  }
+
+  // ---------- trading ----------
+
+  /** The key's plaintext record, only when trading was switched on for it. */
+  tradingKey(secretId) {
+    const s = this.vault.reveal(secretId);
+    if (s.kind !== 'exchange') throw new Error('this key is not an exchange key');
+    if (s.fields.trading !== 'enabled') throw new Error('Trading is off for this key. Edit it in 🔑 Keys and tick “Allow trading”.');
+    return s;
+  }
+
+  limits() {
+    return sanitizeLimits(this.db?.get('tradingLimits'));
+  }
+
+  setLimits(l) {
+    const v = sanitizeLimits(l);
+    this.db?.set('tradingLimits', v);
+    return v;
+  }
+
+  log(row) {
+    try {
+      this.db?.logOrder(row);
+    } catch (e) {
+      console.warn('order log', e?.message ?? e);
+    }
+  }
+
+  async refPrice(ex, symbol) {
+    const t = await ex.fetchTicker(symbol);
+    const mid = t.bid && t.ask ? (t.bid + t.ask) / 2 : undefined;
+    const p = t.last ?? t.close ?? mid;
+    if (!(p > 0)) throw new Error(`no price for ${symbol}`);
+    return { price: p, bid: t.bid ?? null, ask: t.ask ?? null };
+  }
+
+  /** USD value of one unit of a non-dollar quote currency (e.g. BTC, EUR). */
+  async quoteUsd(ex, quote) {
+    for (const s of [`${quote}/USDT`, `${quote}/USD`, `${quote}/USDC`]) {
+      if (!ex.markets[s]) continue;
+      try {
+        return (await this.refPrice(ex, s)).price;
+      } catch {
+        /* try the next pair */
+      }
+    }
+    const inv = [`USDT/${quote}`, `USD/${quote}`].find((s) => ex.markets[s]);
+    if (inv) return 1 / (await this.refPrice(ex, inv)).price;
+    return NaN;
+  }
+
+  /** Everything the order ticket needs for one market on one key. */
+  async marketInfo(secretId, symbol) {
+    const s = this.vault.reveal(secretId);
+    const ex = this.privateExchange(secretId);
+    await ex.loadMarkets();
+    const m = ex.markets[symbol];
+    if (!m) throw new Error(`${symbol} is not listed on ${ex.name}`);
+    const px = await this.refPrice(ex, symbol);
+    const out = {
+      exchange: ex.name,
+      exchangeId: s.exchange,
+      label: s.label,
+      sandbox: s.fields.sandbox === 'true',
+      trading: s.fields.trading === 'enabled',
+      symbol,
+      base: m.base,
+      quote: m.quote,
+      settle: m.settle ?? null,
+      type: m.type,
+      contract: Boolean(m.contract),
+      inverse: Boolean(m.inverse),
+      contractSize: m.contractSize ?? 1,
+      minAmount: m.limits?.amount?.min ?? null,
+      minCost: m.limits?.cost?.min ?? null,
+      last: px.price,
+      bid: px.bid,
+      ask: px.ask,
+      maker: m.maker ?? null,
+      taker: m.taker ?? null,
+      canLeverage: Boolean(m.contract && ex.has.setLeverage),
+      stops: Boolean(ex.has.createTriggerOrder ?? ex.has.createStopOrder ?? true),
+      freeBase: null,
+      freeQuote: null,
+      limits: this.limits(),
+    };
+    try {
+      const bal = await ex.fetchBalance();
+      out.freeBase = bal.free?.[m.base] ?? null;
+      out.freeQuote = bal.free?.[m.settle ?? m.quote] ?? null;
+    } catch {
+      /* balances optional here */
+    }
+    return out;
+  }
+
+  async applyLeverage(ex, leverage, market) {
+    const lev = Math.round(Number(leverage));
+    if (!(lev >= 1 && lev <= 200)) throw new Error('leverage must be between 1 and 200');
+    if (!market.contract) throw new Error('leverage applies to derivatives; this is a spot market');
+    if (!ex.has.setLeverage) throw new Error(`${ex.name} does not support setting leverage through its API — set it on the exchange, then clear the leverage field`);
+    try {
+      await ex.setLeverage(lev, market.symbol);
+    } catch (e) {
+      const msg = String(e?.message ?? e);
+      // exchanges report "already at this leverage" as an error
+      if (!/not modified|no need|same|unchanged|not changed/i.test(msg)) throw new Error(`could not set leverage: ${msg}`);
+    }
+  }
+
+  async placeOrder(secretId, req) {
+    const row = { action: 'place', secretId, symbol: req?.symbol, side: req?.side, type: req?.type, status: 'rejected' };
+    try {
+      const s = this.tradingKey(secretId);
+      row.exchange = s.exchange;
+      row.sandbox = s.fields.sandbox === 'true';
+      const limits = this.limits();
+      const ex = this.privateExchange(secretId);
+      await ex.loadMarkets();
+      const market = ex.markets[req.symbol];
+      const { price } = await this.refPrice(ex, req.symbol);
+      const quoteUsd = market && !USD_QUOTES.has(market.quote) ? await this.quoteUsd(ex, market.quote) : 1;
+      const o = buildOrder(req, market, {
+        refPrice: price,
+        quoteUsd,
+        limits,
+        amountToPrecision: (x) => Number(ex.amountToPrecision(req.symbol, x)),
+        priceToPrecision: (x) => Number(ex.priceToPrecision(req.symbol, x)),
+      });
+      Object.assign(row, { amount: o.amount, price: o.price, triggerPrice: o.params.triggerPrice, notionalUsd: o.notionalUsd });
+      this.gate.take(limits.maxOrdersPerMinute);
+      if (req.leverage) await this.applyLeverage(ex, req.leverage, market);
+      row.status = 'error';
+      const res = await ex.createOrder(o.symbol, o.type, o.side, o.amount, o.price, o.params);
+      row.status = 'placed';
+      row.orderId = res?.id ?? null;
+      return {
+        id: res?.id ?? null,
+        status: res?.status ?? 'open',
+        symbol: o.symbol,
+        side: o.side,
+        type: req.type,
+        amount: o.amount,
+        price: o.price ?? res?.average ?? res?.price ?? null,
+        filled: res?.filled ?? null,
+        notionalUsd: o.notionalUsd,
+        exchange: ex.name,
+        sandbox: row.sandbox,
+      };
+    } catch (e) {
+      row.message = String(e?.message ?? e);
+      throw e;
+    } finally {
+      this.log(row);
+    }
+  }
+
+  /** Cancelling only removes risk, so it works even with trading switched off. */
+  async cancelOrder(secretId, orderId, symbol) {
+    const row = { action: 'cancel', secretId, symbol, orderId, status: 'error' };
+    try {
+      const s = this.vault.reveal(secretId);
+      row.exchange = s.exchange;
+      row.sandbox = s.fields.sandbox === 'true';
+      const ex = this.privateExchange(secretId);
+      await ex.loadMarkets();
+      await ex.cancelOrder(orderId, symbol);
+      row.status = 'cancelled';
+      return true;
+    } catch (e) {
+      row.message = String(e?.message ?? e);
+      throw e;
+    } finally {
+      this.log(row);
+    }
+  }
+
+  async cancelAll(secretId, symbol) {
+    const row = { action: 'cancel-all', secretId, symbol: symbol ?? null, status: 'error' };
+    try {
+      const s = this.vault.reveal(secretId);
+      row.exchange = s.exchange;
+      row.sandbox = s.fields.sandbox === 'true';
+      const ex = this.privateExchange(secretId);
+      await ex.loadMarkets();
+      let n = 0;
+      if (ex.has.cancelAllOrders && symbol) {
+        const r = await ex.cancelAllOrders(symbol);
+        n = Array.isArray(r) ? r.length : 0;
+      } else {
+        ex.options.warnOnFetchOpenOrdersWithoutSymbol = false;
+        const open = await ex.fetchOpenOrders(symbol);
+        for (const o of open) {
+          await ex.cancelOrder(o.id, o.symbol);
+          n++;
+        }
+      }
+      row.status = 'cancelled';
+      row.message = `${n} orders`;
+      return n;
+    } catch (e) {
+      row.message = String(e?.message ?? e);
+      throw e;
+    } finally {
+      this.log(row);
+    }
+  }
+
+  /** Flatten a derivatives position with a reduce-only market order. */
+  async closePosition(secretId, symbol, side) {
+    const row = { action: 'close', secretId, symbol, type: 'market', status: 'rejected' };
+    try {
+      const s = this.tradingKey(secretId);
+      row.exchange = s.exchange;
+      row.sandbox = s.fields.sandbox === 'true';
+      const limits = this.limits();
+      const ex = this.privateExchange(secretId);
+      await ex.loadMarkets();
+      if (!ex.has.fetchPositions) throw new Error(`${ex.name} does not report positions through CCXT`);
+      const ps = await ex.fetchPositions([symbol]);
+      const p = ps.find((x) => x.symbol === symbol && Math.abs(x.contracts ?? 0) > 0 && (!side || x.side === side));
+      const o = closeOrderFor(p);
+      o.amount = Number(ex.amountToPrecision(symbol, o.amount));
+      Object.assign(row, { side: o.side, amount: o.amount });
+      this.gate.take(limits.maxOrdersPerMinute);
+      row.status = 'error';
+      const res = await ex.createOrder(o.symbol, o.type, o.side, o.amount, undefined, o.params);
+      row.status = 'placed';
+      row.orderId = res?.id ?? null;
+      return { id: res?.id ?? null, side: o.side, amount: o.amount };
+    } catch (e) {
+      row.message = String(e?.message ?? e);
+      throw e;
+    } finally {
+      this.log(row);
+    }
   }
 }

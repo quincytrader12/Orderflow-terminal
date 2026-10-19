@@ -10,7 +10,16 @@ Novus Ordo ships as a desktop app built with Electron. The desktop app adds:
 
 - **CCXT**: any of CCXT's 100+ exchanges as a venue (pick **CCXT (any exchange)** as the primary venue or add it to Σ, then choose the exchange, Spot/Perp and quote in the top bar). Streams use ccxt.pro WebSockets where the exchange has them, REST polling otherwise. All REST calls run in the desktop process, so browser CORS limits disappear.
 - **Database**: a local SQLite file (`novus-ordo.sqlite` in the app data folder) holding recorded trades, the encrypted key vault and connected wallets. Live trades of the primary (or all Σ venues) are recorded and used as the **Local database** history source on the next launch, with any gap filled from the exchange. The **Database** panel shows size, instruments and retention, and exports CSV.
-- **Key vault** (top bar → 🔑 Keys): stores any API key — exchange credentials (fields follow each CCXT exchange's requirements, with testnet toggle and a **Test** button), Solana RPC URLs, or any other named key with custom fields. Values are encrypted with the OS keychain (Windows DPAPI, macOS Keychain) before they reach the database; the UI only shows masked values and **copy** puts a value on the clipboard (cleared after 30 s) without displaying it. Exchange keys are used only by CCXT in the desktop process (**Exchange Accounts** panel: balances, positions, open orders, fills). Use read-only keys where your exchange offers them.
+- **Key vault** (top bar → 🔑 Keys): stores any API key — exchange credentials (fields follow each CCXT exchange's requirements, with testnet toggle and a **Test** button), Solana RPC URLs, or any other named key with custom fields. Values are encrypted with the OS keychain (Windows DPAPI, macOS Keychain) before they reach the database; the UI only shows masked values and **copy** puts a value on the clipboard (cleared after 30 s) without displaying it. Exchange keys are used only by CCXT in the desktop process (**Exchange Accounts** panel: balances, positions, open orders, fills) and are read-only in the app until you tick **Allow trading** on the key.
+- **Trading** (**Order Ticket** panel, under the DOM in the Chart Center layout): market, limit, stop and stop-limit orders on any CCXT exchange, sized in the base asset or in USD (with 10/25/50/100 % of your free balance), with post-only, reduce-only, GTC/IOC/FOK and leverage on derivatives. Click a DOM level to send its price to the ticket (bid side → buy, ask side → sell). **Exchange Accounts** gets **Cancel**, **Cancel all** and **Close** (reduce-only market) buttons. Safety rules run in the desktop process, not the UI, so nothing can bypass them:
+  - a key places orders only after you tick **Allow trading** on it in 🔑 Keys (cancelling always works);
+  - every order is checked against a **maximum order value** (default $1,000), a **rate limit** (default 10 orders/minute) and a **maximum distance from the market** (default 50 %), all editable under ⚙ in the ticket; reduce-only and close orders skip the value cap because they can only shrink a position;
+  - stops that would trigger immediately, post-only on non-limit orders, and reduce-only on spot are refused;
+  - a **confirmation** step shows the full order (with a LIVE/TESTNET badge) before it is sent; you can switch it off under ⚙;
+  - keys marked **testnet / sandbox** trade on the exchange's testnet and never fall back to live if the exchange has no testnet;
+  - every attempt — placed, rejected or failed — is written to the `orders_log` table in the database and shown in the ticket's order log; placed orders are also forwarded to Telegram when alert forwarding is on.
+
+  Start on a testnet key. Create exchange keys with trade permission only — never enable withdrawals.
 - **Phantom wallet**: **Connect Phantom** in the **Phantom Wallet** panel opens a one-time local page in your default browser (where the Phantom extension lives). You approve the connection and sign a message; the app verifies the ed25519 signature before saving the address. It is read-only — the app never sees a private key and cannot move funds — and shows SOL, SPL tokens and USD value (Jupiter prices). You can also watch any address, and add a private RPC in the vault.
 
 ### Get the .exe
@@ -98,7 +107,7 @@ Some venues are geo-restricted (e.g. Binance in the US); pick a venue that works
   - *Live only*.
 - **Layouts** — dockable tabs/splits (drag tabs, double-click a header to maximise). Layout, per-panel settings, alerts, journal and watchlist persist in your browser. A gallery of presets (Terminal, Flow Desk, Scalper, Liquidity, Derivatives, Market Overview, Whale Watch, Options), named saved layouts and JSON import/export are under **▦ Layouts**.
 
-## Panels (29)
+## Panels (30)
 
 | Category | Panel | Highlights |
 |---|---|---|
@@ -124,7 +133,8 @@ Some venues are geo-restricted (e.g. Binance in the US); pick a venue that works
 | | **Watchlist** | Any symbol on any venue |
 | | **News** | Real-time headlines, filter by coin |
 | | **Yahoo Finance** | Stocks, indices, futures, FX: quote board, search, candles (desktop) |
-| Account | **Exchange Accounts** | Balances, positions, open orders and fills from any CCXT exchange (desktop) |
+| Account | **Order Ticket** | Market/limit/stop/stop-limit orders on any CCXT exchange with value cap, rate limit, confirmation and order log; click a DOM level to price it (desktop) |
+| | **Exchange Accounts** | Balances, positions, open orders and fills from any CCXT exchange; cancel orders and close positions (desktop) |
 | | **Phantom Wallet** | Connect Phantom or watch an address: SOL, tokens, USD value, recent activity |
 | | **Database** | Recorded trades per instrument, retention, CSV export |
 | Tools | **Telegram Bot** | Forward alerts, answer /price and /status |
@@ -194,10 +204,12 @@ src/exchanges/   one adapter per venue + reconnecting WebSocket, Deribit options
 src/market/      MarketHub (feeds for primary + aggregate set, tape, heatmap recorders, backfill), whale collector
 src/history/     BYOD v1 client
 src/alerts/      alert engine (12 types), toasts, sound
-src/panels/      24 panels (canvas renderers for charts, React tables elsewhere) + registry
+src/panels/      30 panels (canvas renderers for charts, React tables elsewhere) + registry
 src/app/         top bar, docking layout, presets, modals, embed mode
+electron/        desktop main process: CCXT service, order rules (trading.mjs), SQLite database, key vault, Phantom
+src/desktop/     renderer side of the desktop bridge (vault, wallet, Telegram, order ticket helpers)
 server/          self-hosted history server
-e2e/             browser tests
+e2e/             browser and desktop tests
 ```
 
 ## Known limitations

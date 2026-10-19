@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { fmtNum, fmtPrice, fmtTime, fmtUsd } from '../core/format';
-import { desktop, DesktopOnlyError, type AccountSnapshot, type SecretRecord } from '../desktop/bridge';
-import { vault } from '../desktop/vault';
+import { desktop, DesktopOnlyError, type AccountSnapshot } from '../desktop/bridge';
+import { useVaultKeys } from '../desktop/vault';
 import { hub } from '../market/hub';
 import { Chip, Empty, Select, Spacer, Toolbar, type PanelProps } from '../ui/controls';
 
@@ -22,22 +22,28 @@ function primaryUnified(): string | undefined {
 }
 
 export function AccountsPanel({ config: c, setConfig }: PanelProps<AccountsConfig>) {
-  const [keys, setKeys] = useState<SecretRecord[]>([]);
+  const keys = useVaultKeys('exchange') ?? [];
   const [data, setData] = useState<AccountSnapshot | null>(null);
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
+  const [tick, setTick] = useState(0);
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const act = async (label: string, fn: () => Promise<unknown>) => {
+    setNote(null);
+    try {
+      await fn();
+      setNote({ ok: true, text: label });
+    } catch (e) {
+      setNote({ ok: false, text: String((e as Error).message ?? e) });
+    }
+    setTick((t) => t + 1);
+  };
 
   useEffect(() => {
-    vault
-      .list()
-      .then((all) => {
-        const ex = all.filter((k) => k.kind === 'exchange');
-        setKeys(ex);
-        if (!c.secretId && ex[0]) setConfig({ secretId: ex[0].id });
-      })
-      .catch(() => undefined);
+    if ((!c.secretId || !keys.some((k) => k.id === c.secretId)) && keys[0]) setConfig({ secretId: keys[0].id });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [keys]);
 
   useEffect(() => {
     if (!c.secretId) return;
@@ -64,7 +70,7 @@ export function AccountsPanel({ config: c, setConfig }: PanelProps<AccountsConfi
       alive = false;
       clearInterval(t);
     };
-  }, [c.secretId, c.refreshSec]);
+  }, [c.secretId, c.refreshSec, tick]);
 
   const tabErr = data?.errors[{ balances: 'balances', positions: 'positions', orders: 'openOrders', fills: 'myTrades' }[c.tab]];
 
@@ -83,8 +89,18 @@ export function AccountsPanel({ config: c, setConfig }: PanelProps<AccountsConfi
           </Chip>
         ))}
         <Spacer />
+        {c.tab === 'orders' && data && data.openOrders.length > 0 && (
+          <button
+            className="chip danger"
+            title="Cancel every open order on this account"
+            onClick={() => confirm(`Cancel all ${data.openOrders.length} open orders on ${data.exchange}?`) && void act('All orders cancelled', () => desktop!.trade.cancelAll(c.secretId))}
+          >
+            Cancel all
+          </button>
+        )}
         <span className="muted">{loading ? 'refreshing…' : data ? data.exchange : ''}</span>
       </Toolbar>
+      {note && <div className={`panel-note ${note.ok ? 'up' : 'down'}`}>{note.text}</div>}
       <div className="scroll">
         {!keys.length ? (
           <Empty>Add an exchange API key in 🔑 Keys (top bar) to see balances, positions and orders through CCXT.</Empty>
@@ -130,6 +146,7 @@ export function AccountsPanel({ config: c, setConfig }: PanelProps<AccountsConfi
                   <th>Mark</th>
                   <th>uPnL</th>
                   <th>Liq.</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -143,6 +160,15 @@ export function AccountsPanel({ config: c, setConfig }: PanelProps<AccountsConfi
                     <td>{fmtPrice(p.markPrice)}</td>
                     <td className={(p.unrealizedPnl ?? 0) >= 0 ? 'up' : 'down'}>{fmtUsd(p.unrealizedPnl)}</td>
                     <td className="muted">{fmtPrice(p.liquidationPrice)}</td>
+                    <td>
+                      <button
+                        className="chip danger"
+                        title="Close with a reduce-only market order (needs “Allow trading” on this key)"
+                        onClick={() => confirm(`Close ${p.side} ${p.contracts} ${p.symbol} at market?`) && void act(`${p.symbol} close sent`, () => desktop!.trade.close(c.secretId, p.symbol, p.side))}
+                      >
+                        Close
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -162,6 +188,7 @@ export function AccountsPanel({ config: c, setConfig }: PanelProps<AccountsConfi
                   <th>Price</th>
                   <th>Amount</th>
                   <th>Filled</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -174,6 +201,11 @@ export function AccountsPanel({ config: c, setConfig }: PanelProps<AccountsConfi
                     <td>{fmtPrice(o.price)}</td>
                     <td>{fmtNum(o.amount, 4)}</td>
                     <td>{fmtNum(o.filled, 4)}</td>
+                    <td>
+                      <button className="chip" title="Cancel order" onClick={() => void act(`Order ${o.id} cancelled`, () => desktop!.trade.cancel(c.secretId, o.id, o.symbol))}>
+                        Cancel
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

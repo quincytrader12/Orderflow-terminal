@@ -64,6 +64,91 @@ export interface AccountSnapshot {
   errors: Record<string, string>;
 }
 
+export type OrderType = 'market' | 'limit' | 'stop-market' | 'stop-limit';
+export type TimeInForce = 'GTC' | 'IOC' | 'FOK';
+
+export interface OrderRequest {
+  /** unified CCXT symbol, e.g. BTC/USDT or BTC/USDT:USDT */
+  symbol: string;
+  side: 'buy' | 'sell';
+  type: OrderType;
+  /** size in base units, or in quote (USD) */
+  sizeMode: 'base' | 'quote';
+  size: number;
+  price?: number;
+  triggerPrice?: number;
+  reduceOnly?: boolean;
+  postOnly?: boolean;
+  tif?: TimeInForce;
+  leverage?: number;
+}
+
+export interface OrderResult {
+  id: string | null;
+  status: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  type: OrderType;
+  amount: number;
+  price: number | null;
+  filled: number | null;
+  notionalUsd: number;
+  exchange: string;
+  sandbox: boolean;
+}
+
+export interface TradingLimits {
+  maxOrderUsd: number;
+  maxOrdersPerMinute: number;
+  maxPriceDeviationPct: number;
+}
+
+export interface MarketInfo {
+  exchange: string;
+  exchangeId: string;
+  label: string;
+  sandbox: boolean;
+  trading: boolean;
+  symbol: string;
+  base: string;
+  quote: string;
+  settle: string | null;
+  type: string;
+  contract: boolean;
+  inverse: boolean;
+  contractSize: number;
+  minAmount: number | null;
+  minCost: number | null;
+  last: number;
+  bid: number | null;
+  ask: number | null;
+  maker: number | null;
+  taker: number | null;
+  canLeverage: boolean;
+  stops: boolean;
+  freeBase: number | null;
+  freeQuote: number | null;
+  limits: TradingLimits;
+}
+
+export interface OrderLogRow {
+  id: number;
+  t: number;
+  action: 'place' | 'cancel' | 'cancel-all' | 'close';
+  exchange: string | null;
+  sandbox: number;
+  symbol: string | null;
+  side: string | null;
+  type: string | null;
+  amount: number | null;
+  price: number | null;
+  trigger_price: number | null;
+  notional_usd: number | null;
+  status: 'placed' | 'rejected' | 'error' | 'cancelled';
+  order_id: string | null;
+  message: string | null;
+}
+
 export interface DbInfo {
   file: string;
   size: number;
@@ -102,6 +187,16 @@ export interface NovusApi {
     subscribe(sid: string, id: string, symbol: string): Promise<boolean>;
     unsubscribe(sid: string): Promise<void>;
     onEvent(fn: (e: CcxtEvent) => void): () => void;
+  };
+  trade: {
+    marketInfo(secretId: string, symbol: string): Promise<MarketInfo>;
+    place(secretId: string, req: OrderRequest): Promise<OrderResult>;
+    cancel(secretId: string, orderId: string, symbol: string): Promise<boolean>;
+    cancelAll(secretId: string, symbol?: string): Promise<number>;
+    close(secretId: string, symbol: string, side?: string): Promise<{ id: string | null; side: string; amount: number }>;
+    limits(): Promise<TradingLimits>;
+    setLimits(l: Partial<TradingLimits>): Promise<TradingLimits>;
+    log(limit?: number): Promise<OrderLogRow[]>;
   };
   db: {
     info(): Promise<DbInfo>;

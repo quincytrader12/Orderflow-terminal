@@ -27,13 +27,17 @@ interface Draft {
   exchange: string;
   fields: { name: string; value: string; stored?: string }[];
   sandbox: boolean;
+  trading: boolean;
 }
+
+const FLAGS = new Set(['sandbox', 'trading']);
 
 const blank = (kind: SecretKind): Draft => ({
   kind,
   label: '',
   exchange: '',
   sandbox: false,
+  trading: false,
   fields:
     kind === 'exchange'
       ? [{ name: 'apiKey', value: '' }, { name: 'secret', value: '' }]
@@ -78,7 +82,10 @@ export function KeysModal({ onClose }: { onClose: () => void }) {
     try {
       const fields: Record<string, string | null> = {};
       for (const f of draft.fields) if (f.name.trim()) fields[f.name.trim()] = f.value;
-      if (draft.kind === 'exchange') fields.sandbox = draft.sandbox ? 'true' : null;
+      if (draft.kind === 'exchange') {
+        fields.sandbox = draft.sandbox ? 'true' : null;
+        fields.trading = draft.trading ? 'enabled' : null;
+      }
       const id = await vault.save({ id: draft.id, kind: draft.kind, label: draft.label.trim() || KIND_LABEL[draft.kind], exchange: draft.kind === 'exchange' ? draft.exchange : null, fields });
       setDraft(null);
       setMsg({ id, text: 'Saved and encrypted.', ok: true });
@@ -97,8 +104,9 @@ export function KeysModal({ onClose }: { onClose: () => void }) {
       label: r.label,
       exchange: r.exchange ?? '',
       sandbox: r.meta.fields.sandbox === 'true' || r.meta.fields.sandbox === '••••',
+      trading: r.meta.fields.trading === 'enabled',
       fields: Object.entries(r.meta.fields)
-        .filter(([k]) => k !== 'sandbox')
+        .filter(([k]) => !FLAGS.has(k))
         .map(([name, stored]) => ({ name, value: '', stored })),
     });
 
@@ -133,7 +141,7 @@ export function KeysModal({ onClose }: { onClose: () => void }) {
           : backend === 'local'
             ? 'with AES-256-GCM using a key file in the app data folder (no OS keychain was available)'
             : 'in this browser with a non-exportable AES-256 key'}
-        . The interface only ever shows masked values; copying a value puts it on the clipboard without displaying it. Exchange keys are used by CCXT in the {isDesktop ? 'desktop process' : 'desktop app'} for balances, positions and orders. Use read-only keys where the exchange offers them.
+        . The interface only ever shows masked values; copying a value puts it on the clipboard without displaying it. Exchange keys are used by CCXT in the {isDesktop ? 'desktop process' : 'desktop app'} for balances, positions and orders, and stay read-only in Novus Ordo until you tick “Allow trading” on a key.
       </p>
 
       {!draft && (
@@ -212,6 +220,20 @@ export function KeysModal({ onClose }: { onClose: () => void }) {
               )}
             </div>
           </div>
+          {draft.kind === 'exchange' && (
+            <div className="form-row">
+              <span />
+              <div className={`trade-switch${draft.trading ? ' on' : ''}`}>
+                <label className="check">
+                  <input type="checkbox" checked={draft.trading} onChange={(e) => setDraft({ ...draft, trading: e.target.checked })} /> <b>Allow trading with this key</b>
+                </label>
+                <div className="muted">
+                  Lets the Order Ticket place and close orders on {draft.exchange || 'this exchange'}
+                  {draft.sandbox ? ' (testnet)' : ' with real funds'}. Every order is checked against your value cap and rate limit in the desktop process and logged. The key itself also needs trade permission on the exchange — never enable withdrawals.
+                </div>
+              </div>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button className="btn ghost" onClick={() => setDraft(null)}>
               Cancel
@@ -235,6 +257,8 @@ export function KeysModal({ onClose }: { onClose: () => void }) {
               <b>{r.label}</b>
               <span className="tag">{KIND_LABEL[r.kind]}</span>
               {r.exchange && <span className="tag">{r.exchange}</span>}
+              {r.meta.fields.sandbox === 'true' && <span className="tag">testnet</span>}
+              {r.kind === 'exchange' && <span className={`tag ${r.meta.fields.trading === 'enabled' ? 'tag-live' : ''}`}>{r.meta.fields.trading === 'enabled' ? 'trading on' : 'read-only'}</span>}
               <span style={{ flex: 1 }} />
               {r.kind === 'exchange' && isDesktop && (
                 <button className="chip" onClick={() => void test(r)}>
@@ -257,7 +281,7 @@ export function KeysModal({ onClose }: { onClose: () => void }) {
             </div>
             <div className="vault-fields">
               {Object.entries(r.meta.fields)
-                .filter(([k]) => k !== 'sandbox')
+                .filter(([k]) => !FLAGS.has(k))
                 .map(([k, v]) => (
                   <span key={k} className="vault-field">
                     <span className="muted">{FIELD_LABEL[k] ?? k}</span> <span className="mono">{v}</span>

@@ -1294,3 +1294,200 @@ ol.steps li.done::marker {
   content: '✓  ';
   color: var(--buy);
 }
+
+/* ---------- order ticket ---------- */
+.ticket-body {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ticket-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.ticket-head b {
+  font-size: 14px;
+}
+.side-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 3px;
+  border-radius: var(--radius);
+  background: var(--panel2);
+  border: 1px solid var(--border);
+}
+.side-toggle .side {
+  height: 30px;
+  border: 0;
+  border-radius: calc(var(--radius) - 3px);
+  background: transparent;
+  color: var(--muted);
+  font: 600 13px var(--sans);
+  cursor: pointer;
+}
+.side-toggle .side.buy.on {
+  background: var(--buy);
+  color: #fff;
+}
+.side-toggle .side.sell.on {
+  background: var(--sell);
+  color: #fff;
+}
+.ticket .chip-row {
+  margin-bottom: 0;
+}
+.ticket .chip-row.pct {
+  align-items: center;
+}
+.form-row.compact {
+  grid-template-columns: 64px 1fr;
+  gap: 8px;
+  margin-bottom: 0;
+  font-size: 12px;
+}
+.popover .form-row.compact {
+  grid-template-columns: 1fr 90px;
+  margin-bottom: 6px;
+}
+.input-with-chips {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.input-with-chips .ctl {
+  flex: 1;
+  min-width: 0;
+}
+.chip.unit {
+  min-width: 52px;
+  font-family: var(--mono);
+}
+.ticket-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+}
+.ticket-sum {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  font-size: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--panel2);
+  border: 1px solid var(--border);
+}
+.ticket-sum > :nth-child(odd) {
+  color: var(--muted);
+}
+.ticket-sum > :nth-child(even) {
+  text-align: right;
+}
+.btn.submit {
+  height: 36px;
+  font-size: 13px;
+  font-weight: 600;
+  width: 100%;
+}
+.btn.buy {
+  background: var(--buy);
+  border-color: var(--buy);
+  color: #fff;
+}
+.btn.sell {
+  background: var(--sell);
+  border-color: var(--sell);
+  color: #fff;
+}
+.ticket-hint,
+.ticket-result {
+  font-size: 11px;
+  line-height: 1.4;
+}
+.confirm-card {
+  border: 1px solid var(--border2);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--panel2);
+}
+.confirm-card.buy {
+  border-left-color: var(--buy);
+}
+.confirm-card.sell {
+  border-left-color: var(--sell);
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+.env-badge {
+  font: 700 10px var(--mono);
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid currentColor;
+}
+.env-badge.live {
+  color: var(--sell);
+}
+.env-badge.test {
+  color: var(--warn);
+}
+.log-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 11px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--row-line);
+  flex-wrap: wrap;
+}
+.log-msg {
+  flex-basis: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tag.status-placed,
+.tag.status-cancelled {
+  color: var(--buy);
+}
+.tag.status-rejected,
+.tag.status-error {
+  color: var(--sell);
+}
+.tag.tag-live {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+.trade-switch {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.trade-switch.on {
+  border-color: var(--warn);
+}
+.chip.danger {
+  color: var(--sell);
+}
+.panel-note {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--row-line);
+}

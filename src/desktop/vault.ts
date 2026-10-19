@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { desktop, type SecretInput, type SecretRecord } from './bridge';
 
 /**
@@ -58,7 +59,30 @@ export function maskValue(v: string): string {
   return `${v.slice(0, 4)}${'•'.repeat(Math.min(12, v.length - 8))}${v.slice(-4)}`;
 }
 
-const PUBLIC_FIELDS = new Set(['url', 'address', 'walletAddress', 'note', 'chatId']);
+const PUBLIC_FIELDS = new Set(['url', 'address', 'walletAddress', 'note', 'chatId', 'sandbox', 'trading']);
+
+const listeners = new Set<() => void>();
+const changed = () => listeners.forEach((fn) => fn());
+
+/** Stored keys, kept current when any panel or the Keys dialog saves or deletes one. */
+export function useVaultKeys(kind?: SecretRecord['kind']): SecretRecord[] | null {
+  const [items, setItems] = useState<SecretRecord[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      vault
+        .list()
+        .then((all) => alive && setItems(kind ? all.filter((k) => k.kind === kind) : all))
+        .catch(() => alive && setItems([]));
+    void load();
+    listeners.add(load);
+    return () => {
+      alive = false;
+      listeners.delete(load);
+    };
+  }, [kind]);
+  return items;
+}
 
 async function webDecrypt(db: IDBDatabase, rec: StoredWeb): Promise<Record<string, string>> {
   const key = await aesKey(db);
@@ -75,38 +99,18 @@ export const vault = {
   },
 
   async save(input: SecretInput): Promise<string> {
-    if (desktop) return desktop.vault.save(input);
-    const db = await idb();
-    const id = input.id ?? crypto.randomUUID();
-    const prevRec = input.id ? await tx<StoredWeb | undefined>(db, STORE, 'readonly', (s) => s.get(id) as IDBRequest<StoredWeb | undefined>) : undefined;
-    const fields: Record<string, string> = prevRec ? await webDecrypt(db, prevRec) : {};
-    for (const [k, v] of Object.entries(input.fields)) {
-      if (v === null) delete fields[k];
-      else if (v.length) fields[k] = v;
-    }
-    const key = await aesKey(db);
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(fields)));
-    const now = Date.now();
-    const rec: StoredWeb = {
-      id,
-      label: input.label || input.kind,
-      kind: input.kind,
-      exchange: input.exchange ?? null,
-      meta: { fields: Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, PUBLIC_FIELDS.has(k) ? v : maskValue(v)])) },
-      iv,
-      data,
-      created: prevRec?.created ?? now,
-      updated: now,
-    };
-    await tx(db, STORE, 'readwrite', (s) => s.put(rec));
+    const id = await saveRecord(input);
+    changed();
     return id;
   },
 
   async remove(id: string): Promise<void> {
-    if (desktop) return desktop.vault.remove(id);
-    const db = await idb();
-    await tx(db, STORE, 'readwrite', (s) => s.delete(id));
+    if (desktop) await desktop.vault.remove(id);
+    else {
+      const db = await idb();
+      await tx(db, STORE, 'readwrite', (s) => s.delete(id));
+    }
+    changed();
   },
 
   /** Copy one field to the clipboard without returning it to the UI. */
@@ -131,3 +135,32 @@ export const vault = {
     return webDecrypt(db, rec);
   },
 };
+
+async function saveRecord(input: SecretInput): Promise<string> {
+  if (desktop) return desktop.vault.save(input);
+  const db = await idb();
+  const id = input.id ?? crypto.randomUUID();
+  const prevRec = input.id ? await tx<StoredWeb | undefined>(db, STORE, 'readonly', (s) => s.get(id) as IDBRequest<StoredWeb | undefined>) : undefined;
+  const fields: Record<string, string> = prevRec ? await webDecrypt(db, prevRec) : {};
+  for (const [k, v] of Object.entries(input.fields)) {
+    if (v === null) delete fields[k];
+    else if (v.length) fields[k] = v;
+  }
+  const key = await aesKey(db);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(fields)));
+  const now = Date.now();
+  const rec: StoredWeb = {
+    id,
+    label: input.label || input.kind,
+    kind: input.kind,
+    exchange: input.exchange ?? null,
+    meta: { fields: Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, PUBLIC_FIELDS.has(k) ? v : maskValue(v)])) },
+    iv,
+    data,
+    created: prevRec?.created ?? now,
+    updated: now,
+  };
+  await tx(db, STORE, 'readwrite', (s) => s.put(rec));
+  return id;
+}

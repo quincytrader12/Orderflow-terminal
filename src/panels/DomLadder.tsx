@@ -3,6 +3,7 @@ import { fmtPrice, fmtTime, fmtVol } from '../core/format';
 import { bucket } from '../core/orderbook';
 import { RollingProfile } from '../core/rollingProfile';
 import { TIME_RANGES } from '../core/types';
+import { useTicket } from '../desktop/trading';
 import { hub } from '../market/hub';
 import { Canvas, font, line, type DrawContext } from '../ui/canvas';
 import { Chip, Select, Spacer, Toolbar, type PanelProps } from '../ui/controls';
@@ -24,6 +25,8 @@ const TICK_MULTS = [1, 2, 5, 10, 20, 50, 100];
 export function DomLadder({ config: c, setConfig }: PanelProps<DomConfig>) {
   const profile = useRef<RollingProfile | null>(null);
   const view = useRef({ center: NaN, auto: true });
+  // last drawn grid, so a click can be mapped back to a price
+  const grid = useRef({ top: NaN, tick: NaN, rowH: 17, headerH: 20, priceX: [0, 0] as [number, number] });
 
   const draw = ({ ctx, w, h, pal, now }: DrawContext) => {
     const feed = hub().primary;
@@ -105,6 +108,8 @@ export function DomLadder({ config: c, setConfig }: PanelProps<DomConfig>) {
         maxDelta = Math.max(maxDelta, Math.abs(l.buy - l.sell));
       }
     }
+
+    grid.current = { top: topPrice, tick, rowH, headerH, priceX: colX.price };
 
     // header
     ctx.fillStyle = pal.header;
@@ -252,7 +257,16 @@ export function DomLadder({ config: c, setConfig }: PanelProps<DomConfig>) {
       <Canvas
         draw={draw}
         fps={20}
-        cursor="default"
+        cursor="pointer"
+        onClick={(p) => {
+          // click a level: send its price to the Order Ticket (bid side → buy, ask side → sell)
+          const g = grid.current;
+          if (!isFinite(g.top) || p.y < g.headerH) return;
+          const r = Math.floor((p.y - g.headerH) / g.rowH);
+          const price = Number((g.top - r * g.tick).toPrecision(12));
+          const side = p.x < g.priceX[0] ? 'buy' : p.x > g.priceX[0] + g.priceX[1] ? 'sell' : undefined;
+          useTicket.getState().send(price, side);
+        }}
         onWheel={(e) => {
           const lp = hub().primary.lastPrice();
           const tick = baseTick(isFinite(lp) ? lp : 1) * c.tickMult;
