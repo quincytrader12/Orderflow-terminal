@@ -110,6 +110,16 @@ export interface Settings {
   telegramCommands: boolean;
   /** ask before sending each order from the ticket */
   confirmOrders: boolean;
+  /** scheduled Telegram reports (local time of this computer) */
+  telegramDaily: boolean;
+  telegramWeekly: boolean;
+  reportTime: string;
+  /** 0 = Sunday … 6 = Saturday */
+  reportWeekday: number;
+  lastDailyReport: string;
+  lastWeeklyReport: string;
+  /** instant Telegram notice when the primary data feed goes down / recovers */
+  telegramFeedAlerts: boolean;
   byodUrl: string;
   byodToken: string;
   backfillMinutes: number;
@@ -166,6 +176,13 @@ const initial: Settings = {
   telegramAlerts: true,
   telegramCommands: false,
   confirmOrders: true,
+  telegramDaily: true,
+  telegramWeekly: true,
+  reportTime: '16:00',
+  reportWeekday: 0,
+  lastDailyReport: '',
+  lastWeeklyReport: '',
+  telegramFeedAlerts: true,
   byodUrl: 'http://localhost:8080',
   byodToken: '',
   backfillMinutes: 30,

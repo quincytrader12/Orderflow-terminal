@@ -7,8 +7,9 @@ import { BotManager } from './amt/bots.mjs';
 import { CcxtService, listExchanges } from './ccxt-service.mjs';
 import { Db } from './db.mjs';
 import { connectPhantom } from './phantom.mjs';
-import { DEFAULT_RPC, recentActivity, tokenInfo, walletBalances } from '../src/shared/solana.ts';
-import { TelegramCommands, tgDetectChat, tgMe, tgSend } from '../src/shared/telegram.ts';
+import { DEFAULT_RPC, recentActivity, SOL_MINT, tokenInfo, walletBalances } from '../src/shared/solana.ts';
+import { TelegramCommands, tgDetectChat, tgMe, tgSendLong, tgSendPhoto } from '../src/shared/telegram.ts';
+import { reportData } from './reports.mjs';
 import { Vault } from './vault.mjs';
 
 // bundled to dist-electron/main.mjs; app root is one level up
@@ -227,8 +228,15 @@ function registerIpc() {
   });
   handle('telegram:send', (_e, id, html) => {
     const s = tg(id);
-    return tgSend(s.fields.token, s.fields.chatId, html);
+    return tgSendLong(s.fields.token, s.fields.chatId, html);
   });
+  handle('telegram:sendPhoto', (_e, id, png, caption) => {
+    const s = tg(id);
+    return tgSendPhoto(s.fields.token, s.fields.chatId, new Uint8Array(png), caption);
+  });
+  handle('report:data', (_e, kind, venue, symbol) =>
+    reportData({ db, vault, ccxt: ccxtSvc, wallets: { balances: walletBalances, tokenInfo }, defaultRpc: DEFAULT_RPC, solMint: SOL_MINT }, kind === 'weekly' ? 'weekly' : 'daily', { venue, symbol }),
+  );
   function startCommands(id) {
     const s = tg(id);
     if (!s.fields.chatId) throw new Error('detect the chat first');

@@ -54,6 +54,24 @@ CREATE TABLE IF NOT EXISTS orders_log (
   message TEXT
 );
 CREATE INDEX IF NOT EXISTS orders_log_t ON orders_log(t);
+CREATE TABLE IF NOT EXISTS amt_trades (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  bot_id TEXT NOT NULL,
+  bot_name TEXT,
+  symbol TEXT,
+  mode TEXT,
+  setup TEXT,
+  side TEXT,
+  entry REAL,
+  exit REAL,
+  qty REAL,
+  pnl REAL,
+  fees REAL,
+  opened INTEGER,
+  closed INTEGER NOT NULL,
+  reason TEXT
+);
+CREATE INDEX IF NOT EXISTS amt_trades_closed ON amt_trades(closed);
 `;
 
 export class Db {
@@ -161,6 +179,35 @@ export class Db {
   }
   orderLog(limit = 100) {
     return this.db.prepare('SELECT * FROM orders_log ORDER BY id DESC LIMIT ?').all(limit);
+  }
+
+  // ---- AMT bot trades (kept for reports after a bot stops) ----
+  recordAmtTrade(r) {
+    this.db
+      .prepare('INSERT INTO amt_trades (bot_id, bot_name, symbol, mode, setup, side, entry, exit, qty, pnl, fees, opened, closed, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(r.botId, r.botName ?? null, r.symbol ?? null, r.mode ?? null, r.setup ?? null, r.side ?? null, r.entry, r.exit, r.qty, r.pnl, r.fees ?? 0, r.opened ?? null, r.closed, r.reason ?? null);
+  }
+  amtTrades(from, to) {
+    return this.db.prepare('SELECT * FROM amt_trades WHERE closed >= ? AND closed <= ? ORDER BY closed').all(from, to);
+  }
+  orderLogBetween(from, to) {
+    return this.db.prepare('SELECT * FROM orders_log WHERE t >= ? AND t <= ? ORDER BY id').all(from, to);
+  }
+
+  /** Open/high/low/close and count of recorded trades in a window. */
+  tradeRange(venue, symbol, from, to) {
+    const r = this.db.prepare('SELECT COUNT(*) AS n, MIN(price) AS low, MAX(price) AS high, MIN(t) AS first, MAX(t) AS last FROM trades WHERE venue = ? AND symbol = ? AND t >= ? AND t <= ?').get(venue, symbol, from, to);
+    if (!r || !r.n) return null;
+    const px = (t) => this.db.prepare('SELECT price FROM trades WHERE venue = ? AND symbol = ? AND t = ? LIMIT 1').get(venue, symbol, t).price;
+    return { n: Number(r.n), low: r.low, high: r.high, first: r.first, last: r.last, open: px(r.first), close: px(r.last) };
+  }
+
+  /** Volume per price bin, aggregated in SQL so long windows stay cheap. */
+  volumeProfile(venue, symbol, from, to, bin) {
+    return this.db
+      .prepare('SELECT CAST(ROUND(price / ?) AS INTEGER) AS k, SUM(qty) AS v FROM trades WHERE venue = ? AND symbol = ? AND t >= ? AND t <= ? GROUP BY k')
+      .all(bin, venue, symbol, from, to)
+      .map((r) => [Number(r.k), r.v]);
   }
 
   info() {

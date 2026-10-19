@@ -1,6 +1,6 @@
 import { fmtDuration, fmtPct, fmtPrice, fmtUsd } from '../core/format';
 import { hub } from '../market/hub';
-import { escapeHtml, TelegramCommands, tgDetectChat, tgMe, tgSend } from '../shared/telegram';
+import { escapeHtml, TelegramCommands, tgDetectChat, tgMe, tgSendLong, tgSendPhoto } from '../shared/telegram';
 import { getSettings, useSettings } from '../store/settings';
 import { desktop } from './bridge';
 import { vault } from './vault';
@@ -33,7 +33,12 @@ export const telegram = {
   async send(id: string, html: string) {
     if (desktop) return desktop.telegram.send(id, html);
     const c = await webCreds(id);
-    return tgSend(c.token, c.chatId, html);
+    return tgSendLong(c.token, c.chatId, html);
+  },
+  async sendPhoto(id: string, png: Uint8Array, caption: string) {
+    if (desktop) return desktop.telegram.sendPhoto(id, png, caption);
+    const c = await webCreds(id);
+    return tgSendPhoto(c.token, c.chatId, png, caption);
   },
 };
 

@@ -11,8 +11,12 @@ export interface TelegramChat {
   title: string;
 }
 
-export async function tgApi<T = any>(token: string, method: string, params: Record<string, unknown> = {}, fetchImpl: FetchLike = fetch): Promise<T> {
+function checkToken(token: string) {
   if (!/^\d+:[\w-]{20,}$/.test(token)) throw new Error('That does not look like a bot token (expected 123456:ABC… from @BotFather)');
+}
+
+export async function tgApi<T = any>(token: string, method: string, params: Record<string, unknown> = {}, fetchImpl: FetchLike = fetch): Promise<T> {
+  checkToken(token);
   const res = await fetchImpl(`https://api.telegram.org/bot${token}/${method}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -45,6 +49,39 @@ export function escapeHtml(s: string) {
 export async function tgSend(token: string, chatId: string, html: string, fetchImpl?: FetchLike) {
   if (!chatId) throw new Error('No chat id yet — use “Detect chat” first');
   await tgApi(token, 'sendMessage', { chat_id: chatId, text: html, parse_mode: 'HTML', disable_web_page_preview: true }, fetchImpl);
+}
+
+/** Telegram caps messages at 4096 characters: split on line breaks. */
+export function splitHtml(html: string, max = 3800): string[] {
+  const out: string[] = [];
+  let cur = '';
+  for (const line of html.split('\n')) {
+    if (cur && cur.length + line.length + 1 > max) {
+      out.push(cur);
+      cur = '';
+    }
+    cur = cur ? `${cur}\n${line}` : line.slice(0, max);
+  }
+  if (cur.trim()) out.push(cur);
+  return out;
+}
+
+export async function tgSendLong(token: string, chatId: string, html: string, fetchImpl?: FetchLike) {
+  for (const part of splitHtml(html)) await tgSend(token, chatId, part, fetchImpl);
+}
+
+/** PNG with an HTML caption (captions are limited to 1024 characters). */
+export async function tgSendPhoto(token: string, chatId: string, png: Uint8Array, captionHtml: string, fetchImpl: FetchLike = fetch) {
+  checkToken(token);
+  if (!chatId) throw new Error('No chat id yet — use “Detect chat” first');
+  const form = new FormData();
+  form.append('chat_id', chatId);
+  form.append('caption', captionHtml.length > 1024 ? captionHtml.replace(/<[^>]+>/g, '').slice(0, 1020) + '…' : captionHtml);
+  if (captionHtml.length <= 1024) form.append('parse_mode', 'HTML');
+  form.append('photo', new Blob([png as BlobPart], { type: 'image/png' }), 'chart.png');
+  const res = await fetchImpl(`https://api.telegram.org/bot${token}/sendPhoto`, { method: 'POST', body: form });
+  const j = await res.json();
+  if (!j.ok) throw new Error(j.description ?? 'Telegram sendPhoto failed');
 }
 
 export const HELP_TEXT = '<b>Novus Ordo bot</b>\n/price — primary instrument price\n/status — price, funding, open interest and feeds\n/help — this message';

@@ -54,6 +54,7 @@ contextBridge.exposeInMainWorld('novus', {
     setLimits: (l) => call('trade:setLimits', l),
     log: (limit) => call('trade:log', limit),
   },
+  report: { data: (kind, venue, symbol) => call('report:data', kind, venue, symbol) },
   amt: {
     list: () => call('amt:list'),
     defaults: () => call('amt:defaults'),
@@ -92,6 +93,7 @@ contextBridge.exposeInMainWorld('novus', {
     me: (id) => call('telegram:me', id),
     detect: (id) => call('telegram:detect', id),
     send: (id, html) => call('telegram:send', id, html),
+    sendPhoto: (id, png, caption) => call('telegram:sendPhoto', id, png, caption),
     commands: (id) => call('telegram:commands', id),
     setStatus: (snap) => call('telegram:setStatus', snap),
   },

@@ -4,7 +4,7 @@
 // inspects the SQLite file to confirm keys are only stored encrypted.
 //
 //   npm run build && npm run build:main && xvfb-run -a node e2e/desktop.mjs
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -155,6 +155,32 @@ try {
   expect((await page.locator('text=Detect chat').count()) === 1, 'Telegram setup steps rendered');
   expect((await page.locator('input[placeholder^="Search stocks"]').count()) === 1, 'Yahoo Finance search rendered');
   await page.screenshot({ path: `${OUT}desktop-yahoo-telegram.png` });
+
+  step('Telegram reports: schedule and preview the daily report with its chart');
+  expect((await page.locator('.report-when input[type="time"]').inputValue()) === '16:00', 'daily report scheduled for 16:00 local time');
+  await page.click('button:text-is("Preview daily")');
+  await page.waitForSelector('.report-preview', { timeout: 30_000 });
+  const rep = await page.locator('.report-text').innerText();
+  expect(/Daily report/.test(rep) && /Auction \(value\)/.test(rep) && /AMT bots/.test(rep) && /Alerts/.test(rep), 'daily report has its sections');
+  expect(/VAH .* POC .* VAL/.test(rep), 'report includes value area levels');
+  const imgs = await page.locator('.report-preview img').count();
+  expect(imgs >= 1, `${imgs} chart image(s) rendered`);
+  const imgSrc = await page.locator('.report-preview img').first().evaluate(async (img) => {
+    await img.decode();
+    return { w: img.naturalWidth, h: img.naturalHeight };
+  });
+  expect(imgSrc.w === 2560 && imgSrc.h === 1440, `chart is ${imgSrc.w}×${imgSrc.h}`);
+  const chartB64 = await page.locator('.report-preview img').first().evaluate(async (img) => {
+    const buf = new Uint8Array(await (await fetch(img.src)).arrayBuffer());
+    let s = '';
+    for (const b of buf) s += String.fromCharCode(b);
+    return btoa(s);
+  });
+  writeFileSync(`${OUT}report-daily-chart.png`, Buffer.from(chartB64, 'base64'));
+  writeFileSync(`${OUT}report-daily.txt`, rep);
+  await page.click('button:text-is("Preview weekly")');
+  await page.waitForFunction(() => /Weekly overview/.test(document.querySelector('.report-text')?.textContent ?? ''), null, { timeout: 30_000 });
+  expect(true, 'weekly overview preview built');
 
   step('AMT scalper: create, backtest on recorded trades, switch on/off, kill switch');
   page.on('dialog', (d) => void d.accept());

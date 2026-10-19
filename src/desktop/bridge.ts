@@ -1,4 +1,5 @@
 import type { Kline } from '../core/types';
+import type { MainReportData, ReportKind } from '../shared/report';
 import type { TokenInfo, WalletActivity, WalletBalances } from '../shared/solana';
 
 /** Shapes returned by the desktop main process (electron/*.mjs). */
@@ -323,6 +324,7 @@ export interface NovusApi {
     setLimits(l: Partial<TradingLimits>): Promise<TradingLimits>;
     log(limit?: number): Promise<OrderLogRow[]>;
   };
+  report: { data(kind: ReportKind, venue?: string, symbol?: string): Promise<MainReportData> };
   amt: {
     list(): Promise<AmtBot[]>;
     defaults(): Promise<AmtParams>;
@@ -361,6 +363,7 @@ export interface NovusApi {
     me(id: string): Promise<{ username: string; name: string }>;
     detect(id: string): Promise<{ id: string; title: string }>;
     send(id: string, html: string): Promise<void>;
+    sendPhoto(id: string, png: Uint8Array, caption: string): Promise<void>;
     /** start answering commands for this bot key, or stop with null */
     commands(id: string | null): Promise<boolean>;
     setStatus(snap: { price: string; status: string }): Promise<void>;

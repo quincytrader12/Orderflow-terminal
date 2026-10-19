@@ -372,7 +372,7 @@ export class MarketHub {
         if (feed.adapter.backfillTrades && to - lastLocal > 60_000) {
           const gap = await feed.adapter.backfillTrades(feed.inst.symbol, lastLocal + 1, to, (p) => set({ progress: 0.5 + p / 2 }), ctrl.signal);
           trades = [...local, ...gap];
-          if (gap.length && s.recordTrades) void desktop.db.record(feed.inst.venue, feed.inst.symbol, gap.map((g) => ({ p: g.price, q: g.qty, s: g.side, t: g.time })));
+          if (gap.length && s.recordTrades && feed.inst.venue !== 'sim') void desktop.db.record(feed.inst.venue, feed.inst.symbol, gap.map((g) => ({ p: g.price, q: g.qty, s: g.side, t: g.time })));
         }
       } else if (s.historySource === 'byod') {
         trades = await byodTrades(s.byodUrl, s.byodToken, feed.inst.venue, feed.inst.symbol, from, to, (p) => set({ progress: p }), ctrl.signal);

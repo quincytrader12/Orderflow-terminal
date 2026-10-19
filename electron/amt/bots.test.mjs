@@ -89,6 +89,8 @@ describe('BotManager', () => {
     const status = sent.filter(([ch]) => ch === 'status').at(-1)[1];
     expect(status).toMatchObject({ running: true, mode: 'paper', feed: 'open' });
     expect(status.stats.trades).toBeGreaterThanOrEqual(1);
+    // closed trades are kept in the database for reports
+    expect(db.amtTrades(0, Number.MAX_SAFE_INTEGER)[0]).toMatchObject({ bot_id: id, bot_name: 'AMT BTC/USDT', mode: 'paper', setup: 'breakout' });
     await m.stop(id, { reason: 'test' });
     expect(ccxt.unsubscribe).toHaveBeenCalled();
     expect(m.list()[0].running).toBe(false);

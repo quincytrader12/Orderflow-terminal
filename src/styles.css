@@ -1718,3 +1718,41 @@ ol.steps li.done::marker {
 .chip.algo-kill.live {
   border-color: var(--sell);
 }
+
+/* ---------- Telegram reports ---------- */
+.report-when {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin: 6px 0 8px;
+}
+.report-when input[type='time'] {
+  width: 92px;
+}
+.report-preview {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  background: var(--panel2);
+}
+.report-text {
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.report-preview figure {
+  margin: 10px 0 0;
+}
+.report-preview img {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.report-preview figcaption {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+}

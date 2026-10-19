@@ -175,6 +175,14 @@ export class BotManager {
     } else {
       const last = e?.trades[e.trades.length - 1];
       const pnl = last ? last.pnl : 0;
+      const cfg = this.running.get(id)?.cfg;
+      if (last && cfg) {
+        try {
+          this.db.recordAmtTrade({ ...last, botId: id, botName: cfg.name, symbol: cfg.symbol, mode: cfg.mode });
+        } catch (err) {
+          console.warn('amt trade log', err?.message ?? err);
+        }
+      }
       this.event(id, 'exit', `EXIT ${intent.reason} @ ${tidy(price)} · ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USD`, { ...intent, price, pnl });
     }
   }
