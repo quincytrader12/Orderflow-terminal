@@ -1,10 +1,9 @@
 // Novus Ordo desktop shell (Electron main process).
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, shell } from 'electron';
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BotManager } from './amt/bots.mjs';
-import { CcxtService, listExchanges } from './ccxt-service.mjs';
 import { Db } from './db.mjs';
 import { connectPhantom } from './phantom.mjs';
 import { DEFAULT_RPC, recentActivity, SOL_MINT, tokenInfo, walletBalances } from '../src/shared/solana.ts';
@@ -13,6 +12,7 @@ import { reportData } from './reports.mjs';
 import { AttemptGate, isLedgerRecord, ledgerMatches, makeLedger, PUBLIC_CHANNELS } from '../src/shared/ledger.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { Vault } from './vault.mjs';
+import { initLog, log, logFile } from './log.mjs';
 
 // bundled to dist-electron/main.mjs; app root is one level up
 const here = dirname(fileURLToPath(import.meta.url));
@@ -22,13 +22,46 @@ const DAY = 86_400_000;
 // NOVUS_USER_DATA relocates the database, vault and settings (tests, portable installs)
 if (process.env.NOVUS_USER_DATA) app.setPath('userData', process.env.NOVUS_USER_DATA);
 
-if (!app.requestSingleInstanceLock()) app.quit();
+const userDataDir = app.getPath('userData');
+initLog(join(userDataDir, 'logs'));
+log('info', `starting Novus Ordo ${app.getVersion()} on ${process.platform} ${process.arch}, electron ${process.versions.electron}`);
+process.on('uncaughtException', (e) => log('error', 'uncaught exception', e));
+process.on('unhandledRejection', (e) => log('error', 'unhandled rejection', e instanceof Error ? e : String(e)));
+
+// Safe mode: no GPU acceleration. Turned on automatically when the GPU process
+// crashes or the window stays blank, or by starting with --safe-mode.
+const SAFE_FLAG = join(userDataDir, 'safe-mode.json');
+const safeMode = process.argv.includes('--safe-mode') || process.env.NOVUS_SAFE_MODE === '1' || existsSync(SAFE_FLAG);
+if (safeMode) {
+  app.disableHardwareAcceleration();
+  log('warn', 'safe mode: hardware acceleration disabled');
+}
+
+/** Restart once in safe mode (portable builds relaunch the portable exe itself). */
+function relaunchSafe(reason) {
+  if (safeMode) return;
+  log('warn', `relaunching in safe mode: ${reason}`);
+  try {
+    writeFileSync(SAFE_FLAG, JSON.stringify({ reason, at: new Date().toISOString() }));
+  } catch (e) {
+    log('error', 'could not write safe-mode flag', e);
+  }
+  const portable = process.env.PORTABLE_EXECUTABLE_FILE;
+  app.relaunch(portable ? { execPath: portable, args: [] } : undefined);
+  app.exit(0);
+}
+
+if (!app.requestSingleInstanceLock()) {
+  log('info', 'another instance is already running — handing over to it');
+  app.quit();
+}
 
 let win = null;
 let db;
 let vault;
 let ccxtSvc;
 let bots;
+let services = null;
 
 function createWindow() {
   win = new BrowserWindow({
@@ -37,7 +70,9 @@ function createWindow() {
     minWidth: 960,
     minHeight: 600,
     title: 'Novus Ordo — by Quincy Gininda',
-    backgroundColor: '#4b5058',
+    // black like the lock screen, and only shown once the first frame is painted
+    backgroundColor: '#000000',
+    show: false,
     icon: join(root, 'build', 'icon.png'),
     autoHideMenuBar: true,
     webPreferences: {
@@ -58,12 +93,60 @@ function createWindow() {
       if (/^https?:\/\//.test(url)) void shell.openExternal(url);
     }
   });
+  const w = win;
+  const reveal = () => {
+    if (!w.isDestroyed() && !w.isVisible()) {
+      w.show();
+      log('info', 'window shown');
+    }
+  };
+  w.once('ready-to-show', reveal);
+  setTimeout(reveal, 5000);
+  const wc = w.webContents;
+  wc.on('did-finish-load', () => {
+    log('info', 'page loaded');
+    // a window that is still one flat colour after 15 s is not rendering: retry without the GPU
+    setTimeout(() => void checkBlank(w), 15_000);
+  });
+  wc.on('did-fail-load', (_e, code, desc, url) => log('error', `page failed to load (${code} ${desc}) ${url}`));
+  wc.on('render-process-gone', (_e, d) => {
+    log('error', `window renderer gone: ${d.reason} (exit ${d.exitCode})`);
+    if (d.reason !== 'clean-exit' && !w.isDestroyed()) {
+      if ((w.__crashes = (w.__crashes ?? 0) + 1) <= 1) wc.reload();
+      else relaunchSafe(`renderer ${d.reason}`);
+    }
+  });
+  wc.on('unresponsive', () => log('warn', 'window unresponsive'));
+  wc.on('responsive', () => log('info', 'window responsive again'));
+  wc.on('console-message', (e) => {
+    const level = e.level ?? e.params?.level;
+    if (level === 'error' || level === 3) log('error', `renderer: ${e.message ?? e.params?.message} (${e.sourceId ?? ''}:${e.lineNumber ?? ''})`);
+  });
   if (process.env.VITE_DEV_SERVER_URL) void win.loadURL(process.env.VITE_DEV_SERVER_URL);
-  else void win.loadFile(join(root, 'dist', 'index.html'));
+  else void win.loadFile(join(root, 'dist', 'index.html')).catch((e) => log('error', 'loadFile failed', e));
   win.on('closed', () => {
     win = null;
     ccxtSvc?.closeAll();
   });
+}
+
+/** Sample the window; a uniform image means nothing is being drawn. */
+async function checkBlank(w) {
+  if (safeMode || w.isDestroyed() || !w.isVisible() || w.isMinimized()) return;
+  try {
+    const img = await w.webContents.capturePage();
+    const small = img.isEmpty() ? null : img.resize({ width: 48, height: 30 }).toBitmap();
+    let distinct = 0;
+    if (small) {
+      const seen = new Set();
+      for (let i = 0; i < small.length; i += 4) seen.add((small[i] << 16) | (small[i + 1] << 8) | small[i + 2]);
+      distinct = seen.size;
+    }
+    log('info', `render check: ${img.isEmpty() ? 'empty capture' : `${distinct} colours`}`);
+    if (!small || distinct <= 2) relaunchSafe('window stayed blank');
+  } catch (e) {
+    log('warn', 'render check failed', e);
+  }
 }
 
 const httpsOnly = (url) => {
@@ -86,13 +169,19 @@ const ledgerRecord = () => {
   return isLedgerRecord(r) ? r : undefined;
 };
 
+// channels that need the exchange services, which load after the window is up
+const NEEDS_SERVICES = /^(ccxt|trade|amt|report):|^vault:test$/;
+
 function registerIpc() {
   const handle = (ch, fn) =>
     ipcMain.handle(ch, async (e, ...args) => {
       try {
         if (!unlocked && !PUBLIC_CHANNELS.has(ch)) throw new Error('Terminal is sealed — enter the ledger key');
+        if (NEEDS_SERVICES.test(ch)) await services;
         return { ok: true, value: await fn(e, ...args) };
       } catch (err) {
+        // market-data requests retry on their own; log the rest
+        if (!/sealed|ACCESS DENIED|LOCKED OUT/.test(String(err?.message)) && !/^net:|^ccxt:(ohlcv|ticker|tickers|markets)$/.test(ch)) log('warn', `${ch}: ${err?.message ?? err}`);
         return { ok: false, error: String(err?.message ?? err) };
       }
     });
@@ -106,6 +195,7 @@ function registerIpc() {
     retentionDays: retentionDays(),
   }));
   handle('app:locked', () => !unlocked);
+  handle('app:log', () => logFile());
   handle('app:unlock', async (_e, code) => {
     attempts.check();
     const ok = await ledgerMatches(String(code ?? ''), sha256Hex, ledgerRecord());
@@ -156,12 +246,12 @@ function registerIpc() {
   handle('vault:save', (_e, rec) => {
     guardKey(rec?.id);
     const id = vault.save(rec);
-    ccxtSvc.invalidate(id);
+    ccxtSvc?.invalidate(id);
     return id;
   });
   handle('vault:remove', (_e, id) => {
     guardKey(id);
-    ccxtSvc.invalidate(id);
+    ccxtSvc?.invalidate(id);
     return vault.remove(id);
   });
   handle('vault:copy', (_e, id, field) => {
@@ -176,7 +266,11 @@ function registerIpc() {
 
   // ccxt
   let exchangesCache = null;
-  handle('ccxt:exchanges', () => (exchangesCache ??= listExchanges()));
+  handle('ccxt:exchanges', async () => {
+    const { listExchanges } = await import('./ccxt-service.mjs');
+    exchangesCache ??= listExchanges({ get: () => db.get('ccxtExchanges'), set: (v) => db.set('ccxtExchanges', v) });
+    return exchangesCache;
+  });
   handle('ccxt:markets', (_e, id) => ccxtSvc.markets(id));
   handle('ccxt:ohlcv', (_e, id, symbol, tf, limit) => ccxtSvc.ohlcv(id, symbol, tf, limit));
   handle('ccxt:tickers', (_e, id) => ccxtSvc.tickers(id));
@@ -302,35 +396,88 @@ function registerIpc() {
 }
 
 app.whenReady().then(() => {
-  const userData = app.getPath('userData');
-  db = new Db(join(userData, 'novus-ordo.sqlite'));
-  vault = new Vault(db, safeStorage, join(userData, 'vault.key'));
-  ccxtSvc = new CcxtService(vault, { db });
-  bots = new BotManager({
-    ccxt: ccxtSvc,
-    db,
-    emit: (ch, payload) => {
-      for (const w of BrowserWindow.getAllWindows()) if (!w.webContents.isDestroyed()) w.webContents.send(`amt:${ch}`, payload);
-    },
-  });
-  db.pruneTrades(Date.now() - retentionDays() * DAY);
-  setInterval(() => db.pruneTrades(Date.now() - retentionDays() * DAY), 3_600_000);
+  log('info', 'electron ready');
+  try {
+    db = new Db(join(userDataDir, 'novus-ordo.sqlite'));
+    vault = new Vault(db, safeStorage, join(userDataDir, 'vault.key'));
+  } catch (e) {
+    log('error', 'could not open the database', e);
+    dialog.showErrorBox('Novus Ordo could not start', `The database in ${userDataDir} could not be opened:\n\n${e?.message ?? e}\n\nLog: ${logFile()}`);
+    app.exit(1);
+    return;
+  }
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
       { role: 'editMenu' },
       { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' }] },
       { role: 'windowMenu' },
+      {
+        label: 'Help',
+        submenu: [
+          { label: 'Open log folder', click: () => void shell.openPath(join(userDataDir, 'logs')) },
+          {
+            label: safeMode ? 'Leave safe mode (use the GPU again)' : 'Restart in safe mode (no GPU)',
+            click: () => {
+              if (safeMode) {
+                rmSync(SAFE_FLAG, { force: true });
+                const portable = process.env.PORTABLE_EXECUTABLE_FILE;
+                app.relaunch(portable ? { execPath: portable, args: [] } : { args: process.argv.slice(1).filter((a) => a !== '--safe-mode') });
+                app.exit(0);
+              } else relaunchSafe('chosen in the Help menu');
+            },
+          },
+        ],
+      },
     ]),
   );
   registerIpc();
+  // the window first, everything heavy after it
   createWindow();
+  log('info', 'window created');
+  services = import('./ccxt-service.mjs')
+    .then(async (m) => {
+      await m.loadCcxt();
+      ccxtSvc = new m.CcxtService(vault, { db });
+      bots = new BotManager({
+        ccxt: ccxtSvc,
+        db,
+        emit: (ch, payload) => {
+          for (const w of BrowserWindow.getAllWindows()) if (!w.webContents.isDestroyed()) w.webContents.send(`amt:${ch}`, payload);
+        },
+      });
+      log('info', 'exchange services ready');
+    })
+    .catch((e) => {
+      log('error', 'exchange services failed to load', e);
+      throw e;
+    });
+  // housekeeping once the app is up
+  const prune = () => {
+    try {
+      const n = db.pruneTrades(Date.now() - retentionDays() * DAY);
+      if (n) log('info', `pruned ${n} old trades`);
+    } catch (e) {
+      log('warn', 'prune failed', e);
+    }
+  };
+  setTimeout(prune, 20_000);
+  setInterval(prune, 3_600_000);
   app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
 
+app.on('child-process-gone', (_e, d) => {
+  log('error', `${d.type} process gone: ${d.reason} (exit ${d.exitCode})`);
+  if (d.type === 'GPU' && d.reason !== 'clean-exit') relaunchSafe(`GPU process ${d.reason}`);
+});
+
 app.on('second-instance', () => {
-  if (win) {
+  log('info', 'second launch — focusing the open window');
+  if (!app.isReady()) return;
+  if (!win || win.isDestroyed()) createWindow();
+  else {
     if (win.isMinimized()) win.restore();
+    if (!win.isVisible()) win.show();
     win.focus();
   }
 });

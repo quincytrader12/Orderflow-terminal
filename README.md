@@ -41,8 +41,16 @@ Novus Ordo ships as a desktop app built with Electron. The desktop app adds:
 
 ### Get the .exe
 
-- **Portable**: `NovusOrdo-<version>-portable.exe` — double-click to run, nothing to install.
-- **Installer**: `NovusOrdo-<version>-setup.exe` — installs with Start-menu shortcut.
+- **Zip (fastest start)**: `NovusOrdo-<version>-win-x64.zip`. Extract it once, for example to `C:\Novus Ordo` (not inside the zip viewer), then run `Novus Ordo.exe`. It opens in a couple of seconds; pin it to the taskbar.
+- **Installer**: `NovusOrdo-<version>-setup.exe` installs it with a Start-menu shortcut and starts just as fast. It is built on Windows (see below).
+- **Portable**: `NovusOrdo-<version>-portable.exe` is a single file, but it unpacks the whole app (~350 MB) into a temp folder on **every** launch. With Windows Defender scanning, that can take 20–60 s before the window appears.
+
+**If it won't open properly:**
+
+- The window starts black (the lock screen) and should show the emblem within a few seconds.
+- If it stays blank because of a graphics-driver problem, the app notices and restarts itself in **safe mode** (no GPU acceleration). You can also choose **Help → Restart in safe mode**, or start it with `--safe-mode`.
+- **Help → Open log folder** shows `novus.log`, with startup timings and any errors. Send that file when reporting a problem.
+- Clicking the icon again while it is starting does not open a second copy; it brings the running window to the front.
 
 Build them yourself on Windows with `npm ci && npm run dist:win` (outputs to `release/`), or run the **Desktop app** GitHub Actions workflow (Actions → Desktop app → Run workflow, or push a `v*` tag) which builds Windows, macOS and Linux packages and attaches them as artifacts. Builds are unsigned, so Windows SmartScreen shows *More info → Run anyway* the first time.
 

@@ -23,7 +23,7 @@
     "dist:mac": "npm run build && npm run build:main && electron-builder --mac dmg",
     "dist:linux": "npm run build && npm run build:main && electron-builder --linux AppImage",
     "e2e:desktop": "npm run build && npm run build:main && node e2e/desktop.mjs",
-    "dist:win:local": "npm run build && npm run build:main && electron-builder --win dir --x64 -c.win.signAndEditExecutable=false && node scripts/set-exe-icon.mjs && electron-builder --win portable --x64 --prepackaged release/win-unpacked -c.win.signAndEditExecutable=false"
+    "dist:win:local": "npm run build && npm run build:main && electron-builder --win dir --x64 -c.win.signAndEditExecutable=false && node scripts/set-exe-icon.mjs && electron-builder --win portable zip --x64 --prepackaged release/win-unpacked -c.win.signAndEditExecutable=false"
   },
   "engines": {
     "node": ">=22"
@@ -68,6 +68,7 @@
       "package.json",
       "!node_modules/bufferutil/**",
       "!node_modules/utf-8-validate/**",
+      "!node_modules/ccxt/dist/**",
       "!**/*.map",
       "!**/*.d.ts",
       "!**/*.md"
@@ -76,9 +77,11 @@
     "win": {
       "target": [
         "portable",
-        "nsis"
+        "nsis",
+        "zip"
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "artifactName": "NovusOrdo-${version}-win-${arch}.${ext}"
     },
     "portable": {
       "artifactName": "NovusOrdo-${version}-portable.exe"
@@ -99,6 +102,9 @@
       "category": "Finance",
       "icon": "build/icon.png"
     },
-    "npmRebuild": false
+    "npmRebuild": false,
+    "electronLanguages": [
+      "en-US"
+    ]
   }
 }

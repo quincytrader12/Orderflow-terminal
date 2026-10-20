@@ -2,30 +2,48 @@
 // WebSockets with REST polling fallback) and private account endpoints that
 // use API keys from the vault. Runs in the Electron main process so there are
 // no CORS limits and keys never reach the renderer.
-import ccxt from 'ccxt';
 import { buildOrder, closeOrderFor, RateGate, sanitizeLimits, USD_QUOTES } from './trading.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const BOOK_DEPTH = 500;
 
-export function listExchanges() {
-  return ccxt.exchanges.map((id) => {
+// CCXT is large (100+ exchanges, ~1,000 files): load it after the window is up
+let ccxt = null;
+export async function loadCcxt() {
+  ccxt ??= (await import('ccxt')).default;
+  return ccxt;
+}
+
+/**
+ * Name, websocket support and required credentials for every exchange.
+ * Building it constructs each exchange once, so it yields between them to
+ * keep the app responsive, and is cached per CCXT version.
+ */
+export async function listExchanges(cache) {
+  const lib = await loadCcxt();
+  const hit = cache?.get();
+  if (hit?.version === lib.version && Array.isArray(hit.list)) return hit.list;
+  const out = [];
+  for (const id of lib.exchanges) {
     let name = id;
     let pro = false;
     let requiredCredentials = {};
     try {
-      const ex = new ccxt[id]();
+      const ex = new lib[id]();
       name = ex.name ?? id;
       requiredCredentials = ex.requiredCredentials ?? {};
-      pro = Boolean(ccxt.pro[id]);
+      pro = Boolean(lib.pro[id]);
     } catch {
       /* exchange failed to construct */
     }
     const creds = Object.entries(requiredCredentials)
       .filter(([, v]) => v)
       .map(([k]) => k);
-    return { id, name, pro, credentials: creds };
-  });
+    out.push({ id, name, pro, credentials: creds });
+    if (out.length % 8 === 0) await new Promise((r) => setImmediate(r));
+  }
+  cache?.set({ version: lib.version, list: out });
+  return out;
 }
 
 /** CCXT credential field names come straight from the vault record. */
@@ -44,7 +62,9 @@ export class CcxtService {
   constructor(vault, opts = {}) {
     this.vault = vault;
     this.db = opts.db ?? null;
+    // call loadCcxt() before constructing (tests pass a fake lib)
     this.lib = opts.lib ?? ccxt;
+    if (!this.lib) throw new Error('CCXT not loaded yet');
     this.publicCache = new Map();
     this.privateCache = new Map();
     this.streams = new Map();

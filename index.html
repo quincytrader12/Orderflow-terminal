@@ -7,6 +7,36 @@
     <link rel="icon" type="image/png" href="./favicon.png" />
     <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
     <title>Novus Ordo — by Quincy Gininda</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #000;
+      }
+    </style>
+    <script>
+      // if the app script itself fails to load or run, say so instead of showing a blank window
+      (function () {
+        var errors = [];
+        function show() {
+          var root = document.getElementById('root');
+          if (!root || root.firstChild || !errors.length) return;
+          root.innerHTML =
+            '<div style="color:#c9cdd3;font:14px/1.6 system-ui,sans-serif;padding:48px;max-width:760px">' +
+            '<b style="color:#fff">Novus Ordo failed to start.</b><br>' +
+            errors.join('<br>').replace(/</g, '&lt;') +
+            '<br><br>Press Ctrl+R to retry, or use Help → Open log folder and send novus.log.</div>';
+        }
+        window.addEventListener('error', function (e) {
+          errors.push(String(e.message || (e.target && e.target.src ? 'could not load ' + e.target.src : 'unknown error')));
+          setTimeout(show, 0);
+        }, true);
+        window.addEventListener('unhandledrejection', function (e) {
+          errors.push(String((e.reason && e.reason.message) || e.reason));
+          setTimeout(show, 2000);
+        });
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
