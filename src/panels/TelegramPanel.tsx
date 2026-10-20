@@ -4,6 +4,7 @@ import { buildReport, localTz, sendReport, type BuiltReport } from '../desktop/r
 import { statusSnapshot, telegram } from '../desktop/telegram';
 import type { ReportKind } from '../shared/report';
 import { vault } from '../desktop/vault';
+import { openConnections } from '../app/connect';
 import { useSettings } from '../store/settings';
 import { Check, Select, Spacer, Toolbar, type PanelProps } from '../ui/controls';
 
@@ -83,7 +84,10 @@ export function TelegramPanel(_: PanelProps<TelegramConfig>) {
       <div className="scroll" style={{ padding: 10 }}>
         <ol className="steps">
           <li className={bot ? 'done' : ''}>
-            In Telegram, message <b>@BotFather</b> → <span className="mono">/newbot</span> and copy the token. Add it in <b>🔑 Keys → + Telegram bot</b>.
+            In Telegram, message <b>@BotFather</b> → <span className="mono">/newbot</span> and copy the token. Add it in{' '}
+            <button className="chip" onClick={openConnections}>
+              🔌 Connect → Telegram bot
+            </button>
           </li>
           <li className={chatId ? 'done' : ''}>
             Open your bot in Telegram and press <b>Start</b>, then{' '}

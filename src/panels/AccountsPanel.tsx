@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { fmtNum, fmtPrice, fmtTime, fmtUsd } from '../core/format';
 import { desktop, DesktopOnlyError, type AccountSnapshot } from '../desktop/bridge';
 import { useVaultKeys } from '../desktop/vault';
+import { openConnections } from '../app/connect';
 import { hub } from '../market/hub';
 import { Chip, Empty, Select, Spacer, Toolbar, type PanelProps } from '../ui/controls';
 
@@ -106,7 +107,14 @@ export function AccountsPanel({ config: c, setConfig }: PanelProps<AccountsConfi
       {note && <div className={`panel-note ${note.ok ? 'up' : 'down'}`}>{note.text}</div>}
       <div className="scroll">
         {!keys.length ? (
-          <Empty>Add an exchange API key in 🔑 Keys (top bar) to see balances, positions and orders through CCXT.</Empty>
+          <Empty>
+            Connect an exchange (Binance, Coinbase, Bybit, OKX…) to see balances, positions and orders.
+            <div style={{ marginTop: 10 }}>
+              <button className="btn" onClick={openConnections}>
+                🔌 Connect an exchange
+              </button>
+            </div>
+          </Empty>
         ) : err ? (
           <Empty>{err}</Empty>
         ) : !data ? (

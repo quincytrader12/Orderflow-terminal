@@ -213,9 +213,7 @@ function SafeModeChip() {
   );
 }
 
-export function TopBar({ onOpen, onFocusChart, alertCount }: { onOpen: (m: ModalKind) => void; onFocusChart: () => void; alertCount: number }) {
-  const locked = useSettings((s) => s.layoutLocked);
-  const setS = useSettings((s) => s.set);
+export function TopBar({ onOpen, onFocusChart, onOpenPanel, alertCount, editing, onEdit }: { onOpen: (m: ModalKind) => void; onFocusChart: () => void; onOpenPanel: (component: string) => void; alertCount: number; editing: boolean; onEdit: () => void }) {
   useTicker(500);
   useHubVersion();
   const showFps = useSettings((s) => s.showFps);
@@ -256,8 +254,11 @@ export function TopBar({ onOpen, onFocusChart, alertCount }: { onOpen: (m: Modal
       <div style={{ flex: 1 }} />
       <SafeModeChip />
       <AlgoKill />
-      <button className="chip" onClick={() => onOpen('keys')} title="API key vault">
-        🔑 <span className="lbl">Keys</span>
+      <button className="chip primary-chip" onClick={() => onOpenPanel('amt')} title="AMT trading bots: scalp and intraday, paper or live, backtests">
+        🤖 <span className="lbl keep">Bots</span>
+      </button>
+      <button className="chip primary-chip" onClick={() => onOpen('keys')} title="Connections: exchange API keys (Binance, Coinbase…), Telegram bot, Solana RPC">
+        🔌 <span className="lbl keep">Connect</span>
       </button>
       <button className="chip" onClick={() => onOpen('add')} title="Add a panel">
         + <span className="lbl">Panel</span>
@@ -265,8 +266,8 @@ export function TopBar({ onOpen, onFocusChart, alertCount }: { onOpen: (m: Modal
       <button className="chip" onClick={onFocusChart} title="Maximise the main chart (click again to restore)">
         ⤢ <span className="lbl">Chart</span>
       </button>
-      <button className={`chip ${locked ? 'locked' : ''}`} onClick={() => setS({ layoutLocked: !locked })} title={locked ? 'Layout locked — click to unlock' : 'Lock the layout (splits stay resizable)'}>
-        {locked ? '🔒' : '🔓'}
+      <button className={`chip primary-chip${editing ? ' active' : ''}`} onClick={onEdit} title={editing ? 'Finish editing the layout' : 'Edit layout: move, split, add and close panels'}>
+        ✎ <span className="lbl keep">{editing ? 'Done' : 'Edit layout'}</span>
       </button>
       <button className="chip" onClick={() => onOpen('layouts')} title="Layout gallery & saved layouts">
         ▦ <span className="lbl">Layouts</span>

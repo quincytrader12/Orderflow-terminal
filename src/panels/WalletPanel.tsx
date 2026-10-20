@@ -120,7 +120,7 @@ export function WalletPanel({ config: c, setConfig }: PanelProps<WalletConfig>) 
           value={c.rpcSecretId}
           options={[{ value: '', label: 'Public RPC' }, ...rpcs.map((r) => ({ value: r.id, label: r.label }))]}
           onChange={(rpcSecretId) => setConfig({ rpcSecretId })}
-          title="Solana RPC (add a private one in 🔑 Keys)"
+          title="Solana RPC (add a private one in 🔌 Connect)"
           width={110}
         />
         <Spacer />
@@ -275,7 +275,7 @@ export function WalletPanel({ config: c, setConfig }: PanelProps<WalletConfig>) 
           )}
           <div className="empty" style={{ textAlign: 'left', padding: '8px 10px' }}>
             Read-only: Novus Ordo stores only your public address. Prices from Jupiter; balances from{' '}
-            {c.rpcSecretId ? 'your RPC' : 'the public Solana RPC (rate-limited — add your own in 🔑 Keys)'}.
+            {c.rpcSecretId ? 'your RPC' : 'the public Solana RPC (rate-limited — add your own in 🔌 Connect)'}.
           </div>
         </div>
       )}

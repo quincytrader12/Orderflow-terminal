@@ -102,7 +102,6 @@ export interface Settings {
   /** desktop: record trades into the local database */
   recordTrades: boolean;
   recordScope: 'primary' | 'aggregate';
-  layoutLocked: boolean;
   wallets: SavedWallet[];
   /** Telegram bot (vault key id), alert forwarding and command replies */
   telegramSecretId: string;
@@ -170,7 +169,6 @@ const initial: Settings = {
   ccxtQuote: 'USDT',
   recordTrades: true,
   recordScope: 'primary',
-  layoutLocked: false,
   wallets: [],
   telegramSecretId: '',
   telegramAlerts: true,

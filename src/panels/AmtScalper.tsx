@@ -399,7 +399,7 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
           </datalist>
         </label>
       </div>
-      {d.mode === 'live' && key && key.meta.fields.trading !== 'enabled' && <div className="down amt-warn">This key is read-only. Tick “Allow trading” on it in 🔑 Keys before starting a live bot.</div>}
+      {d.mode === 'live' && key && key.meta.fields.trading !== 'enabled' && <div className="down amt-warn">This key is read-only. Tick “Allow trading” on it in 🔌 Connect before starting a live bot.</div>}
       {d.mode === 'live' && (
         <Check checked={d.exchangeStop} onChange={(exchangeStop) => setD({ ...d, exchangeStop })}>
           Place a protective stop on the exchange for each derivatives position (survives the app closing)

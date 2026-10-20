@@ -91,8 +91,11 @@ try {
   await page.selectOption('select[title="Primary venue"]', 'sim');
 
   step('key vault through the UI');
-  await page.click('button[title="API key vault"]');
-  await page.click('text=+ Exchange (CCXT)');
+  await page.click('button[title^="Connections"]');
+  expect((await page.locator('.quick-tile').count()) >= 10, 'quick-connect tiles for exchanges and Telegram');
+  await page.screenshot({ path: `${OUT}desktop-connections.png` });
+  await page.click('.quick-tile[title="Connect Binance"]');
+  expect(/API Management/.test(await page.locator('.key-guide').innerText()), 'Binance key guide shown');
   const exInput = page.locator('input[list="ccxt-exchanges"]');
   await exInput.fill('binance');
   await exInput.blur();
@@ -107,6 +110,8 @@ try {
   expect(!rowText.includes(SECRET), 'secret not shown in the UI');
   const listed = await page.evaluate(() => window.novus.vault.list());
   expect(!JSON.stringify(listed).includes(SECRET), 'secret not returned to the renderer');
+  expect((await page.locator('.quick-next button:has-text("Open Accounts")').count()) === 1, 'offers the Accounts panel after saving');
+  expect(/read-only/.test(await page.locator('.quick-tile[title^="Edit Main"]').innerText()), 'Binance tile shows the saved key');
   await page.screenshot({ path: `${OUT}desktop-keys.png` });
   await page.click('.modal header .x');
 
@@ -133,7 +138,7 @@ try {
   await page.screenshot({ path: `${OUT}desktop-ticket.png` });
 
   step('allow trading on the key through the UI');
-  await page.click('button[title="API key vault"]');
+  await page.click('button[title^="Connections"]');
   await page.click('.vault-row button:text-is("Edit")');
   await page.check('.trade-switch input[type="checkbox"]');
   await page.click('text=Save encrypted');
@@ -266,9 +271,13 @@ try {
   const bots = await page.evaluate(() => window.novus.amt.list());
   expect(bots.length === 1 && !bots[0].running, 'top-bar kill switch stopped the bot');
 
-  step('layout lock and focus');
-  await page.click('button[title^="Lock the layout"]');
-  expect((await page.locator('button.chip.locked').count()) === 1, 'layout locked');
+  step('layout edit mode and focus');
+  await page.click('button[title^="Edit layout"]');
+  await page.waitForSelector('.edit-bar');
+  expect((await page.locator('.app.editing').count()) === 1, 'edit mode on');
+  await page.screenshot({ path: `${OUT}desktop-edit-layout.png` });
+  await page.click('.edit-bar button:text-is("Done")');
+  expect((await page.locator('.edit-bar').count()) === 0, 'edit mode off');
   await page.click('button[title^="Maximise the main chart"]');
   await page.waitForTimeout(800);
   expect((await page.locator('.flexlayout__tabset-maximized').count()) === 1, 'chart maximised');

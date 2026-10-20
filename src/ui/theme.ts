@@ -19,6 +19,10 @@ export interface Palette {
   sell: string;
   buyRgb: RGB;
   sellRgb: RGB;
+  textRgb: RGB;
+  accentRgb: RGB;
+  warnRgb: RGB;
+  pocRgb: RGB;
   accent: string;
   warn: string;
   poc: string;
@@ -142,6 +146,10 @@ function build(s: Spec): ThemeDef {
       sell: s.sell,
       buyRgb: hexRgb(s.buy),
       sellRgb: hexRgb(s.sell),
+      textRgb: hexRgb(s.text),
+      accentRgb: hexRgb(s.accent),
+      warnRgb: hexRgb(s.warn),
+      pocRgb: hexRgb(s.poc),
       accent: s.accent,
       warn: s.warn,
       poc: s.poc,

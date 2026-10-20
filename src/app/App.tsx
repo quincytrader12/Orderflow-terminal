@@ -9,7 +9,7 @@ import { startCollectors } from '../market/collectors';
 import { hub } from '../market/hub';
 import { useSettings } from '../store/settings';
 import { applyTheme } from '../ui/theme';
-import { loadLayout, sanitize, saveLayout, tab } from './layouts';
+import { loadLayout, PRESETS, sanitize, saveLayout, tab } from './layouts';
 import { AddPanelModal, ConnectionModal, LayoutsModal, SettingsModal, type Placement } from './Modals';
 import { KeysModal } from './KeysModal';
 import { PanelHost } from './PanelHost';
@@ -53,17 +53,26 @@ export function App() {
     startReportScheduler();
   }, []);
 
+  // panels ask for the Connections window through a window event
+  useEffect(() => {
+    const open = () => setModal('keys');
+    window.addEventListener('novus:connect', open);
+    return () => window.removeEventListener('novus:connect', open);
+  }, []);
+
   const applyLayout = useCallback((json: IJsonModel) => {
     const m = Model.fromJson(sanitize(json));
     saveLayout(m.toJson());
     setModel(m);
   }, []);
 
-  // lock: tabs can't be dragged, docked or closed; splits stay resizable
-  const locked = useSettings((s) => s.layoutLocked);
+  // outside edit mode tabs can't be dragged, docked or closed (no accidental
+  // rearranging); the gaps between panels always stay resizable
+  const [editing, setEditing] = useState(false);
   useEffect(() => {
-    model.doAction(Actions.updateModelAttributes({ tabEnableDrag: !locked, tabSetEnableDrag: !locked, tabSetEnableDrop: !locked, tabEnableClose: !locked, tabSetEnableDivide: !locked }));
-  }, [model, locked]);
+    const on = editing;
+    model.doAction(Actions.updateModelAttributes({ tabEnableDrag: on, tabSetEnableDrag: on, tabSetEnableDrop: on, tabEnableClose: on, tabSetEnableDivide: on }));
+  }, [model, editing]);
 
   /** Maximise (or restore) the tabset holding the main chart. */
   const focusChart = useCallback(() => {
@@ -102,16 +111,46 @@ export function App() {
     }
   };
 
+  /** Show a panel: select its tab if it is already in the layout, otherwise add it as a new column. */
+  const openPanel = (component: string) => {
+    let found: string | undefined;
+    model.visitNodes((n) => {
+      if (!found && n.getType() === 'tab' && (n as TabNode).getComponent() === component) found = n.getId();
+    });
+    if (found) model.doAction(Actions.selectTab(found));
+    else addPanel(component, 'right');
+  };
+
   const factory = useCallback((node: TabNode) => <PanelHost node={node} model={model} />, [model]);
 
   return (
-    <div className="app">
+    <div className={`app${editing ? ' editing' : ''}`}>
       <div className="app-bg" aria-hidden>
         <i className="blob b1" />
         <i className="blob b2" />
         <i className="blob b3" />
       </div>
-      <TopBar onOpen={setModal} onFocusChart={focusChart} alertCount={fired.filter((f) => f.time >= sessionStart).length} />
+      <TopBar onOpen={setModal} onFocusChart={focusChart} onOpenPanel={openPanel} alertCount={fired.filter((f) => f.time >= sessionStart).length} editing={editing} onEdit={() => setEditing(!editing)} />
+      {editing && (
+        <div className="edit-bar" role="region" aria-label="Layout editing">
+          <b>✎ Editing layout</b>
+          <span className="tips" title="Drag a panel by its tab: drop it on the middle of another panel to stack them, or on a highlighted edge to split. Drag the gaps between panels to resize. × on a tab closes it; double-click a tab bar to maximise.">
+            <kbd>drag a tab</kbd> move · drop on an edge to split · <kbd>drag a gap</kbd> resize · <kbd>×</kbd> close · <kbd>double-click</kbd> tab bar to maximise
+          </span>
+          <button className="btn ghost" onClick={() => setModal('add')}>
+            + Add panel
+          </button>
+          <button className="btn ghost" onClick={() => setModal('layouts')}>
+            ▦ Layouts
+          </button>
+          <button className="btn ghost" onClick={() => confirm('Reset to the default layout? Your current arrangement is replaced (save it in Layouts first if you want to keep it).') && applyLayout(PRESETS[0].build())}>
+            Reset
+          </button>
+          <button className="btn" onClick={() => setEditing(false)}>
+            Done
+          </button>
+        </div>
+      )}
       <div className="layout-host">
         <div className="layout-inner">
           <Layout ref={layoutRef} model={model} factory={factory} onModelChange={(m) => saveLayout(m.toJson())} realtimeResize />
@@ -121,7 +160,7 @@ export function App() {
       {modal === 'layouts' && <LayoutsModal onClose={() => setModal(null)} onApply={applyLayout} current={() => model.toJson()} />}
       {modal === 'add' && <AddPanelModal onClose={() => setModal(null)} onAdd={addPanel} />}
       {modal === 'settings' && <SettingsModal onClose={() => setModal(null)} />}
-      {modal === 'keys' && <KeysModal onClose={() => setModal(null)} />}
+      {modal === 'keys' && <KeysModal onClose={() => setModal(null)} onOpenPanel={openPanel} />}
       <Toasts />
     </div>
   );

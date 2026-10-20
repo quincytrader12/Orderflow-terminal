@@ -6,6 +6,7 @@ import { describeOrder, estimateValue, pickSymbol, TYPE_LABEL, unifiedCandidates
 import { useVaultKeys } from '../desktop/vault';
 import { hub } from '../market/hub';
 import { useSettings } from '../store/settings';
+import { openConnections } from '../app/connect';
 import { Check, Chip, Empty, Popover, Select, Spacer, Toolbar, useHubVersion, type PanelProps } from '../ui/controls';
 
 export interface TicketConfig {
@@ -148,7 +149,7 @@ export function OrderTicket({ config: c, setConfig }: PanelProps<TicketConfig>) 
         : !info
           ? 'Loading market…'
           : !info.trading
-            ? 'Trading is off for this key — edit it in 🔑 Keys and tick “Allow trading”'
+            ? 'Trading is off for this key — edit it in 🔌 Connect and tick “Allow trading”'
             : !(req.size > 0)
               ? 'Enter a size'
               : isLimit && !req.price
@@ -216,6 +217,11 @@ export function OrderTicket({ config: c, setConfig }: PanelProps<TicketConfig>) 
           onChange={(secretId) => setConfig({ secretId })}
           width={130}
         />
+        {!keys.length && (
+          <Chip onClick={openConnections} title="Connect an exchange API key">
+            🔌 Connect
+          </Chip>
+        )}
         <Chip active={c.follow} onClick={() => setConfig({ follow: !c.follow, symbol: c.symbol || followed || '' })} title="Trade the market shown on the chart">
           follow chart
         </Chip>

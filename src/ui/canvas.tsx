@@ -20,11 +20,6 @@ export interface PointerState {
   h: number;
 }
 
-/**
- * Canvas that redraws on requestAnimationFrame at most `fps` times per
- * second, sized to its container with devicePixelRatio scaling. Drawing is
- * skipped while the canvas is not visible (hidden tab in a tabset).
- */
 /** Frame accounting for performance checks (cheap; read by e2e/perf.mjs). */
 export const canvasStats: { mounted: number; firstFrameAt: number[]; frames: number; drawMs: number } = { mounted: 0, firstFrameAt: [], frames: 0, drawMs: 0 };
 if (typeof window !== 'undefined') (window as unknown as { __canvasStats: typeof canvasStats }).__canvasStats = canvasStats;
@@ -38,11 +33,26 @@ export function setMaxDpr(n: number) {
   maxDpr = n;
 }
 
+/** How long a canvas keeps drawing every frame after the last pointer input. */
+const INTERACTIVE_MS = 400;
+
+/**
+ * Canvas that redraws on requestAnimationFrame at most `fps` times per
+ * second, sized to its container with devicePixelRatio scaling. While the
+ * user hovers, drags or zooms it (see `poke`) it draws on every frame, so
+ * the crosshair and the view follow the mouse at the display's refresh rate.
+ * Drawing is skipped while the canvas is not visible (hidden tab in a tabset).
+ */
 export function useCanvas(draw: (d: DrawContext) => void, fps = 30) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawRef = useRef(draw);
   drawRef.current = draw;
   const pointer = useRef<PointerState>({ x: -1, y: -1, inside: false, down: false, w: 0, h: 0 });
+  // time until which every frame is drawn; `poke` also asks for the very next frame
+  const interactive = useRef(0);
+  const poke = useRef(() => {
+    interactive.current = performance.now() + INTERACTIVE_MS;
+  });
 
   useEffect(() => {
     const canvas = canvasRef.current!;
@@ -50,36 +60,12 @@ export function useCanvas(draw: (d: DrawContext) => void, fps = 30) {
     let raf = 0;
     let last = 0;
     let firstDone = false;
+    let visible = true;
     canvasStats.mounted++;
     let w = 0;
     let h = 0;
     let dpr = 1;
-    const resize = () => {
-      const rect = canvas.parentElement!.getBoundingClientRect();
-      dpr = Math.min(maxDpr, window.devicePixelRatio || 1);
-      w = Math.max(1, Math.floor(rect.width));
-      h = Math.max(1, Math.floor(rect.height));
-      canvas.width = Math.floor(w * dpr);
-      canvas.height = Math.floor(h * dpr);
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${h}px`;
-      last = 0;
-    };
-    const ro = new ResizeObserver(resize);
-    ro.observe(canvas.parentElement!);
-    resize();
-    // visibility from an observer: reading layout (offsetParent) every frame
-    // forces a synchronous reflow per canvas whenever the DOM has changed
-    let visible = true;
-    const io = new IntersectionObserver((entries) => {
-      for (const e of entries) visible = e.isIntersecting;
-    });
-    io.observe(canvas);
-    const frame = (t: number) => {
-      raf = requestAnimationFrame(frame);
-      if (t - last < 1000 / fps - 1) return;
-      if (!visible || w < 2 || h < 2) return;
-      last = t;
+    const paint = () => {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       const pal = palette();
       ctx.clearRect(0, 0, w, h);
@@ -98,6 +84,42 @@ export function useCanvas(draw: (d: DrawContext) => void, fps = 30) {
         canvasStats.firstFrameAt.push(performance.now());
       }
     };
+    const resize = () => {
+      const rect = canvas.parentElement!.getBoundingClientRect();
+      const nd = Math.min(maxDpr, window.devicePixelRatio || 1);
+      const nw = Math.max(1, Math.floor(rect.width));
+      const nh = Math.max(1, Math.floor(rect.height));
+      if (nw === w && nh === h && nd === dpr) return;
+      dpr = nd;
+      w = nw;
+      h = nh;
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
+      // resizing clears the bitmap: repaint now (before this frame is shown)
+      // rather than flash an empty panel while a splitter is dragged
+      if (visible && w >= 2 && h >= 2) {
+        last = performance.now();
+        paint();
+      }
+    };
+    const ro = new ResizeObserver(resize);
+    ro.observe(canvas.parentElement!);
+    resize();
+    // visibility from an observer: reading layout (offsetParent) every frame
+    // forces a synchronous reflow per canvas whenever the DOM has changed
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) visible = e.isIntersecting;
+    });
+    io.observe(canvas);
+    const frame = (t: number) => {
+      raf = requestAnimationFrame(frame);
+      if (!visible || w < 2 || h < 2) return;
+      if (t >= interactive.current && t - last < 1000 / fps - 1) return;
+      last = t;
+      paint();
+    };
     raf = requestAnimationFrame(frame);
     return () => {
       cancelAnimationFrame(raf);
@@ -106,7 +128,7 @@ export function useCanvas(draw: (d: DrawContext) => void, fps = 30) {
     };
   }, [fps]);
 
-  return { canvasRef, pointer };
+  return { canvasRef, pointer, poke: poke.current };
 }
 
 interface CanvasProps {
@@ -123,7 +145,7 @@ interface CanvasProps {
 
 /** Canvas element with pointer tracking, drag and wheel helpers. */
 export function Canvas({ draw, fps = 30, style, onWheel, onDrag, onClick, onDoubleClick, pointerRef, cursor = 'crosshair' }: CanvasProps) {
-  const { canvasRef, pointer } = useCanvas(draw, fps);
+  const { canvasRef, pointer, poke } = useCanvas(draw, fps);
   const handlers = useRef({ onWheel, onDrag, onClick, onDoubleClick });
   handlers.current = { onWheel, onDrag, onClick, onDoubleClick };
   if (pointerRef) pointerRef.current = pointer.current;
@@ -141,6 +163,7 @@ export function Canvas({ draw, fps = 30, style, onWheel, onDrag, onClick, onDoub
       pointer.current.h = r.height;
     };
     const move = (e: PointerEvent) => {
+      poke();
       pos(e);
       pointer.current.inside = true;
       if (pointer.current.down) {
@@ -153,6 +176,7 @@ export function Canvas({ draw, fps = 30, style, onWheel, onDrag, onClick, onDoub
       }
     };
     const down = (e: PointerEvent) => {
+      poke();
       if (e.button !== 0) return;
       pointer.current.down = true;
       lastX = e.clientX;
@@ -161,6 +185,7 @@ export function Canvas({ draw, fps = 30, style, onWheel, onDrag, onClick, onDoub
       c.setPointerCapture(e.pointerId);
     };
     const up = (e: PointerEvent) => {
+      poke();
       if (!pointer.current.down) return;
       pointer.current.down = false;
       try {
@@ -174,15 +199,18 @@ export function Canvas({ draw, fps = 30, style, onWheel, onDrag, onClick, onDoub
       }
     };
     const leave = () => {
+      poke();
       pointer.current.inside = false;
     };
     const wheel = (e: WheelEvent) => {
+      poke();
       if (!handlers.current.onWheel) return;
       e.preventDefault();
       pos(e);
       handlers.current.onWheel(e, pointer.current);
     };
     const dbl = (e: MouseEvent) => {
+      poke();
       pos(e);
       handlers.current.onDoubleClick?.(pointer.current);
     };
@@ -200,7 +228,7 @@ export function Canvas({ draw, fps = 30, style, onWheel, onDrag, onClick, onDoub
       c.removeEventListener('wheel', wheel);
       c.removeEventListener('dblclick', dbl);
     };
-  }, [canvasRef, pointer]);
+  }, [canvasRef, pointer, poke]);
 
   return (
     <div className="canvas-host" style={style}>

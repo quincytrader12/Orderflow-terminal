@@ -66,11 +66,52 @@ try {
     longTasksDuringUnlock: { n: settle.long.n - before.long.n, ms: Math.round(settle.long.ms - before.long.ms) },
     longTasksSteady: { n: after.long.n - settle.long.n, ms: Math.round(after.long.ms - settle.long.ms), maxMs: Math.round(after.long.max) },
   };
+  // interaction: drag and zoom the biggest chart like a user would
+  const box = await page.evaluate(() => {
+    const cs = [...document.querySelectorAll('canvas')].map((c) => c.getBoundingClientRect()).sort((a, b) => b.width * b.height - a.width * a.height);
+    const r = cs[0];
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  });
+  const i0 = await page.evaluate(() => ({ raf: window.__raf, frames: window.__canvasStats.frames, drawMs: window.__canvasStats.drawMs, long: { ...window.__long }, t: performance.now() }));
+  const cx = box.x + box.w / 2;
+  const cy = box.y + box.h / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  for (let k = 0; k < 60; k++) await page.mouse.move(cx + Math.sin(k / 6) * 150, cy + Math.cos(k / 9) * 40);
+  await page.mouse.up();
+  for (let k = 0; k < 20; k++) await page.mouse.wheel(0, k % 2 ? 120 : -120);
+  for (let k = 0; k < 40; k++) await page.mouse.move(cx + k * 4, cy - k * 2);
+  const i1 = await page.evaluate(() => ({ raf: window.__raf, frames: window.__canvasStats.frames, drawMs: window.__canvasStats.drawMs, long: { ...window.__long }, t: performance.now() }));
+  const ispan = (i1.t - i0.t) / 1000;
+  result.interaction = {
+    fps: +((i1.raf - i0.raf) / ispan).toFixed(1),
+    panelFramesPerSec: +((i1.frames - i0.frames) / ispan).toFixed(0),
+    drawMsPerFrame: +((i1.drawMs - i0.drawMs) / Math.max(1, i1.frames - i0.frames)).toFixed(2),
+    longTasks: { n: i1.long.n - i0.long.n, ms: Math.round(i1.long.ms - i0.long.ms) },
+  };
+  // resize: drag the first splitter between panels back and forth
+  const sp = await page.evaluate(() => {
+    const r = document.querySelector('.flexlayout__splitter')?.getBoundingClientRect();
+    return r && { x: r.x + r.width / 2, y: r.y + r.height / 2, horiz: r.width < r.height };
+  });
+  if (sp) {
+    const s0 = await page.evaluate(() => ({ raf: window.__raf, long: { ...window.__long }, t: performance.now() }));
+    await page.mouse.move(sp.x, sp.y);
+    await page.mouse.down();
+    for (let k = 0; k < 60; k++) {
+      const d = Math.sin(k / 8) * 120;
+      await page.mouse.move(sp.x + (sp.horiz ? d : 0), sp.y + (sp.horiz ? 0 : d));
+    }
+    await page.mouse.up();
+    const s1 = await page.evaluate(() => ({ raf: window.__raf, long: { ...window.__long }, t: performance.now() }));
+    result.splitterDrag = { fps: +((s1.raf - s0.raf) / ((s1.t - s0.t) / 1000)).toFixed(1), longTasks: { n: s1.long.n - s0.long.n, ms: Math.round(s1.long.ms - s0.long.ms) } };
+  }
   console.log(JSON.stringify(result, null, 1));
   await page.screenshot({ path: new URL(`./screenshots/perf-load${LOAD}.png`, import.meta.url).pathname });
   // budgets for a professional feel (software rendering, so generous)
   if (!(result.allPanelsMs < 1500)) (ok = false), console.log(`✗ panels took ${result.allPanelsMs} ms to draw after unlock`);
   if (!(result.fps >= 30)) (ok = false), console.log(`✗ ${result.fps} fps`);
+  if (!(result.interaction.fps >= 30)) (ok = false), console.log(`✗ ${result.interaction.fps} fps while dragging`);
 } finally {
   await browser.close();
   process.kill(-server.pid);

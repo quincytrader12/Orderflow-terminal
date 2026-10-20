@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { candleDelta, candlePoc, FootprintBuilder, imbalances, stackedZones, valueArea, type BarType, type FootprintCandle } from '../core/footprint';
 import { fmtPrice, fmtTime, fmtUsd, fmtVol } from '../core/format';
 import { niceStep, qtyPercentile } from '../core/heatmap';
@@ -36,6 +36,8 @@ export interface FootprintConfig {
   maFast: number;
   maSlow: number;
   ovVwap: boolean;
+  /** layout revision of the chart's look; older tabs are moved to the clean defaults once */
+  design?: number;
 }
 
 export const FOOTPRINT_DEFAULTS: FootprintConfig = {
@@ -52,9 +54,9 @@ export const FOOTPRINT_DEFAULTS: FootprintConfig = {
   poc: true,
   stats: true,
   ovHeatmap: false,
-  ovCvd: true,
+  ovCvd: false,
   ovVp: true,
-  ovBubbles: true,
+  ovBubbles: false,
   bubbleMin: 100_000,
   ovLevels: true,
   ovMa: false,
@@ -79,6 +81,21 @@ interface View {
   autoCenter: boolean;
 }
 
+/**
+ * Cell numbers with one precision for the whole visible chart (a column of
+ * 0.27 / 1.4 / 12 reads badly): picked from the largest visible level. Zero
+ * prints nothing, so empty sides stay quiet.
+ */
+export function cellFormat(maxLevel: number): (v: number) => string {
+  if (maxLevel >= 1e4) return (v) => (v === 0 ? '' : fmtVol(v));
+  const d = maxLevel >= 100 ? 0 : maxLevel >= 10 ? 1 : 2;
+  return (v) => {
+    if (v === 0) return '';
+    const t = v.toFixed(d);
+    return Number(t) === 0 ? '' : t;
+  };
+}
+
 const AXIS_W = 74;
 const TIME_H = 18;
 const RIGHT_PAD = 50;
@@ -90,6 +107,11 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
   const heatCache = useRef({ at: 0, img: null as HTMLCanvasElement | null, norm: 1, normAt: 0, key: '' });
   const pointer = useRef<PointerState | null>(null);
   useHubVersion();
+  // tabs saved before the clean design move to its quieter overlay defaults once
+  useEffect(() => {
+    if (c.design !== 2) setConfig({ design: 2, ovBubbles: false, ovCvd: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const h0 = hub();
   const daily = useKlines(c.ovLevels ? h0.primary : undefined, '1d', 30, 30 * 60_000);
 
@@ -128,8 +150,11 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
     }
     const y = (p: number) => plotH / 2 - ((p - v.center) / tick) * v.rowH;
     const priceAt = (yy: number) => v.center + ((plotH / 2 - yy) / v.rowH) * tick;
-    const slotX = (i: number) => plotW - RIGHT_PAD - (n - i - v.offset) * v.colW;
-    const indexAtX = (x: number) => n - v.offset - (plotW - RIGHT_PAD - x) / v.colW;
+    // the visible-range profile gets its own lane on the right, clear of the live candle
+    const vpW = c.ovVp ? Math.min(110, plotW * 0.12) : 0;
+    const rightPad = c.ovVp ? vpW + 14 : RIGHT_PAD;
+    const slotX = (i: number) => plotW - rightPad - (n - i - v.offset) * v.colW;
+    const indexAtX = (x: number) => n - v.offset - (plotW - rightPad - x) / v.colW;
     const first = Math.max(0, Math.floor(indexAtX(0)));
     const last = Math.min(n - 1, Math.ceil(indexAtX(plotW)));
     const pTop = priceAt(0);
@@ -180,11 +205,45 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
     const gridStart = bucket(pBot, tick * labelEvery, 'floor');
     for (let p = gridStart; p <= pTop; p += tick * labelEvery) line(ctx, 0, Math.round(y(p)) + 0.5, plotW, Math.round(y(p)) + 0.5, pal.grid);
 
+    // ---- visible-range volume profile (underlay, behind the candles) ----
+    if (c.ovVp && n) {
+      const agg = new Map<number, { buy: number; sell: number }>();
+      for (let i = first; i <= last; i++)
+        for (const [p, l] of candles[i].levels) {
+          const a = agg.get(p) ?? { buy: 0, sell: 0 };
+          a.buy += l.buy;
+          a.sell += l.sell;
+          agg.set(p, a);
+        }
+      let maxV = 0;
+      for (const a of agg.values()) maxV = Math.max(maxV, a.buy + a.sell);
+      const va = valueArea(new Map([...agg].map(([p, a]) => [p, a.buy + a.sell])), 0.7);
+      for (const [p, a] of agg) {
+        const yt = y(p + tick);
+        if (yt > plotH || yt + v.rowH < 0) continue;
+        const inVa = va && p >= va.val && p <= va.vah;
+        const wT = ((a.buy + a.sell) / (maxV || 1)) * vpW;
+        const wB = (a.buy / (a.buy + a.sell || 1)) * wT;
+        ctx.fillStyle = rgba(pal.buyRgb, inVa ? 0.22 : 0.1);
+        ctx.fillRect(plotW - wT, yt, wB, Math.max(1, v.rowH - 1));
+        ctx.fillStyle = rgba(pal.sellRgb, inVa ? 0.22 : 0.1);
+        ctx.fillRect(plotW - wT + wB, yt, wT - wB, Math.max(1, v.rowH - 1));
+      }
+      if (va) {
+        line(ctx, plotW - vpW, y(va.poc + tick / 2), plotW, y(va.poc + tick / 2), rgba(pal.pocRgb, 0.8), 1);
+        line(ctx, plotW - vpW, y(va.vah + tick), plotW, y(va.vah + tick), pal.muted, 1, [2, 3]);
+        line(ctx, plotW - vpW, y(va.val), plotW, y(va.val), pal.muted, 1, [2, 3]);
+      }
+    }
+
     // ---- candles ----
     const textMode = v.rowH >= 10 && v.colW >= 44;
-    const barW = textMode ? 5 : Math.max(1, Math.floor(v.colW * 0.62));
+    const barW = textMode ? 3 : Math.max(1, Math.floor(v.colW * 0.62));
     const fsize = Math.max(8, Math.min(12, v.rowH - 4));
     const scale = (vol: number, p: number) => (c.usd ? vol * p : vol);
+    let visMax = 0;
+    for (let i = first; i <= last; i++) for (const [p, l] of candles[i].levels) visMax = Math.max(visMax, scale(Math.max(l.buy, l.sell), p));
+    const fmtCell = cellFormat(visMax);
     for (let i = first; i <= last; i++) {
       const cd = candles[i];
       const x0 = slotX(i);
@@ -208,7 +267,7 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
         }
         return;
       }
-      // mini OHLC bar on the left edge of the slot
+      // slim OHLC bar on the left edge of the slot
       const bx = x0 + 2;
       line(ctx, bx + barW / 2, y(cd.high + tick), bx + barW / 2, y(cd.low), col);
       const yo = y(cd.open + tick / 2);
@@ -217,7 +276,7 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
       ctx.fillRect(bx, Math.min(yo, yc) - 1, barW, Math.max(2, Math.abs(yc - yo) + 2));
 
       const cellX = x0 + barW + 4;
-      const cellW = v.colW - barW - 7;
+      const cellW = v.colW - barW - 8;
       let maxLvl = 0;
       let maxSide = 0;
       let maxAbsDelta = 0;
@@ -228,71 +287,91 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
       }
       const imb = c.imbalance ? imbalances(cd, tick, c.imbalanceRatio) : null;
       const pocP = c.poc ? candlePoc(cd) : NaN;
-      ctx.font = font(fsize);
       ctx.textBaseline = 'middle';
+      // faint column backing, then the candle body (open → close) outlined in its colour
+      const yHi = y(cd.high + tick);
+      const yLo = y(cd.low);
+      ctx.fillStyle = rgba(pal.textRgb, 0.025);
+      ctx.fillRect(cellX, yHi, cellW, yLo - yHi);
+      const bodyTop = y(Math.max(cd.open, cd.close) + tick);
+      const bodyBot = y(Math.min(cd.open, cd.close));
+      ctx.strokeStyle = rgba(up ? pal.buyRgb : pal.sellRgb, 0.45);
+      ctx.lineWidth = 1;
+      ctx.strokeRect(Math.round(cellX) + 0.5, Math.round(bodyTop) + 0.5, Math.round(cellW) - 1, Math.max(1, Math.round(bodyBot - bodyTop) - 1));
       for (const [p, l] of cd.levels) {
         const yt = y(p + tick);
         if (yt > plotH || yt + v.rowH < 0) continue;
         const rh = Math.max(1, v.rowH - 1);
         const ym = yt + v.rowH / 2;
+        // quiet numbers for thin levels, full strength for the meaningful ones
+        const ink = (vol: number, max: number) => (vol / (max || 1) < 0.15 ? pal.muted : pal.text);
         switch (c.style) {
           case 'bidask': {
             const half = cellW / 2;
-            ctx.fillStyle = rgba(pal.sellRgb, 0.08 + 0.55 * (l.sell / (maxSide || 1)));
-            ctx.fillRect(cellX, yt, half - 0.5, rh);
-            ctx.fillStyle = rgba(pal.buyRgb, 0.08 + 0.55 * (l.buy / (maxSide || 1)));
-            ctx.fillRect(cellX + half + 0.5, yt, half - 0.5, rh);
+            // side histograms grow out from the centre line
+            const ws = (l.sell / (maxSide || 1)) * (half - 1);
+            const wb = (l.buy / (maxSide || 1)) * (half - 1);
+            ctx.fillStyle = rgba(pal.sellRgb, 0.16);
+            ctx.fillRect(cellX + half - ws, yt + 1, ws, rh - 1);
+            ctx.fillStyle = rgba(pal.buyRgb, 0.16);
+            ctx.fillRect(cellX + half, yt + 1, wb, rh - 1);
             const sImb = imb?.sellImb.has(p);
             const bImb = imb?.buyImb.has(p);
             ctx.textAlign = 'right';
             ctx.font = font(fsize, sImb ? 700 : 400);
-            ctx.fillStyle = sImb ? pal.sell : pal.text;
-            ctx.fillText(fmtVol(scale(l.sell, p)), cellX + half - 3, ym);
+            ctx.fillStyle = sImb ? pal.sell : ink(l.sell, maxSide);
+            ctx.fillText(fmtCell(scale(l.sell, p)), cellX + half - 4, ym);
             ctx.textAlign = 'left';
             ctx.font = font(fsize, bImb ? 700 : 400);
-            ctx.fillStyle = bImb ? pal.buy : pal.text;
-            ctx.fillText(fmtVol(scale(l.buy, p)), cellX + half + 3, ym);
+            ctx.fillStyle = bImb ? pal.buy : ink(l.buy, maxSide);
+            ctx.fillText(fmtCell(scale(l.buy, p)), cellX + half + 4, ym);
             break;
           }
           case 'delta': {
             const d = l.buy - l.sell;
-            ctx.fillStyle = rgba(d >= 0 ? pal.buyRgb : pal.sellRgb, 0.1 + 0.6 * (Math.abs(d) / (maxAbsDelta || 1)));
-            ctx.fillRect(cellX, yt, cellW, rh);
+            const wd = (Math.abs(d) / (maxAbsDelta || 1)) * cellW;
+            ctx.fillStyle = rgba(d >= 0 ? pal.buyRgb : pal.sellRgb, 0.2);
+            ctx.fillRect(cellX, yt + 1, wd, rh - 1);
             ctx.textAlign = 'center';
-            ctx.fillStyle = pal.text;
-            ctx.font = font(fsize, imb && (imb.buyImb.has(p) || imb.sellImb.has(p)) ? 700 : 400);
-            ctx.fillText((d > 0 ? '+' : '') + fmtVol(scale(d, p)), cellX + cellW / 2, ym);
+            const strong = imb && (imb.buyImb.has(p) || imb.sellImb.has(p));
+            ctx.fillStyle = strong ? (d >= 0 ? pal.buy : pal.sell) : ink(Math.abs(d), maxAbsDelta);
+            ctx.font = font(fsize, strong ? 700 : 400);
+            const t = fmtCell(scale(Math.abs(d), p));
+            ctx.fillText(t && d < 0 ? '−' + t : t && d > 0 ? '+' + t : t, cellX + cellW / 2, ym);
             break;
           }
           case 'volume': {
             const t = (l.buy + l.sell) / (maxLvl || 1);
-            ctx.fillStyle = `rgba(79,140,255,${(0.08 + 0.6 * t).toFixed(3)})`;
-            ctx.fillRect(cellX, yt, cellW, rh);
+            ctx.fillStyle = rgba(pal.accentRgb, 0.06 + 0.3 * t);
+            ctx.fillRect(cellX, yt + 1, t * cellW, rh - 1);
             ctx.textAlign = 'center';
-            ctx.fillStyle = pal.text;
-            ctx.fillText(fmtVol(scale(l.buy + l.sell, p)), cellX + cellW / 2, ym);
+            ctx.font = font(fsize);
+            ctx.fillStyle = ink(l.buy + l.sell, maxLvl);
+            ctx.fillText(fmtCell(scale(l.buy + l.sell, p)), cellX + cellW / 2, ym);
             break;
           }
           case 'profile': {
             const tot = l.buy + l.sell;
             const wTot = (tot / (maxLvl || 1)) * cellW;
             const wSell = tot ? (l.sell / tot) * wTot : 0;
-            ctx.fillStyle = rgba(pal.sellRgb, 0.75);
-            ctx.fillRect(cellX, yt, wSell, rh);
-            ctx.fillStyle = rgba(pal.buyRgb, 0.75);
-            ctx.fillRect(cellX + wSell, yt, wTot - wSell, rh);
+            ctx.fillStyle = rgba(pal.sellRgb, 0.6);
+            ctx.fillRect(cellX, yt + 1, wSell, rh - 1);
+            ctx.fillStyle = rgba(pal.buyRgb, 0.6);
+            ctx.fillRect(cellX + wSell, yt + 1, wTot - wSell, rh - 1);
             if (v.colW >= 70) {
               ctx.textAlign = 'right';
+              ctx.font = font(fsize);
               ctx.fillStyle = pal.text;
-              ctx.fillText(fmtVol(scale(tot, p)), cellX + cellW - 2, ym);
+              ctx.fillText(fmtCell(scale(tot, p)), cellX + cellW - 2, ym);
             }
             break;
           }
         }
         if (p === pocP) {
+          // POC: a thin frame in the POC colour
           ctx.strokeStyle = pal.poc;
-          ctx.lineWidth = 1.5;
-          ctx.strokeRect(cellX + 0.5, yt + 0.5, cellW - 1, rh - 1);
+          ctx.lineWidth = 1;
+          ctx.strokeRect(Math.round(cellX) + 0.5, Math.round(yt) + 0.5, Math.round(cellW) - 1, Math.round(rh) - 1);
         }
       }
       if (imb && c.stacked > 1) {
@@ -344,7 +423,9 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
         }
         return vol ? pv / vol : NaN;
       });
-      drawLine(vw, pal.vwap, 1.5);
+      ctx.globalAlpha = 0.85;
+      drawLine(vw, pal.vwap, 1);
+      ctx.globalAlpha = 1;
     }
 
     // ---- volume bubbles ----
@@ -362,7 +443,7 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
         const r = 3 + 13 * Math.sqrt((bb.qty * bb.price) / (maxQ || 1));
         ctx.beginPath();
         ctx.arc(fx, y(bb.price), r, 0, Math.PI * 2);
-        ctx.fillStyle = rgba(bb.buy ? pal.buyRgb : pal.sellRgb, 0.35);
+        ctx.fillStyle = rgba(bb.buy ? pal.buyRgb : pal.sellRgb, 0.18);
         ctx.fill();
         ctx.strokeStyle = bb.buy ? pal.buy : pal.sell;
         ctx.lineWidth = 1;
@@ -376,42 +457,16 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
       for (const lv of periodLevels(daily.bars, now)) {
         if (lv.price < pBot || lv.price > pTop) continue;
         const yy = Math.round(y(lv.price)) + 0.5;
-        line(ctx, 0, yy, plotW, yy, pal.warn, 1, [6, 4]);
+        line(ctx, 0, yy, plotW, yy, rgba(pal.warnRgb, 0.45), 1, [4, 4]);
+        ctx.font = font(9, 600);
+        const tw = ctx.measureText(lv.label).width + 8;
+        ctx.fillStyle = pal.panel;
+        ctx.fillRect(plotW - tw - 2, yy - 7, tw, 14);
+        ctx.strokeStyle = rgba(pal.warnRgb, 0.6);
+        ctx.strokeRect(plotW - tw - 1.5, yy - 6.5, tw - 1, 13);
         ctx.fillStyle = pal.warn;
         ctx.textAlign = 'left';
-        ctx.fillText(lv.label, 4, yy - 7);
-      }
-    }
-
-    // ---- visible-range volume profile ----
-    if (c.ovVp && n) {
-      const agg = new Map<number, { buy: number; sell: number }>();
-      for (let i = first; i <= last; i++)
-        for (const [p, l] of candles[i].levels) {
-          const a = agg.get(p) ?? { buy: 0, sell: 0 };
-          a.buy += l.buy;
-          a.sell += l.sell;
-          agg.set(p, a);
-        }
-      let maxV = 0;
-      for (const a of agg.values()) maxV = Math.max(maxV, a.buy + a.sell);
-      const vpW = Math.min(140, plotW * 0.18);
-      const va = valueArea(new Map([...agg].map(([p, a]) => [p, a.buy + a.sell])), 0.7);
-      for (const [p, a] of agg) {
-        const yt = y(p + tick);
-        if (yt > plotH || yt + v.rowH < 0) continue;
-        const inVa = va && p >= va.val && p <= va.vah;
-        const wT = ((a.buy + a.sell) / (maxV || 1)) * vpW;
-        const wB = (a.buy / (a.buy + a.sell || 1)) * wT;
-        ctx.fillStyle = rgba(pal.buyRgb, inVa ? 0.4 : 0.2);
-        ctx.fillRect(plotW - wT, yt, wB, Math.max(1, v.rowH - 1));
-        ctx.fillStyle = rgba(pal.sellRgb, inVa ? 0.4 : 0.2);
-        ctx.fillRect(plotW - wT + wB, yt, wT - wB, Math.max(1, v.rowH - 1));
-      }
-      if (va) {
-        line(ctx, plotW - vpW, y(va.poc + tick / 2), plotW, y(va.poc + tick / 2), pal.poc, 1.5);
-        line(ctx, plotW - vpW, y(va.vah + tick), plotW, y(va.vah + tick), pal.muted, 1, [2, 3]);
-        line(ctx, plotW - vpW, y(va.val), plotW, y(va.val), pal.muted, 1, [2, 3]);
+        ctx.fillText(lv.label, plotW - tw + 2, yy + 0.5);
       }
     }
 
@@ -442,22 +497,23 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
         const cd = candles[i];
         const x0 = slotX(i);
         const d = candleDelta(cd);
-        ctx.fillStyle = `rgba(79,140,255,${(0.08 + 0.45 * (cd.volume / (maxVol || 1))).toFixed(3)})`;
-        ctx.fillRect(x0 + 1, yCursor + 1, v.colW - 2, 14);
-        ctx.fillStyle = rgba(d >= 0 ? pal.buyRgb : pal.sellRgb, 0.12 + 0.5 * Math.min(1, Math.abs(d) / (cd.volume || 1) * 2));
-        ctx.fillRect(x0 + 1, yCursor + 15, v.colW - 2, 14);
+        // a thin volume meter on top, numbers below: volume muted, delta in its colour
+        ctx.fillStyle = rgba(pal.accentRgb, 0.35);
+        ctx.fillRect(x0 + 2, yCursor + 2, (v.colW - 4) * (cd.volume / (maxVol || 1)), 2);
+        if (i > first) line(ctx, Math.round(x0) + 0.5, yCursor + 4, Math.round(x0) + 0.5, yCursor + statsH - 2, pal.grid);
         if (v.colW >= 34) {
           ctx.textAlign = 'center';
-          ctx.fillStyle = pal.text;
-          ctx.fillText(fmtVol(c.usd ? cd.volume * cd.close : cd.volume), x0 + v.colW / 2, yCursor + 8);
-          ctx.fillText((d > 0 ? '+' : '') + fmtVol(c.usd ? d * cd.close : d), x0 + v.colW / 2, yCursor + 22);
+          ctx.fillStyle = pal.muted;
+          ctx.fillText(fmtVol(c.usd ? cd.volume * cd.close : cd.volume), x0 + v.colW / 2, yCursor + 11);
+          ctx.fillStyle = d >= 0 ? pal.buy : pal.sell;
+          ctx.fillText((d > 0 ? '+' : d < 0 ? '−' : '') + fmtVol(Math.abs(c.usd ? d * cd.close : d)), x0 + v.colW / 2, yCursor + 23);
         }
       }
       mask(ctx, pal, plotW, yCursor, AXIS_W, statsH);
       ctx.fillStyle = pal.muted;
       ctx.textAlign = 'left';
-      ctx.fillText('Vol', plotW + 6, yCursor + 8);
-      ctx.fillText('Δ', plotW + 6, yCursor + 22);
+      ctx.fillText('Vol', plotW + 6, yCursor + 11);
+      ctx.fillText('Δ', plotW + 6, yCursor + 23);
       yCursor += statsH;
     }
 
@@ -630,10 +686,12 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
           )}
         </Popover>
         <Spacer />
+        <span className="help-dot" title={'Mouse wheel: zoom bars\nShift + wheel (or wheel over the price axis): zoom prices\nDrag: pan · Double-click: reset view'}>
+          ?
+        </span>
         <Chip onClick={reset} title="Reset view (or double-click the chart)">⟲</Chip>
       </Toolbar>
       <Canvas draw={draw} fps={30} onWheel={onWheel} onDrag={onDrag} onDoubleClick={reset} pointerRef={pointer} />
-      <div className="hint">wheel: zoom bars · shift+wheel: zoom prices · drag: pan · dbl-click: reset</div>
     </div>
   );
 }
