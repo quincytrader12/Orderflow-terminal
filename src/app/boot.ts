@@ -22,6 +22,8 @@ export interface BootStep {
   state: StepState;
   started: number;
   ms?: number;
+  /** 0–1 when the step can say how far along it is */
+  frac?: number;
 }
 
 interface BootStore {
@@ -56,12 +58,12 @@ async function until<T>(fn: () => T | undefined | null | false, timeoutMs: numbe
   }
 }
 
-async function step(id: string, label: string, run: (progress: (detail: string) => void) => Promise<string | { detail: string; warn: boolean }>) {
+async function step(id: string, label: string, run: (progress: (detail: string, frac?: number) => void) => Promise<string | { detail: string; warn: boolean }>) {
   const { put } = useBoot.getState();
   const started = Date.now();
   put({ id, label, detail: '…', state: 'loading', started });
   try {
-    const out = await run((detail) => put({ id, label, detail, state: 'loading', started }));
+    const out = await run((detail, frac) => put({ id, label, detail, state: 'loading', started, frac }));
     // keep each line on screen long enough to read
     const ms = Date.now() - started;
     if (ms < 220) await sleep(220 - ms);
@@ -108,7 +110,7 @@ export function runBoot() {
       const H = hub();
       const count = () => H.aggregate.filter((x) => x.status.state === 'open').length;
       await until(() => {
-        progress(`${count()}/${H.aggregate.length} streaming`);
+        progress(`${count()}/${H.aggregate.length} streaming`, count() / Math.max(1, H.aggregate.length));
         return count() === H.aggregate.length;
       }, 5000);
       const n = count();
@@ -119,7 +121,7 @@ export function runBoot() {
       if (s.historySource === 'none') return 'live only (no backfill)';
       await until(() => {
         const b = H.backfill;
-        if (b.state === 'loading') progress(`${Math.round(b.progress * 100)}% · ${fmtNum(b.count, 1)} trades`);
+        if (b.state === 'loading') progress(`${Math.round(b.progress * 100)}% · ${fmtNum(b.count, 1)} trades`, b.progress);
         return b.state === 'done' || b.state === 'error';
       }, 15_000);
       const b = H.backfill;

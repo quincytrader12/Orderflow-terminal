@@ -3,6 +3,7 @@ import emblem from '../assets/emblem.png';
 import { desktop } from '../desktop/bridge';
 import { AttemptGate, isLedgerRecord, LEDGER_LENGTH, ledgerMatches, makeLedger, normalizeKey, type LedgerRecord } from '../shared/ledger';
 import { runBoot, useBoot } from './boot';
+import { BootRing } from './BootRing';
 
 const SESSION_FLAG = 'novus-ledger-open';
 
@@ -123,7 +124,9 @@ export function LockScreen({ onUnlocked }: { onUnlocked: () => void }) {
 
   return (
     <div className={`lock ${leaving ? 'leaving' : ''}`} onMouseDown={() => setTimeout(() => input.current?.focus(), 0)}>
-      <div className="lock-corner tl">NOVUS ORDO // SECURE BOOT</div>
+      <div className="lock-ring">
+        <BootRing />
+      </div>
       <div className="lock-corner tr">
         {clock.toISOString().slice(0, 19).replace('T', ' ')} UTC · NODE {sid}
       </div>

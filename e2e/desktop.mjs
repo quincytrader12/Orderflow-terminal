@@ -46,7 +46,16 @@ try {
   expect(true, 'loader lists assets as they load');
   const sealed = await page.evaluate(() => window.novus.vault.list().then(() => 'open', (e) => e.message));
   expect(/sealed/.test(sealed), `vault sealed in the desktop process before unlock (${sealed})`);
+  const early = Number((await page.locator('.boot-ring .ring-btn').getAttribute('aria-valuenow')) ?? 0);
   await page.waitForFunction(() => /ALL SYSTEMS READY/.test(document.querySelector('.lock-loader')?.textContent ?? ''), null, { timeout: 60_000 });
+  await page.waitForFunction(() => document.querySelector('.boot-ring .ring-btn')?.getAttribute('aria-valuenow') === '100', null, { timeout: 10_000 });
+  expect(early < 100, `boot ring climbs from ${early}% to 100%`);
+  await page.hover('.boot-ring .ring-btn');
+  await page.waitForSelector('.ring-pop');
+  expect((await page.locator('.ring-pop .ring-phase').count()) === 3, 'ring breakdown shows the three phases');
+  await page.screenshot({ path: `${OUT}desktop-lock-screen-ring.png` });
+  await page.mouse.move(800, 400);
+  await page.waitForSelector('.ring-pop', { state: 'detached' });
   await page.screenshot({ path: `${OUT}desktop-lock-screen.png` });
   await page.locator('.lock-key input').fill('12345678');
   await page.waitForSelector('.lock-key.denied');

@@ -2143,3 +2143,186 @@ ol.steps li.done::marker {
   gap: 10px;
   margin: 14px 0 8px;
 }
+
+/* ---------- boot ring (lock screen, top left) ---------- */
+.lock-ring {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  z-index: 2;
+}
+.boot-ring {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  user-select: none;
+}
+.boot-ring .ring-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  border-radius: 50%;
+  line-height: 0;
+  transition: transform 0.25s ease;
+}
+.boot-ring .ring-btn:hover,
+.boot-ring.open .ring-btn {
+  transform: scale(1.08);
+}
+.boot-ring .ring-btn:focus-visible {
+  outline: 2px solid #c9ced6;
+  outline-offset: 3px;
+}
+.boot-ring svg {
+  display: block;
+  overflow: visible;
+  filter: drop-shadow(0 0 10px rgba(210, 218, 230, 0.12));
+}
+.boot-ring .seg-empty {
+  fill: #0d0e11;
+  stroke: #26292e;
+  stroke-width: 0.8;
+}
+.boot-ring .seg-fill {
+  /* dark seams between the three segments */
+  stroke: #050607;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+.boot-ring .seg-live {
+  animation: seg-glint 1.8s ease-in-out infinite;
+}
+@keyframes seg-glint {
+  50% {
+    filter: brightness(1.25);
+  }
+}
+.boot-ring .ring-sheen {
+  transform-origin: 0 0;
+  animation: ring-sweep 2.2s linear infinite;
+  mix-blend-mode: screen;
+}
+@keyframes ring-sweep {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.boot-ring.complete svg {
+  animation: ring-done 1.4s ease-out 1;
+  filter: drop-shadow(0 0 16px rgba(230, 236, 245, 0.35));
+}
+@keyframes ring-done {
+  30% {
+    transform: scale(1.14);
+    filter: drop-shadow(0 0 28px rgba(240, 244, 250, 0.7)) brightness(1.3);
+  }
+}
+.boot-ring .ring-text {
+  font: 500 10px/1.5 var(--mono, ui-monospace, monospace);
+  letter-spacing: 0.16em;
+  color: #6d727a;
+  text-transform: uppercase;
+}
+.boot-ring .ring-title b {
+  color: #f0f2f5;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  margin-left: 4px;
+}
+.boot-ring .ring-sub {
+  letter-spacing: 0.08em;
+  color: #8d9299;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.boot-ring.complete .ring-sub {
+  color: #3ddc97;
+}
+.ring-pop {
+  position: absolute;
+  top: 76px;
+  left: 0;
+  width: 330px;
+  padding: 12px 14px 10px;
+  border-radius: 12px;
+  border: 1px solid #23262b;
+  background: rgba(8, 9, 11, 0.94);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(10px);
+  font: 400 11px/1.5 var(--mono, ui-monospace, monospace);
+  color: #9da2aa;
+  animation: lock-fade 0.18s ease both;
+}
+.ring-phase {
+  margin-bottom: 9px;
+}
+.ring-phase .ph-head {
+  display: flex;
+  justify-content: space-between;
+  color: #c9cdd3;
+  letter-spacing: 0.04em;
+}
+.ring-phase .ph-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: #16181b;
+  margin-top: 4px;
+  overflow: hidden;
+}
+.ring-phase .ph-bar div {
+  height: 100%;
+  background: linear-gradient(90deg, #6d727a, #f0f2f5);
+  transition: width 0.3s ease;
+}
+.ring-phase.done .ph-head span:last-child {
+  color: #3ddc97;
+}
+.ring-pop ul {
+  list-style: none;
+  margin: 8px 0 6px;
+  padding: 8px 0 0;
+  border-top: 1px solid #1c1e22;
+  max-height: 220px;
+  overflow: auto;
+}
+.ring-pop li {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #c9cdd3;
+}
+.ring-pop li .dim {
+  color: #5d6168;
+}
+.ring-pop li .dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 4px;
+  background: #3ddc97;
+  vertical-align: 1px;
+}
+.ring-pop li.warn .dot {
+  background: #f5b14c;
+}
+.ring-pop li.loading .dot {
+  background: #c9cdd3;
+  animation: seg-glint 0.8s ease-in-out infinite;
+}
+.ring-foot {
+  color: #4d5157;
+  font-size: 10px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .boot-ring .ring-sheen,
+  .boot-ring .seg-live,
+  .boot-ring.complete svg {
+    animation: none;
+  }
+}
