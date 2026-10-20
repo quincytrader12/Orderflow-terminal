@@ -2,9 +2,11 @@ import { Component, StrictMode, useEffect, useState, type ReactNode } from 'reac
 import { createRoot } from 'react-dom/client';
 import { App } from './app/App';
 import { Embed } from './app/Embed';
+import { detectSafeMode } from './app/boot';
 import { alreadyUnlocked, LockScreen } from './app/LockScreen';
 import type { VenueId } from './core/types';
 import { ADAPTERS } from './exchanges';
+import { setSimLoad } from './exchanges/simulator';
 import { useSettings, type HistorySource } from './store/settings';
 import { FILTERS, THEMES, type FilterId, type ThemeId } from './ui/theme';
 import './styles.css';
@@ -28,17 +30,30 @@ if (theme && theme in THEMES) s.set({ theme: theme as ThemeId });
 const filter = params.get('filter');
 if (filter && FILTERS.some((f) => f.id === filter)) s.set({ filter: filter as FilterId });
 
+const simLoad = Number(params.get('simLoad'));
+if (simLoad > 1) setSimLoad(simLoad);
+
+detectSafeMode();
+
 const embed = params.get('embed');
 
-/** The terminal mounts only after the ledger key is accepted. */
+/**
+ * The terminal mounts only after the ledger key is accepted. It mounts the
+ * moment the key is accepted, under the lock screen while that fades out, so
+ * the panels are already drawing when the overlay is gone.
+ */
 function Gate({ children }: { children: ReactNode }) {
   // show the lock screen at once; a window reload while already unlocked skips it
-  const [open, setOpen] = useState(false);
+  const [state, setState] = useState<'locked' | 'opening' | 'open'>('locked');
   useEffect(() => {
-    void alreadyUnlocked().then((o) => o && setOpen(true));
+    void alreadyUnlocked().then((o) => o && setState('open'));
   }, []);
-  if (!open) return <LockScreen onUnlocked={() => setOpen(true)} />;
-  return <>{children}</>;
+  return (
+    <>
+      {state !== 'locked' && children}
+      {state !== 'open' && <LockScreen onUnlocked={() => setState('opening')} onGone={() => setState('open')} />}
+    </>
+  );
 }
 
 /** Any render error shows a recovery screen instead of a blank window. */

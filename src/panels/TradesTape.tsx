@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import { fmtPrice, fmtUsd, fmtVol } from '../core/format';
+import { useEffect, useRef, useState } from 'react';
+import { fmtPrice, fmtTimeMs, fmtUsd, fmtVol } from '../core/format';
 import type { Trade, VenueId } from '../core/types';
 import { beep } from '../alerts/engine';
 import { hub } from '../market/hub';
@@ -41,7 +41,17 @@ export function aggregateTrades(trades: Trade[]): Row[] {
 }
 
 export function TradesTape({ config: c, setConfig }: PanelProps<TapeConfig>) {
-  useTicker(150);
+  useTicker(250);
+  // only build the rows that fit on screen
+  const scroller = useRef<HTMLDivElement>(null);
+  const [fit, setFit] = useState(40);
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setFit(Math.max(10, Math.ceil(el.clientHeight / 19) + 4)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const tierMid = useSettings((s) => s.tierMid);
   const tierWhale = useSettings((s) => s.tierWhale);
   const soundOn = useSettings((s) => s.soundEnabled);
@@ -101,7 +111,7 @@ export function TradesTape({ config: c, setConfig }: PanelProps<TapeConfig>) {
         </Chip>
         <Spacer />
       </Toolbar>
-      <div className="scroll">
+      <div className="scroll" ref={scroller}>
         {rows.length === 0 ? (
           <Empty>Waiting for prints ≥ {fmtUsd(c.minNotional)} on {feed.inst.base}…</Empty>
         ) : (
@@ -115,16 +125,16 @@ export function TradesTape({ config: c, setConfig }: PanelProps<TapeConfig>) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((t, i) => {
+              {rows.slice(0, fit).map((t, i, shown) => {
                 const n = t.price * t.qty;
                 const tier = n >= tierWhale ? 0.42 : n >= tierMid ? 0.2 : 0;
                 const bg = tier ? (t.side === 'buy' ? `rgba(38,166,154,${tier})` : `rgba(239,83,80,${tier})`) : undefined;
-                const d = new Date(t.time);
+                // stable keys: rows keep their DOM as new prints push them down
+                let key = `${t.time}|${t.venue}|${t.price}|${t.qty}`;
+                for (let j = i - 1; j >= 0 && shown[j].time === t.time; j--) if (`${shown[j].time}|${shown[j].venue}|${shown[j].price}|${shown[j].qty}` === key) key += '+';
                 return (
-                  <tr key={`${t.time}-${i}-${t.price}`} style={{ background: bg, fontWeight: n >= tierWhale ? 700 : 400 }}>
-                    <td className="muted">
-                      {d.toLocaleTimeString([], { hour12: false })}.{String(d.getMilliseconds()).padStart(3, '0')}
-                    </td>
+                  <tr key={key} style={{ background: bg, fontWeight: n >= tierWhale ? 700 : 400 }}>
+                    <td className="muted">{fmtTimeMs(t.time)}</td>
                     <td>
                       <VenueTag venue={t.venue} />
                     </td>

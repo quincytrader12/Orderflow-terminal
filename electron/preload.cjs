@@ -21,7 +21,7 @@ ipcRenderer.on('ccxt:event', (_e, msg) => {
 
 contextBridge.exposeInMainWorld('novus', {
   desktop: true,
-  app: { info: () => call('app:info'), openExternal: (url) => call('shell:open', url), locked: () => call('app:locked'), unlock: (code) => call('app:unlock', code), seal: () => call('app:seal'), changeKey: (current, next) => call('app:changeKey', current, next) },
+  app: { info: () => call('app:info'), openExternal: (url) => call('shell:open', url), locked: () => call('app:locked'), unlock: (code) => call('app:unlock', code), seal: () => call('app:seal'), changeKey: (current, next) => call('app:changeKey', current, next), leaveSafeMode: () => call('app:leaveSafeMode') },
   net: { fetchJson: (url, init) => call('net:fetchJson', url, init) },
   vault: {
     list: () => call('vault:list'),

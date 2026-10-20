@@ -1,9 +1,28 @@
 import { decimalsOf } from './orderbook';
 
+// Creating an Intl formatter is slow; prices are formatted thousands of times a second
+const priceFormats = new Map<number, Intl.NumberFormat>();
+function priceFormat(d: number): Intl.NumberFormat {
+  let f = priceFormats.get(d);
+  if (!f) {
+    f = new Intl.NumberFormat('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+    priceFormats.set(d, f);
+  }
+  return f;
+}
+
 export function fmtPrice(p: number, tick?: number): string {
   if (!isFinite(p)) return '—';
   const d = tick ? decimalsOf(tick) : p >= 1000 ? 1 : p >= 10 ? 2 : p >= 1 ? 4 : 6;
-  return p.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+  return priceFormat(Math.min(12, d)).format(p);
+}
+
+/** HH:MM:SS.mmm in local time, without Intl. */
+export function fmtTimeMs(t: number): string {
+  const d = new Date(t);
+  const two = (n: number) => (n < 10 ? '0' : '') + n;
+  const ms = d.getMilliseconds();
+  return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}.${ms < 10 ? '00' : ms < 100 ? '0' : ''}${ms}`;
 }
 
 /** Compact number: 1.23K, 4.5M, 7.8B */

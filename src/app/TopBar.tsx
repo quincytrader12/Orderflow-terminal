@@ -10,6 +10,7 @@ import { VENUE_COLORS } from '../ui/theme';
 import { FilterSelect, ThemeSwatches } from '../ui/ThemeControls';
 import { desktop, type CcxtExchangeInfo } from '../desktop/bridge';
 import { useAmtLive } from '../desktop/amt';
+import { useBoot } from './boot';
 import { sealTerminal } from './LockScreen';
 
 /** Pyramid mark with three candles — Novus Ordo. */
@@ -195,6 +196,23 @@ function AlgoKill() {
   );
 }
 
+/** Shown while the desktop app renders without the GPU (safe mode). */
+function SafeModeChip() {
+  const safe = useBoot((s) => s.safeMode);
+  if (!safe) return null;
+  return (
+    <button
+      className="chip safe-mode"
+      title="Safe mode: the GPU is off, so charts draw on the CPU and run slower. Click to restart with the GPU."
+      onClick={() => {
+        if (confirm('Restart Novus Ordo with GPU rendering? If the window then stays blank it will fall back to safe mode by itself.')) void desktop?.app.leaveSafeMode();
+      }}
+    >
+      ⚠ <span className="lbl">Safe mode</span>
+    </button>
+  );
+}
+
 export function TopBar({ onOpen, onFocusChart, alertCount }: { onOpen: (m: ModalKind) => void; onFocusChart: () => void; alertCount: number }) {
   const locked = useSettings((s) => s.layoutLocked);
   const setS = useSettings((s) => s.set);
@@ -236,6 +254,7 @@ export function TopBar({ onOpen, onFocusChart, alertCount }: { onOpen: (m: Modal
         )}
       </button>
       <div style={{ flex: 1 }} />
+      <SafeModeChip />
       <AlgoKill />
       <button className="chip" onClick={() => onOpen('keys')} title="API key vault">
         🔑 <span className="lbl">Keys</span>

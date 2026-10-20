@@ -5,6 +5,7 @@ import { desktop } from '../desktop/bridge';
 import { startCollectors } from '../market/collectors';
 import { hub } from '../market/hub';
 import { getSettings } from '../store/settings';
+import { setMaxDpr } from '../ui/canvas';
 import { THEMES } from '../ui/theme';
 import { loadLayout } from './layouts';
 
@@ -29,6 +30,8 @@ export interface BootStep {
 interface BootStore {
   steps: BootStep[];
   done: boolean;
+  /** desktop app running without the GPU */
+  safeMode: boolean;
   put(step: BootStep): void;
   finish(): void;
 }
@@ -36,6 +39,7 @@ interface BootStore {
 export const useBoot = create<BootStore>((set) => ({
   steps: [],
   done: false,
+  safeMode: false,
   put: (step) =>
     set((s) => {
       const i = s.steps.findIndex((x) => x.id === step.id);
@@ -72,6 +76,18 @@ async function step(id: string, label: string, run: (progress: (detail: string, 
   } catch (e) {
     put({ id, label, detail: String((e as Error).message ?? e).slice(0, 80), state: 'warn', started, ms: Date.now() - started });
   }
+}
+
+/** Safe mode (no GPU): draw canvases at 1x so the CPU keeps up, and say so. */
+export function detectSafeMode() {
+  void desktop?.app
+    .info()
+    .then((info) => {
+      if (!info.safeMode) return;
+      setMaxDpr(1);
+      useBoot.setState({ safeMode: true });
+    })
+    .catch(() => undefined);
 }
 
 let started = false;

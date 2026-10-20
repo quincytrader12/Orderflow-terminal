@@ -21,6 +21,12 @@ function mulberry32(seed: number) {
   };
 }
 
+/** Load multiplier for performance testing (?simLoad=8 ≈ several busy venues). */
+let LOAD = 1;
+export function setSimLoad(n: number) {
+  LOAD = Math.max(1, Math.min(50, n || 1));
+}
+
 const START_PRICES: Record<string, number> = { BTC: 100_000, ETH: 3_500, SOL: 180, XRP: 2.4, DOGE: 0.25, BNB: 650 };
 
 interface Listener {
@@ -137,7 +143,7 @@ class SimMarket {
     const bookBids: [number, number][] = [];
     const bookAsks: [number, number][] = [];
     const burst = this.rnd() < 0.02 ? 6 : 1;
-    const n = Math.floor(-Math.log(1 - this.rnd()) * 2.5 * burst);
+    const n = Math.floor(-Math.log(1 - this.rnd()) * 2.5 * burst * LOAD);
     for (let i = 0; i < n; i++) {
       const buy = this.rnd() < 0.5 + this.drift * 0.4;
       let remaining = this.tradeSize() * (burst > 1 ? 2 : 1);
@@ -163,7 +169,7 @@ class SimMarket {
     const bb = this.bestBid();
     const ba = this.bestAsk();
     const mid = isFinite(bb) && isFinite(ba) ? (bb + ba) / 2 : this.price;
-    for (let k = 0; k < 25; k++) {
+    for (let k = 0; k < 25 * LOAD; k++) {
       const dist = 1 + Math.floor(Math.abs(this.gauss()) * 40);
       const isBid = this.rnd() < 0.5;
       const p = bucket(isBid ? mid - dist * this.tick : mid + dist * this.tick, this.tick, isBid ? 'floor' : 'ceil');

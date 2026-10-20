@@ -25,6 +25,19 @@ export interface PointerState {
  * second, sized to its container with devicePixelRatio scaling. Drawing is
  * skipped while the canvas is not visible (hidden tab in a tabset).
  */
+/** Frame accounting for performance checks (cheap; read by e2e/perf.mjs). */
+export const canvasStats: { mounted: number; firstFrameAt: number[]; frames: number; drawMs: number } = { mounted: 0, firstFrameAt: [], frames: 0, drawMs: 0 };
+if (typeof window !== 'undefined') (window as unknown as { __canvasStats: typeof canvasStats }).__canvasStats = canvasStats;
+
+/**
+ * Highest backing-store scale. Safe mode (software rendering) draws at 1x:
+ * a 2x canvas has four times the pixels to fill on the CPU.
+ */
+let maxDpr = 2;
+export function setMaxDpr(n: number) {
+  maxDpr = n;
+}
+
 export function useCanvas(draw: (d: DrawContext) => void, fps = 30) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawRef = useRef(draw);
@@ -36,12 +49,14 @@ export function useCanvas(draw: (d: DrawContext) => void, fps = 30) {
     const ctx = canvas.getContext('2d', { alpha: true })!;
     let raf = 0;
     let last = 0;
+    let firstDone = false;
+    canvasStats.mounted++;
     let w = 0;
     let h = 0;
     let dpr = 1;
     const resize = () => {
       const rect = canvas.parentElement!.getBoundingClientRect();
-      dpr = Math.min(2, window.devicePixelRatio || 1);
+      dpr = Math.min(maxDpr, window.devicePixelRatio || 1);
       w = Math.max(1, Math.floor(rect.width));
       h = Math.max(1, Math.floor(rect.height));
       canvas.width = Math.floor(w * dpr);
@@ -53,26 +68,41 @@ export function useCanvas(draw: (d: DrawContext) => void, fps = 30) {
     const ro = new ResizeObserver(resize);
     ro.observe(canvas.parentElement!);
     resize();
+    // visibility from an observer: reading layout (offsetParent) every frame
+    // forces a synchronous reflow per canvas whenever the DOM has changed
+    let visible = true;
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) visible = e.isIntersecting;
+    });
+    io.observe(canvas);
     const frame = (t: number) => {
       raf = requestAnimationFrame(frame);
       if (t - last < 1000 / fps - 1) return;
-      if (canvas.offsetParent === null || w < 2 || h < 2) return;
+      if (!visible || w < 2 || h < 2) return;
       last = t;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       const pal = palette();
       ctx.clearRect(0, 0, w, h);
       ctx.fillStyle = pal.panel;
       ctx.fillRect(0, 0, w, h);
+      const t0 = performance.now();
       try {
         drawRef.current({ ctx, w, h, dpr, pal, now: Date.now() });
       } catch (e) {
         console.error('draw error', e);
+      }
+      canvasStats.drawMs += performance.now() - t0;
+      canvasStats.frames++;
+      if (!firstDone) {
+        firstDone = true;
+        canvasStats.firstFrameAt.push(performance.now());
       }
     };
     raf = requestAnimationFrame(frame);
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      io.disconnect();
     };
   }, [fps]);
 

@@ -5,6 +5,6 @@ export default defineConfig({
   plugins: [react()],
   base: './',
   server: { port: 5173, host: true },
-  build: { target: 'es2022', sourcemap: true, chunkSizeWarningLimit: 1500 },
+  build: { target: 'es2022', sourcemap: true, minify: process.env.NOMINIFY ? false : 'esbuild', chunkSizeWarningLimit: 1500 },
   test: { environment: 'node', include: ['src/**/*.test.ts', 'server/**/*.test.mjs', 'electron/**/*.test.mjs'] },
 });

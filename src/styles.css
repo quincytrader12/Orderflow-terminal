@@ -1782,8 +1782,10 @@ ol.steps li.done::marker {
   background: repeating-linear-gradient(to bottom, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 3px);
 }
 .lock.leaving {
+  /* the terminal is already mounted underneath; let clicks through while it fades */
   opacity: 0;
-  filter: brightness(2.2) blur(2px);
+  filter: brightness(2.2);
+  pointer-events: none;
 }
 .lock-corner {
   position: absolute;
@@ -2325,4 +2327,9 @@ ol.steps li.done::marker {
   .boot-ring.complete svg {
     animation: none;
   }
+}
+
+.chip.safe-mode {
+  color: #f0b429;
+  border-color: rgba(240, 180, 41, 0.45);
 }

@@ -84,8 +84,8 @@ function sessionId() {
   return [...b].map((x) => x.toString(16).padStart(2, '0')).join('').toUpperCase().replace(/(.{4})/, '$1-');
 }
 
-export function LockScreen({ onUnlocked }: { onUnlocked: () => void }) {
-  const { steps, done } = useBoot();
+export function LockScreen({ onUnlocked, onGone }: { onUnlocked: () => void; onGone: () => void }) {
+  const { steps, done, safeMode } = useBoot();
   const [code, setCode] = useState('');
   const [msg, setMsg] = useState<{ kind: 'denied' | 'granted' | 'busy'; text: string } | null>(null);
   const [shake, setShake] = useState(0);
@@ -108,7 +108,8 @@ export function LockScreen({ onUnlocked }: { onUnlocked: () => void }) {
       await unlock(digits);
       setMsg({ kind: 'granted', text: 'ACCESS GRANTED' });
       setLeaving(true);
-      setTimeout(onUnlocked, 900);
+      onUnlocked();
+      setTimeout(onGone, 850);
     } catch (e) {
       setMsg({ kind: 'denied', text: String((e as Error).message ?? e).replace(/^Error:\s*/, '') });
       setShake((n) => n + 1);
@@ -182,6 +183,7 @@ export function LockScreen({ onUnlocked }: { onUnlocked: () => void }) {
 
       <div className="lock-corner bl">
         BUILD 1.0.0 · {desktop ? 'DESKTOP' : 'BROWSER'} · {navigator.platform || 'node'}
+        {safeMode && ' · SAFE MODE (NO GPU)'}
       </div>
       <div className="lock-loader" aria-live="polite">
         <div className="now">

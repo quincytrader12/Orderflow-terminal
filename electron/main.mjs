@@ -31,6 +31,17 @@ process.on('unhandledRejection', (e) => log('error', 'unhandled rejection', e in
 // Safe mode: no GPU acceleration. Turned on automatically when the GPU process
 // crashes or the window stays blank, or by starting with --safe-mode.
 const SAFE_FLAG = join(userDataDir, 'safe-mode.json');
+// earlier builds could mistake an empty screenshot of a hidden window for a
+// blank one and pin the app in software rendering; drop those flags once
+try {
+  const f = existsSync(SAFE_FLAG) && JSON.parse(readFileSync(SAFE_FLAG, 'utf8'));
+  if (f && !f.v && f.reason === 'window stayed blank') {
+    rmSync(SAFE_FLAG, { force: true });
+    log('info', 'cleared a safe-mode flag set by the old blank-window check');
+  }
+} catch {
+  rmSync(SAFE_FLAG, { force: true });
+}
 const safeMode = process.argv.includes('--safe-mode') || process.env.NOVUS_SAFE_MODE === '1' || existsSync(SAFE_FLAG);
 if (safeMode) {
   app.disableHardwareAcceleration();
@@ -42,12 +53,21 @@ function relaunchSafe(reason) {
   if (safeMode) return;
   log('warn', `relaunching in safe mode: ${reason}`);
   try {
-    writeFileSync(SAFE_FLAG, JSON.stringify({ reason, at: new Date().toISOString() }));
+    writeFileSync(SAFE_FLAG, JSON.stringify({ v: 2, reason, at: new Date().toISOString() }));
   } catch (e) {
     log('error', 'could not write safe-mode flag', e);
   }
   const portable = process.env.PORTABLE_EXECUTABLE_FILE;
   app.relaunch(portable ? { execPath: portable, args: [] } : undefined);
+  app.exit(0);
+}
+
+/** Back to GPU rendering on the next start, which happens now. */
+function leaveSafeMode() {
+  rmSync(SAFE_FLAG, { force: true });
+  log('info', 'leaving safe mode');
+  const portable = process.env.PORTABLE_EXECUTABLE_FILE;
+  app.relaunch(portable ? { execPath: portable, args: [] } : { args: process.argv.slice(1).filter((a) => a !== '--safe-mode') });
   app.exit(0);
 }
 
@@ -130,20 +150,32 @@ function createWindow() {
   });
 }
 
-/** Sample the window; a uniform image means nothing is being drawn. */
-async function checkBlank(w) {
-  if (safeMode || w.isDestroyed() || !w.isVisible() || w.isMinimized()) return;
+/**
+ * Sample the window; a uniform image means nothing is being drawn. Only a
+ * window the user can see is judged (an occluded or unfocused window can
+ * capture empty or stale), an empty capture never counts as blank, and two
+ * flat captures a few seconds apart are needed before giving up on the GPU.
+ */
+async function checkBlank(w, strikes = 0) {
+  if (safeMode || w.isDestroyed()) return;
+  if (!w.isVisible() || w.isMinimized() || !w.isFocused()) {
+    // try again later; give up after a few minutes rather than guess
+    if (strikes > -20) setTimeout(() => void checkBlank(w, strikes - 1), 10_000);
+    return;
+  }
   try {
     const img = await w.webContents.capturePage();
-    const small = img.isEmpty() ? null : img.resize({ width: 48, height: 30 }).toBitmap();
-    let distinct = 0;
-    if (small) {
-      const seen = new Set();
-      for (let i = 0; i < small.length; i += 4) seen.add((small[i] << 16) | (small[i + 1] << 8) | small[i + 2]);
-      distinct = seen.size;
+    if (img.isEmpty()) {
+      log('info', 'render check: empty capture (ignored)');
+      return;
     }
-    log('info', `render check: ${img.isEmpty() ? 'empty capture' : `${distinct} colours`}`);
-    if (!small || distinct <= 2) relaunchSafe('window stayed blank');
+    const small = img.resize({ width: 48, height: 30 }).toBitmap();
+    const seen = new Set();
+    for (let i = 0; i < small.length; i += 4) seen.add((small[i] << 16) | (small[i + 1] << 8) | small[i + 2]);
+    log('info', `render check: ${seen.size} colours`);
+    if (seen.size > 2) return;
+    if (strikes > 0) relaunchSafe('window stayed blank');
+    else setTimeout(() => void checkBlank(w, 1), 5000);
   } catch (e) {
     log('warn', 'render check failed', e);
   }
@@ -193,7 +225,9 @@ function registerIpc() {
     db: db.info(),
     vaultBackend: vault.backend,
     retentionDays: retentionDays(),
+    safeMode,
   }));
+  handle('app:leaveSafeMode', () => leaveSafeMode());
   handle('app:locked', () => !unlocked);
   handle('app:log', () => logFile());
   handle('app:unlock', async (_e, code) => {
@@ -419,12 +453,8 @@ app.whenReady().then(() => {
           {
             label: safeMode ? 'Leave safe mode (use the GPU again)' : 'Restart in safe mode (no GPU)',
             click: () => {
-              if (safeMode) {
-                rmSync(SAFE_FLAG, { force: true });
-                const portable = process.env.PORTABLE_EXECUTABLE_FILE;
-                app.relaunch(portable ? { execPath: portable, args: [] } : { args: process.argv.slice(1).filter((a) => a !== '--safe-mode') });
-                app.exit(0);
-              } else relaunchSafe('chosen in the Help menu');
+              if (safeMode) leaveSafeMode();
+              else relaunchSafe('chosen in the Help menu');
             },
           },
         ],

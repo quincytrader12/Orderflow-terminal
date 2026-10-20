@@ -307,7 +307,7 @@ export interface WalletRecord {
 
 export interface NovusApi {
   desktop: true;
-  app: { info(): Promise<{ version: string; platform: string; userData: string; db: DbInfo; vaultBackend: string; retentionDays: number }>; openExternal(url: string): Promise<void>; locked(): Promise<boolean>; unlock(code: string): Promise<boolean>; seal(): Promise<boolean>; changeKey(current: string, next: string): Promise<boolean> };
+  app: { info(): Promise<{ version: string; platform: string; userData: string; db: DbInfo; vaultBackend: string; retentionDays: number; safeMode?: boolean }>; openExternal(url: string): Promise<void>; locked(): Promise<boolean>; unlock(code: string): Promise<boolean>; seal(): Promise<boolean>; changeKey(current: string, next: string): Promise<boolean>; leaveSafeMode(): Promise<void> };
   net: { fetchJson<T = any>(url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }): Promise<T> };
   vault: {
     list(): Promise<SecretRecord[]>;
