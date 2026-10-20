@@ -480,7 +480,7 @@ app.whenReady().then(() => {
   services = import('./ccxt-service.mjs')
     .then(async (m) => {
       await m.loadCcxt();
-      ccxtSvc = new m.CcxtService(vault, { db });
+      ccxtSvc = new m.CcxtService(vault, { db, onClock: (name, diff) => log('warn', `${name}: PC clock is ${Math.round(diff)} ms off the exchange — signing with exchange time`) });
       bots = new BotManager({
         ccxt: ccxtSvc,
         db,

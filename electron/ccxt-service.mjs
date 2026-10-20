@@ -2,6 +2,7 @@
 // WebSockets with REST polling fallback) and private account endpoints that
 // use API keys from the vault. Runs in the Electron main process so there are
 // no CORS limits and keys never reach the renderer.
+import { clockSafe } from './clock.mjs';
 import { buildOrder, closeOrderFor, RateGate, sanitizeLimits, USD_QUOTES } from './trading.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -62,6 +63,8 @@ export class CcxtService {
   constructor(vault, opts = {}) {
     this.vault = vault;
     this.db = opts.db ?? null;
+    /** told when a client had to re-sync to the exchange's clock: (name, offsetMs) */
+    this.onClock = opts.onClock ?? null;
     // call loadCcxt() before constructing (tests pass a fake lib)
     this.lib = opts.lib ?? ccxt;
     if (!this.lib) throw new Error('CCXT not loaded yet');
@@ -91,7 +94,7 @@ export class CcxtService {
     if (s.kind !== 'exchange' || !s.exchange) throw new Error('this key is not an exchange key');
     const Cls = this.lib[s.exchange];
     if (!Cls) throw new Error(`unknown exchange ${s.exchange}`);
-    const ex = new Cls({ enableRateLimit: true, ...credentialsFrom(s.fields) });
+    const ex = clockSafe(new Cls({ enableRateLimit: true, ...credentialsFrom(s.fields) }), (diff) => this.onClock?.(ex.name ?? s.exchange, diff));
     if (s.fields.sandbox === 'true') {
       // never fall back to the live exchange when a testnet key was asked for
       try {

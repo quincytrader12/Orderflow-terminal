@@ -250,7 +250,12 @@ export function KeysModal({ onClose, onOpenPanel }: { onClose: () => void; onOpe
       const t = await desktop.vault.test(r.id);
       setMsg({ id: r.id, text: `Connected to ${t.exchange} — ${t.assets} assets with a balance.`, ok: true });
     } catch (e) {
-      setMsg({ id: r.id, text: String((e as Error).message ?? e), ok: false });
+      const m = String((e as Error).message ?? e);
+      setMsg({
+        id: r.id,
+        text: /-1021|recvWindow|timestamp/i.test(m) ? `Your computer's clock is out of sync with ${r.exchange ?? 'the exchange'}. In Windows: Settings → Time & language → Date & time → turn on “Set time automatically” and click “Sync now”, then test again. (${m})` : m,
+        ok: false,
+      });
     }
   };
 
