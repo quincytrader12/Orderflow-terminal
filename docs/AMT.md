@@ -101,7 +101,62 @@ The same engine has a second **style**, chosen per bot under **Settings → Styl
 - Every position is closed **15 minutes before the session ends** (UTC midnight with 24 h sessions), so nothing is carried overnight. The maximum hold is 8 h.
 - The IB setup only arms when the bot has seen the session from its open. The prior-value setups need one complete session first, so a fresh intraday bot spends its first day building context. Run it in paper mode alongside the scalp bot meanwhile.
 
-## 5. Safety behaviour of live bots
+## 5. Growth preset — compounding a small account
+
+A small balance (say R500 ≈ $27) changes what matters. Three things decide
+whether it grows, and none of them is the choice of setup:
+
+1. **Fees.** A market order costs ~0.05 % per side on Binance Futures. On a
+   scalp with a 0.2 % stop, the round trip costs about a quarter to a third of
+   the risk, so a 2R winner keeps only ~1.7R. Many small trades bleed.
+2. **Exchange minimums.** Every market has a smallest order (BTCUSDT
+   perpetual: about $100; ETH and many alts far less). A $27 account can only
+   meet a $100 minimum with leverage, and only if the stop is tight enough
+   that the minimum does not blow the risk budget.
+3. **Survival.** Fixed-dollar risk either never compounds or wipes the
+   account. Growth comes from risking a *percentage* of the current balance:
+   sizes grow after wins and shrink after losses.
+
+The **Growth (small account)** preset is built around that:
+
+| | |
+|---|---|
+| Sizing | 2 % of the current balance per trade (`sizing: balance`, `riskPct`) — compounding |
+| Position cap | 5 × the balance (`maxLeverage`); futures are set to **isolated margin** at that leverage, so a position can never lose more than its own margin |
+| Exchange minimum | read from the market; an order is rounded up to it only if that still fits the cap and risks at most 2× the plan, otherwise the setup is skipped and the reason logged |
+| Trade quality | A+ only: delta ≥ 0.35, volume intensity ≥ 2×, book imbalance ≥ 0.15, spread ≤ 3 bps, reward ≥ 2R, target ≥ 4× round-trip costs (`targetCostX`) |
+| Management | breakeven at 1R, 30 min time stop, 5 min cool-down after a loss, at most 4 trades an hour |
+| Guards | pause 2 h after 3 losses in a row (`lossStreak`); stop for the day at −6 % (`dailyLossPct`); **stop for good at −20 % from the peak balance** (`maxDrawdownPct`) |
+
+Paper trading and backtests start from `accountUsd`; a live bot reads the real
+balance from the exchange when it starts, after every trade and every five
+minutes. The settings show a preview of one trade at your balance — how much
+goes to work, what is risked and what the fees take — in dollars and rand.
+
+**Market choice matters more than settings.** Prefer a liquid perpetual with a
+low minimum (ETH/USDT, SOL/USDT) over BTC/USDT, whose minimum forces leverage
+on a small account.
+
+### Training
+
+**Train** (bot toolbar) is a walk-forward parameter search on the trades the
+terminal recorded for a market (Database panel → Record trades):
+
+1. 40 variations of the order-flow, auction and trade-geometry settings are
+   generated from the bot's current settings (risk settings never change).
+2. Every variation replays the data; it is **ranked only on the first 70 %**,
+   scoring log-growth of the balance minus a drawdown penalty, net of fees.
+3. The five best are judged on the **last 30 %, which the ranking never saw**.
+   A result is offered — "Apply to this bot" — only if it also grew the
+   balance there. Otherwise the answer is "no edge on this data" and nothing
+   changes.
+
+Searching many settings on one stretch of data always finds something that
+looks good on that stretch; the unseen part is what tells whether it was
+real. Even a verified result is evidence from a few days of one market, not a
+promise: paper-trade it before going live, and keep the drawdown stop on.
+
+## 6. Safety behaviour of live bots
 
 - **Exact sizing.** Live positions are tracked in exchange units (contracts) exactly as filled. Exits and the exchange stop close what was opened.
 - **Exchange stop placement.**
@@ -119,7 +174,7 @@ The same engine has a second **style**, chosen per bot under **Settings → Styl
   - Breakeven never moves the stop past the current price.
 - **Keys.** A key used by a running live bot cannot be edited or deleted until the bot stops.
 
-## 6. HFT: what is and isn't possible from a laptop
+## 7. HFT: what is and isn't possible from a laptop
 
 True high-frequency trading means co-located servers, sub-millisecond reaction, maker rebates and queue position. A desktop app talking to an exchange's public API over the internet sees **tens to hundreds of milliseconds** of latency, has to respect API rate limits, and pays **taker fees of roughly 2–10 bps per side**. One example: a round trip at Hyperliquid's base taker fee costs 0.09% of notional ([buildix](https://www.buildix.trade/blog/crypto-scalping-orderflow-realistic-guide)). Racing for single ticks under those conditions has negative expected value. Fees and slippage erase a small edge, and in thin markets book signals are easier to fake ([CoinAPI](https://www.coinapi.io/blog/crypto-scalping-trading-faq-profitability-tools-data-insights), [Block3](https://www.block3finance.com/scalping-in-crypto-techniques-risks-and-reality)).
 

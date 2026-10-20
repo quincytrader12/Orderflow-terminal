@@ -137,6 +137,28 @@ describe('BotManager', () => {
     await m.stopAll();
   });
 
+  it('live balance sizing: real account balance, exchange minimum, isolated margin', async () => {
+    const ccxt = fakeCcxt();
+    ccxt.marketInfo = vi.fn(async () => ({ exchangeId: 'binanceusdm', trading: true, sandbox: false, contract: true, contractSize: 1, minAmount: 0.001, minCost: 5, last: 100, taker: 0.0005, settle: 'USDT', limits: { maxOrderUsd: 300 } }));
+    ccxt.accountBalance = vi.fn(async () => 27);
+    ccxt.prepareMargin = vi.fn(async () => []);
+    const m = new BotManager({ ccxt, db, emit: () => {}, now: () => T0 });
+    const id = m.save({ mode: 'live', secretId: 'k1', symbol: 'ETH/USDT:USDT', params: { ...params, sizing: 'balance', riskPct: 2, maxLeverage: 5, accountUsd: 1000 } });
+    await m.start(id);
+    expect(ccxt.prepareMargin).toHaveBeenCalledWith('k1', 'ETH/USDT:USDT', 5);
+    const e = m.running.get(id).engine;
+    // sizes from the $27 on the exchange, not the $1000 paper balance
+    expect(e.balance()).toBe(27);
+    expect(e.cfg.accountUsd).toBe(27);
+    expect(e.cfg.minNotionalUsd).toBe(5);
+    expect(m.eventsFor(id).some((ev) => /Sizing from a 27\.00 balance: 2% risk/.test(ev.text))).toBe(true);
+    feed(ccxt, `amt-${id}`, breakoutTape());
+    await vi.waitFor(() => expect(ccxt.orders.length).toBeGreaterThan(0));
+    // at most 5 × $27 of position, whatever the stop distance
+    expect(ccxt.orders[0].size * 100.5).toBeLessThanOrEqual(27 * 5 + 0.5);
+    await m.stop(id, { flatten: false });
+  });
+
   it('closes an entry that fills after "Stop & close position"', async () => {
     const ccxt = fakeCcxt();
     let release;

@@ -2536,3 +2536,49 @@ ol.steps li.done::marker {
   opacity: 1;
   color: var(--sell);
 }
+
+/* ---------- AMT growth sizing and training ---------- */
+.amt-balance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+.amt-balance .amt-field {
+  min-width: 200px;
+}
+.amt-preview {
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  border: 1px solid var(--glass-border);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.amt-train-bar {
+  margin: 8px 0;
+}
+table.amt-train td {
+  vertical-align: top;
+}
+table.amt-train .amt-train-params .muted {
+  font-size: 10.5px;
+  white-space: normal;
+  max-width: 280px;
+}
+table.amt-train tr.best td {
+  background: color-mix(in srgb, var(--buy) 10%, transparent);
+}
+.amt-train-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  overflow: hidden;
+}
+.amt-train-bar div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}

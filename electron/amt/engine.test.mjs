@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AmtEngine, backtest, INTRADAY_PRESET, mergeConfig, niceBin, paperFill, valueArea } from './engine.mjs';
+import { AmtEngine, backtest, GROWTH_PRESET, INTRADAY_PRESET, mergeConfig, niceBin, paperFill, valueArea } from './engine.mjs';
 
 const MIN = 60_000;
 const T0 = Date.UTC(2026, 0, 5, 0, 10);
@@ -372,5 +372,63 @@ describe('audit regressions', () => {
     e.now = T0 + 86_400_000;
     expect(e.gate('buy', null)).toBeNull();
     expect(e.snapshot().stats.pnlToday).toBe(0);
+  });
+});
+
+describe('small-account growth sizing', () => {
+  const growth = (over = {}) => new AmtEngine({ ...GROWTH_PRESET, ...over });
+  const loss = (e, pnl, closed) => e.record({ side: 'buy', setup: 'fade', entry: 100, exit: 99, qty: 1, pnl, fees: 0, opened: closed - 1000, closed, reason: 'stop' });
+
+  it('risks a percentage of the balance, so size compounds with it', () => {
+    const e = growth({ accountUsd: 30, riskPct: 2, maxLeverage: 5 });
+    // $0.60 risk with a $6 stop on a $3000 coin → 0.1 coin = $300, capped at 5 × $30
+    expect(e.size(3000, 6).qty).toBeCloseTo(150 / 3000);
+    // tighter stop: $0.60 / $30 = 0.02 coin = $60 (inside the cap)
+    expect(e.size(3000, 30).qty).toBeCloseTo(0.02);
+    e.stats.pnl = 30; // balance doubled
+    expect(e.size(3000, 30).qty).toBeCloseTo(0.04);
+  });
+
+  it('rounds up to the exchange minimum only when it stays within plan', () => {
+    const e = growth({ accountUsd: 30, riskPct: 2, maxLeverage: 5, minNotionalUsd: 20 });
+    // plan: $0.60 risk, $60 stop → $30 notional ≥ $20 minimum: unchanged
+    expect(e.size(3000, 60).qty).toBeCloseTo(0.01);
+    // plan $0.60 / $200 stop → $9 notional; $20 minimum risks $1.33 (> 2×): skip
+    expect(e.size(3000, 200).skip).toMatch(/stop too wide/);
+    // $0.60 / $120 → $15; the $20 minimum risks $0.80 (< 2×): rounded up
+    expect(e.size(3000, 120).qty).toBeCloseTo(20 / 3000);
+    // BTC-style $100 minimum on a $15 balance: above 5× leverage
+    expect(growth({ accountUsd: 15, minNotionalUsd: 100 }).size(60000, 60).skip).toMatch(/above 5× the \$15.00 balance/);
+  });
+
+  it('fixed sizing is unchanged', () => {
+    const e = new AmtEngine({ riskUsd: 10, maxPositionUsd: 500 });
+    expect(e.size(100, 1).qty).toBe(5); // capped at $500
+    expect(e.size(100, 4).qty).toBe(2.5);
+  });
+
+  it('daily loss limit scales with the balance', () => {
+    const e = growth({ accountUsd: 30, dailyLossPct: 6, maxDrawdownPct: 0, lossStreak: 0 });
+    const t = Date.UTC(2026, 0, 1, 10);
+    loss(e, -1, t);
+    expect(e.halted).toBeNull();
+    loss(e, -0.9, t + 1000); // $1.90 ≥ 6 % of $30
+    expect(e.halted).toMatch(/6% of the balance/);
+    // a new UTC day clears it
+    e.now = t + 86_400_000;
+    expect(e.gate('buy', null)).toBeNull();
+  });
+
+  it('pauses after a losing streak and stops for good at the drawdown limit', () => {
+    const e = growth({ accountUsd: 100, lossStreak: 3, pauseMin: 120, dailyLossPct: 100, maxDrawdownPct: 20 });
+    const t = Date.UTC(2026, 0, 1, 10);
+    loss(e, -2, t);
+    loss(e, -2, t + 1000);
+    loss(e, -2, t + 2000);
+    expect(e.cooldownUntil).toBe(t + 2000 + 120 * 60_000);
+    loss(e, -15, t + 3000); // 21 % below the $100 peak
+    expect(e.halted).toMatch(/drawdown limit/);
+    e.now = t + 3 * 86_400_000;
+    expect(e.gate('buy', null)).toMatch(/drawdown/); // not cleared by a new day
   });
 });

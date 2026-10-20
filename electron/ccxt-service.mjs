@@ -444,6 +444,48 @@ export class CcxtService {
     return out;
   }
 
+  /**
+   * What a bot can size from, in quote currency: the settle-currency balance
+   * on derivatives, quote plus held coins at the last price on spot.
+   */
+  async accountBalance(secretId, symbol) {
+    const ex = this.privateExchange(secretId);
+    await ex.loadMarkets();
+    const m = ex.markets[symbol];
+    if (!m) throw new Error(`${symbol} is not listed on ${ex.name}`);
+    const bal = await ex.fetchBalance();
+    if (m.contract) return Number(bal.total?.[m.settle ?? m.quote] ?? 0);
+    const { price } = await this.refPrice(ex, symbol);
+    return Number(bal.total?.[m.quote] ?? 0) + Number(bal.total?.[m.base] ?? 0) * price;
+  }
+
+  /**
+   * Derivatives only: isolated margin (a position can lose at most its own
+   * margin, never the rest of the account) and the given leverage. Returns
+   * notes for anything the exchange would not change.
+   */
+  async prepareMargin(secretId, symbol, leverage) {
+    const ex = this.privateExchange(secretId);
+    await ex.loadMarkets();
+    const m = ex.markets[symbol];
+    if (!m?.contract) return [];
+    const notes = [];
+    if (ex.has.setMarginMode) {
+      try {
+        await ex.setMarginMode('isolated', symbol);
+      } catch (e) {
+        const msg = String(e?.message ?? e);
+        if (!/no need|not modified|already|same|unchanged/i.test(msg)) notes.push(`could not switch to isolated margin: ${msg}`);
+      }
+    } else notes.push(`${ex.name} cannot set the margin mode through its API — choose isolated margin on the exchange`);
+    try {
+      await this.applyLeverage(ex, leverage, m);
+    } catch (e) {
+      notes.push(String(e?.message ?? e));
+    }
+    return notes;
+  }
+
   async applyLeverage(ex, leverage, market) {
     const lev = Math.round(Number(leverage));
     if (!(lev >= 1 && lev <= 200)) throw new Error('leverage must be between 1 and 200');

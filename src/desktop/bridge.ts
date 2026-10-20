@@ -190,8 +190,55 @@ export interface AmtParams {
   maxDailyLossUsd: number;
   maxTradesPerHour: number;
   allowShort: boolean;
+  /** 'fixed' risks riskUsd; 'balance' risks riskPct of the current balance (compounding) */
+  sizing: 'fixed' | 'balance';
+  accountUsd: number;
+  riskPct: number;
+  maxLeverage: number;
+  dailyLossPct: number;
+  maxDrawdownPct: number;
+  lossStreak: number;
+  pauseMin: number;
+  minNotionalUsd: number;
+  targetCostX: number;
   feeBps: number;
   slippageBps: number;
+}
+
+/** Growth, drawdown and score for one part of a training run. */
+export interface AmtTrainSegment {
+  trades: number;
+  wins: number;
+  winRate: number | null;
+  pnl: number;
+  fees: number;
+  growthPct: number;
+  maxDrawdownPct: number;
+  profitFactor: number | null;
+  score: number | null;
+  startBalance: number;
+}
+
+export interface AmtTrainRow {
+  params: Partial<AmtParams>;
+  train: AmtTrainSegment;
+  test: AmtTrainSegment;
+  base: boolean;
+}
+
+export interface AmtTrainResult {
+  verdict: 'verified' | 'no-edge';
+  params: AmtParams | null;
+  best: AmtTrainRow | null;
+  baseline: { train: AmtTrainSegment; test: AmtTrainSegment };
+  leaders: AmtTrainRow[];
+  searched: number;
+  count: number;
+  from: number;
+  to: number;
+  splitT: number;
+  venue: string;
+  symbol: string;
 }
 
 export interface AmtBot {
@@ -263,6 +310,8 @@ export interface AmtSnapshot {
   pending: string | null;
   stats: AmtStats;
   halted: string | null;
+  /** balance the bot sizes from (balance sizing only) */
+  balance: number | null;
   warmupSec: number;
   lastSignal: { t: number; setup: string; side: string; price: number; why: string } | null;
   lastSkip: { t: number; event: string; reason: string } | null;
@@ -274,7 +323,7 @@ export interface AmtSnapshot {
 export interface AmtEvent {
   id: string;
   t: number;
-  kind: 'started' | 'stopped' | 'entry' | 'exit' | 'skip' | 'warn' | 'error';
+  kind: 'started' | 'stopped' | 'entry' | 'exit' | 'skip' | 'info' | 'warn' | 'error';
   text: string;
 }
 
@@ -341,7 +390,7 @@ export interface NovusApi {
   amt: {
     list(): Promise<AmtBot[]>;
     defaults(): Promise<AmtParams>;
-    presets(): Promise<Record<'scalp' | 'intraday', AmtParams>>;
+    presets(): Promise<Record<'scalp' | 'intraday' | 'growth', AmtParams>>;
     save(cfg: AmtBotInput): Promise<string>;
     remove(id: string): Promise<void>;
     start(id: string): Promise<boolean>;
@@ -350,6 +399,8 @@ export interface NovusApi {
     snapshot(id: string): Promise<AmtSnapshot | null>;
     events(id: string): Promise<AmtEvent[]>;
     backtest(params: AmtParams, venue: string, symbol: string, from?: number): Promise<AmtBacktest>;
+    train(params: AmtParams, venue: string, symbol: string, opts?: { days?: number; n?: number }): Promise<AmtTrainResult>;
+    onTrain(fn: (m: { progress: number }) => void): () => void;
     onStatus(fn: (s: AmtSnapshot) => void): () => void;
     onEvent(fn: (e: AmtEvent) => void): () => void;
   };

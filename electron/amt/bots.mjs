@@ -6,7 +6,8 @@
 //
 // Bots never start on their own: after a restart every bot is off.
 import { randomUUID } from 'node:crypto';
-import { AmtEngine, DEFAULT_AMT, finishBacktest, INTRADAY_PRESET, mergeConfig, paperFill, replay } from './engine.mjs';
+import { AmtEngine, DEFAULT_AMT, finishBacktest, GROWTH_PRESET, INTRADAY_PRESET, mergeConfig, paperFill, replay } from './engine.mjs';
+import { train } from './train.mjs';
 
 const KEY = 'amtBots';
 const MAX_EVENTS = 200;
@@ -18,11 +19,14 @@ export class BotManager {
    * @param db    Db (bot configs in kv, recorded trades for backtests)
    * @param emit  (channel: 'status'|'event', payload) → sends to the UI
    */
-  constructor({ ccxt, db, emit, now = Date.now }) {
+  constructor({ ccxt, db, emit, now = Date.now, makeWorker }) {
     this.ccxt = ccxt;
     this.db = db;
     this.emit = emit;
     this.now = now;
+    /** worker threads for training (falls back to this thread without) */
+    this.makeWorker = makeWorker;
+    this.training = false;
     this.running = new Map();
     this.events = new Map();
   }
@@ -44,7 +48,7 @@ export class BotManager {
   }
 
   presets() {
-    return { scalp: mergeConfig({}), intraday: mergeConfig(INTRADAY_PRESET) };
+    return { scalp: mergeConfig({}), intraday: mergeConfig(INTRADAY_PRESET), growth: mergeConfig(GROWTH_PRESET) };
   }
 
   save(input) {
@@ -120,13 +124,24 @@ export class BotManager {
       params.maxPositionUsd = Math.min(params.maxPositionUsd, info.limits.maxOrderUsd * 0.98);
       if (!info.contract) params.allowShort = false;
       if (info.taker) params.feeBps = Math.max(params.feeBps, info.taker * 1e4);
+      if (params.sizing === 'balance') {
+        // size from the real account, within the market's minimum order
+        const bal = await this.ccxt.accountBalance(cfg.secretId, cfg.symbol);
+        if (!(bal > 0)) throw new Error(`no ${info.settle ?? info.quote} balance on this account to trade ${cfg.symbol}`);
+        params.accountUsd = bal;
+        params.minNotionalUsd = Math.max(info.minCost ?? 0, (info.minAmount ?? 0) * (info.contractSize ?? 1) * (info.last ?? 0));
+        // spot cannot borrow: a position is at most what the account holds
+        if (!info.contract) params.maxLeverage = Math.min(params.maxLeverage, 0.98);
+        live.balance = bal;
+        live.notes = info.contract ? await this.ccxt.prepareMargin(cfg.secretId, cfg.symbol, Math.max(1, Math.ceil(params.maxLeverage))) : [];
+      }
     }
     const b = {
       cfg,
       exchangeId,
       sandbox,
       live,
-      engine: new AmtEngine(params),
+      engine: Object.assign(new AmtEngine(params), live?.balance ? { liveBalance: live.balance } : {}),
       sid: `amt-${id}`,
       feed: 'connecting',
       feedError: null,
@@ -143,6 +158,12 @@ export class BotManager {
     }, 1000);
     const where = `${cfg.symbol} on ${exchangeId}${sandbox ? ' (testnet)' : ''}`;
     this.event(id, 'started', cfg.mode === 'live' ? `LIVE trading started: ${where}` : `Paper trading started: ${where}`);
+    if (params.sizing === 'balance') {
+      const bal = b.engine.balance();
+      this.event(id, 'info', `Sizing from a ${bal.toFixed(2)} balance: ${params.riskPct}% risk per trade, positions up to ${params.maxLeverage}× ($${(bal * params.maxLeverage).toFixed(2)})${params.minNotionalUsd ? `, exchange minimum $${params.minNotionalUsd.toFixed(2)}` : ''}`);
+      for (const n of live?.notes ?? []) this.event(id, 'warn', n);
+      if (live) b.balanceTimer = setInterval(() => void this.refreshBalance(b), 5 * 60_000);
+    }
     return true;
   }
 
@@ -174,6 +195,17 @@ export class BotManager {
     if (e.halted && !e.pos && !e.pending && !b.stopping) void this.stop(id, { reason: e.halted });
   }
 
+  /** Live balance-sized bots re-read the account after each trade and every few minutes. */
+  async refreshBalance(b) {
+    if (!b.live || b.engine.cfg.sizing !== 'balance') return;
+    try {
+      const bal = await this.ccxt.accountBalance(b.live.secretId, b.cfg.symbol);
+      if (bal > 0) b.engine.liveBalance = bal;
+    } catch {
+      /* keep the last known balance */
+    }
+  }
+
   report(b, intent, price) {
     const id = b.cfg.id;
     const e = b.engine;
@@ -191,6 +223,7 @@ export class BotManager {
       }
     }
     this.event(id, 'exit', `EXIT ${intent.reason} @ ${tidy(price)} · ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USD`, { ...intent, price, pnl });
+    void this.refreshBalance(b);
   }
 
   /**
@@ -291,6 +324,7 @@ export class BotManager {
     if (!b) return false;
     b.stopping = true;
     clearInterval(b.timer);
+    if (b.balanceTimer) clearInterval(b.balanceTimer);
     this.ccxt.unsubscribe(b.sid);
     const e = b.engine;
     if (e.pending?.kind === 'entry' && b.cfg.mode === 'live') {
@@ -330,5 +364,29 @@ export class BotManager {
       await new Promise((r) => setImmediate(r));
     }
     return finishBacktest(e, trades);
+  }
+
+  /**
+   * Walk-forward training on the last `days` of recorded trades: ranks
+   * variations of `params` on the earlier 70 % and accepts one only if it
+   * also grew the balance on the unseen 30 %. Progress goes out as 'train'.
+   */
+  async train(params, venue, symbol, { days = 3, n = 40 } = {}) {
+    if (this.training) throw new Error('a training run is already in progress');
+    this.training = true;
+    try {
+      const to = this.now();
+      const rows = this.db.queryTrades(venue, symbol, to - days * 86_400_000, to, 3_000_000);
+      const res = await train({
+        base: params,
+        rows,
+        n,
+        makeWorker: this.makeWorker,
+        onProgress: (f) => this.emit('train', { progress: f }),
+      });
+      return { ...res, venue, symbol };
+    } finally {
+      this.training = false;
+    }
   }
 }

@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { fmtNum, fmtPrice, fmtTime } from '../core/format';
 import { AMT_STATE_LABEL, onAmtEvent, useAmtBots, useAmtLive } from '../desktop/amt';
-import { desktop, DesktopOnlyError, type AmtBacktest, type AmtBot, type AmtBotInput, type AmtEvent, type AmtParams, type AmtSnapshot, type CcxtExchangeInfo } from '../desktop/bridge';
+import { desktop, DesktopOnlyError, type AmtBacktest, type AmtBot, type AmtBotInput, type AmtEvent, type AmtParams, type AmtSnapshot, type AmtTrainResult, type AmtTrainSegment, type CcxtExchangeInfo } from '../desktop/bridge';
+import { fetchJson } from '../exchanges/ws';
+import { yahooChart } from '../shared/yahoo';
 import { pickSymbol, unifiedCandidates } from '../desktop/trading';
 import { useVaultKeys } from '../desktop/vault';
 import { hub } from '../market/hub';
@@ -11,12 +13,22 @@ import { rgba } from '../ui/theme';
 
 export interface AmtConfig {
   botId: string;
-  tab: 'live' | 'settings' | 'backtest';
+  tab: 'live' | 'settings' | 'backtest' | 'train';
 }
 
 export const AMT_DEFAULTS: AmtConfig = { botId: '', tab: 'live' };
 
 type NumKey = { [K in keyof AmtParams]: AmtParams[K] extends number ? K : never }[keyof AmtParams];
+
+const BALANCE_FIELDS: [NumKey, string, string][] = [
+  ['riskPct', 'Risk per trade (% of balance)', 'Loss if the stop is hit, as a share of the current balance — sizes grow with gains and shrink after losses'],
+  ['maxLeverage', 'Max position (× balance)', 'Position value at most this many times the balance (futures margin is set to isolated at this leverage)'],
+  ['dailyLossPct', 'Daily loss limit (% of balance)', 'The bot pauses until the next UTC day at this loss'],
+  ['maxDrawdownPct', 'Max drawdown (%)', 'The bot stops for good this far below its peak balance (0 = off)'],
+  ['lossStreak', 'Pause after losses in a row', 'Sit out after this many consecutive losses (0 = off)'],
+  ['pauseMin', 'Pause length (min)', ''],
+  ['maxTradesPerHour', 'Max trades / hour', ''],
+];
 
 const RISK_FIELDS: [NumKey, string, string][] = [
   ['riskUsd', 'Risk per trade ($)', 'Loss if the stop is hit; size = risk ÷ stop distance'],
@@ -61,6 +73,7 @@ const ADVANCED_FIELDS: [string, [NumKey, string, string][]][] = [
     [
       ['stopBufferBins', 'Stop buffer (bins)', 'Beyond the probe extreme / value edge'],
       ['minRR', 'Min reward : risk', ''],
+      ['targetCostX', 'Target vs costs ×', 'The target must be at least this many times the round-trip fees + slippage'],
       ['maxHoldSec', 'Max hold (s)', 'Time stop'],
       ['breakevenAtR', 'Breakeven at R', 'Move the stop to entry + costs after this many R (0 = off)'],
       ['cooldownSec', 'Cooldown after loss (s)', ''],
@@ -71,6 +84,12 @@ const ADVANCED_FIELDS: [string, [NumKey, string, string][]][] = [
 ];
 
 type Style = AmtParams['style'];
+/** What the style chips show: the engine styles plus the small-account growth preset. */
+type Preset = Style | 'growth';
+const presetOf = (p: AmtParams): Preset => (p.sizing === 'balance' && p.style === 'scalp' ? 'growth' : p.style);
+const PRESET_NAME: Record<Preset, string> = { scalp: 'Scalp', intraday: 'Intraday', growth: 'Growth (small account)' };
+const GROWTH_TEXT =
+  'Compounds a small balance: risks a % of the current balance on A+ scalps only — stricter order-flow confirmation, 2R minimum, targets that clear fees 4×, breakeven at 1R, a pause after 3 losses in a row and a hard stop at a 20 % drawdown. Train it on recorded data before going live.';
 
 const SETUPS: Record<Style, [keyof AmtParams['setups'], string, string][]> = {
   scalp: [
@@ -184,13 +203,13 @@ export function AmtScalper({ config: c, setConfig }: PanelProps<AmtConfig>) {
   return (
     <div className="panel amt">
       <Toolbar>
-        <Select value={c.botId} options={[{ value: '', label: bots.length ? 'Choose bot…' : 'No bots yet' }, ...bots.map((b) => ({ value: b.id, label: `${b.running ? '● ' : ''}${b.name}${b.params.style === 'intraday' ? ' · intraday' : ''}` }))]} onChange={(botId) => setConfig({ botId })} width={150} />
+        <Select value={c.botId} options={[{ value: '', label: bots.length ? 'Choose bot…' : 'No bots yet' }, ...bots.map((b) => ({ value: b.id, label: `${b.running ? '● ' : ''}${b.name}${presetOf(b.params) === 'growth' ? ' · growth' : b.params.style === 'intraday' ? ' · intraday' : ''}` }))]} onChange={(botId) => setConfig({ botId })} width={150} />
         <button className="chip" onClick={() => void create()} title="New AMT bot">
           + New
         </button>
         {bot && (
           <>
-            {(['live', 'settings', 'backtest'] as const).map((t) => (
+            {(['live', 'settings', 'backtest', 'train'] as const).map((t) => (
               <button key={t} className={`chip ${c.tab === t ? 'active' : ''}`} onClick={() => setConfig({ tab: t })}>
                 {t === 'live' ? 'Monitor' : t[0].toUpperCase() + t.slice(1)}
               </button>
@@ -233,6 +252,8 @@ export function AmtScalper({ config: c, setConfig }: PanelProps<AmtConfig>) {
           <Settings key={bot.id} bot={bot} locked={running} onSaved={reload} />
         ) : c.tab === 'backtest' ? (
           <Backtest bot={bot} />
+        ) : c.tab === 'train' ? (
+          <Train key={bot.id} bot={bot} locked={running} onApplied={reload} />
         ) : (
           <Monitor bot={bot} snap={snap} running={running} events={events} />
         )}
@@ -261,6 +282,9 @@ function Intro({ onCreate }: { onCreate: () => void }) {
           </ul>
         </div>
       ))}
+      <div>
+        <b>{PRESET_NAME.growth}</b> <span className="muted">— {GROWTH_TEXT}</span>
+      </div>
       <p className="muted">Every bot starts in paper mode on the live market. Switch to live only after it has paper-traded and backtested well, and start on a testnet key.</p>
       <button className="btn" onClick={onCreate}>
         Create a bot
@@ -278,8 +302,17 @@ function LiveConfirm({ bot, onCancel, onStart }: { bot: AmtBot; onCancel: () => 
     <div className="confirm-card buy amt-confirm">
       <div>
         {!test && <span className="env-badge live">LIVE</span>} <b>{bot.name}</b> will send real market orders for <b className="mono">{bot.symbol}</b> on {key?.exchange ?? 'the exchange'}
-        {test ? ' (testnet)' : ''} with key “{key?.label ?? '?'}”: risk ${p.riskUsd} per trade, positions up to ${p.maxPositionUsd} (or your ticket cap, whichever is lower), and it switches itself off after
-        a ${p.maxDailyLossUsd} loss today or on any order error. The terminal must stay open while it runs.
+        {test ? ' (testnet)' : ''} with key “{key?.label ?? '?'}”:{' '}
+        {p.sizing === 'balance' ? (
+          <>
+            it reads your balance on the exchange and risks {p.riskPct}% of it per trade, positions up to {p.maxLeverage}× the balance on isolated margin, pauses after a {p.dailyLossPct}% loss in a day and stops for good at a {p.maxDrawdownPct}% drawdown or on any order error.
+          </>
+        ) : (
+          <>
+            risk ${p.riskUsd} per trade, positions up to ${p.maxPositionUsd} (or your ticket cap, whichever is lower), and it switches itself off after a ${p.maxDailyLossUsd} loss today or on any order error.
+          </>
+        )}{' '}
+        The terminal must stay open while it runs.
       </div>
       <div className="confirm-actions">
         <button className="btn ghost" onClick={onCancel}>
@@ -314,7 +347,7 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
       .catch(() => undefined);
   }, [ex]);
 
-  const [presets, setPresets] = useState<Record<Style, AmtParams> | null>(null);
+  const [presets, setPresets] = useState<Record<Preset, AmtParams> | null>(null);
   useEffect(() => {
     desktop!.amt.presets().then(setPresets).catch(() => undefined);
   }, []);
@@ -408,23 +441,24 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
 
       <div className="section-title">Style</div>
       <div className="seg">
-        {(['scalp', 'intraday'] as Style[]).map((st) => (
+        {(['scalp', 'intraday', 'growth'] as Preset[]).map((st) => (
           <button
             key={st}
             type="button"
-            className={`chip ${P.style === st ? 'active' : ''}`}
+            className={`chip ${presetOf(P) === st ? 'active' : ''}`}
             onClick={() => {
-              if (P.style === st || !presets) return;
-              // load the style's preset but keep the owner's risk and cost settings
+              if (presetOf(P) === st || !presets) return;
+              // load the preset but keep the owner's cost settings, and their
+              // fixed-$ risk unless the preset sizes from the balance
               const keep = { riskUsd: P.riskUsd, maxPositionUsd: P.maxPositionUsd, maxDailyLossUsd: P.maxDailyLossUsd, allowShort: P.allowShort, useBook: P.useBook, feeBps: P.feeBps, slippageBps: P.slippageBps };
-              setD({ ...d, params: { ...presets[st], ...keep } });
+              setD({ ...d, params: { ...presets[st], ...keep, ...(st === 'growth' ? { maxPositionUsd: presets.growth.maxPositionUsd } : {}) } });
             }}
           >
-            {st === 'scalp' ? 'Scalp' : 'Intraday'}
+            {PRESET_NAME[st]}
           </button>
         ))}
       </div>
-      <div className="muted amt-hint">{STYLE_TEXT[P.style]}</div>
+      <div className="muted amt-hint">{presetOf(P) === 'growth' ? GROWTH_TEXT : STYLE_TEXT[P.style]}</div>
 
       <div className="section-title">Setups</div>
       {SETUPS[P.style].map(([k, name, text]) => (
@@ -434,7 +468,25 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
       ))}
 
       <div className="section-title">Risk</div>
-      <div className="amt-grid">{RISK_FIELDS.map(([k, l, h]) => num(k, l, h))}</div>
+      <div className="seg">
+        {(['fixed', 'balance'] as const).map((m) => (
+          <button key={m} type="button" className={`chip ${P.sizing === m ? 'active' : ''}`} onClick={() => setP({ sizing: m })}>
+            {m === 'fixed' ? 'Fixed $ risk' : '% of balance (compounding)'}
+          </button>
+        ))}
+      </div>
+      {P.sizing === 'balance' ? (
+        <>
+          <BalanceInput value={P.accountUsd} locked={locked} live={d.mode === 'live'} onChange={(accountUsd) => setP({ accountUsd })} />
+          <div className="amt-grid">
+            {BALANCE_FIELDS.map(([k, l, h]) => num(k, l, h))}
+            {num('maxPositionUsd', 'Max position ($)', 'Hard cap in dollars, and never above the ticket’s order cap')}
+          </div>
+          <SizingPreview p={P} />
+        </>
+      ) : (
+        <div className="amt-grid">{RISK_FIELDS.map(([k, l, h]) => num(k, l, h))}</div>
+      )}
       <Check checked={P.allowShort} onChange={(allowShort) => setP({ allowShort })}>
         Allow shorts (ignored on spot markets)
       </Check>
@@ -536,6 +588,7 @@ function Monitor({ bot, snap, running, events }: { bot: AmtBot; snap: AmtSnapsho
           )}
           {stats && (
             <div className="amt-cards">
+              {s.balance !== null && s.balance !== undefined && <BalanceStat balance={s.balance} start={bot.params.accountUsd} pnl={stats.pnl} />}
               <Stat label="Trades" value={String(stats.trades)} />
               <Stat label="Win rate" value={stats.winRate === null ? '—' : `${Math.round(stats.winRate * 100)}%`} />
               <Stat label="Net PnL" value={usd(stats.pnl)} tone={stats.pnl} />
@@ -564,6 +617,14 @@ function Monitor({ bot, snap, running, events }: { bot: AmtBot; snap: AmtSnapsho
       )}
     </div>
   );
+}
+
+function BalanceStat({ balance, start, pnl }: { balance: number; start: number; pnl: number }) {
+  const rate = useZarRate();
+  // growth since the bot started, from the balance it started with
+  const base = balance - pnl || start;
+  const g = base > 0 ? (pnl / base) * 100 : 0;
+  return <Stat label={`Balance${zar(balance, rate) ? ` · ${zar(balance, rate)}` : ''}`} value={`$${fmtNum(balance, 2)} (${g >= 0 ? '+' : ''}${fmtNum(g, 1)}%)`} tone={g} />;
 }
 
 function Stat({ label, value, tone }: { label: string; value: string; tone?: number }) {
@@ -632,6 +693,220 @@ function ProfileView({ snap }: { snap: AmtSnapshot }) {
   return (
     <div className="amt-profile">
       <Canvas draw={draw} fps={4} cursor="default" />
+    </div>
+  );
+}
+
+/** Rand per US dollar, for showing balances the way the owner thinks about them. */
+let zarCache: { rate: number; at: number } | null = null;
+function useZarRate() {
+  const [rate, setRate] = useState(zarCache?.rate ?? NaN);
+  useEffect(() => {
+    if (zarCache && Date.now() - zarCache.at < 30 * 60_000) return;
+    yahooChart(fetchJson, 'ZAR=X', '1d')
+      .then((c) => {
+        if (!(c.quote.price > 0)) return;
+        zarCache = { rate: c.quote.price, at: Date.now() };
+        setRate(c.quote.price);
+      })
+      .catch(() => undefined);
+  }, []);
+  return rate;
+}
+
+const zar = (usd: number, rate: number) => (isFinite(rate) && isFinite(usd) ? `R${fmtNum(usd * rate, usd * rate >= 1000 ? 0 : 2)}` : '');
+
+function BalanceInput({ value, onChange, locked, live }: { value: number; onChange: (v: number) => void; locked: boolean; live: boolean }) {
+  const rate = useZarRate();
+  return (
+    <div className="amt-balance">
+      <label className="amt-field" title="Paper trading and backtests start from this; a live bot reads the real balance from the exchange instead">
+        <span>{live ? 'Balance (live reads the exchange; used for backtests)' : 'Starting balance (USDT)'}</span>
+        <input className="ctl mono" type="number" min={1} step="any" disabled={locked} value={value} onChange={(e) => onChange(Number(e.target.value))} />
+      </label>
+      <span className="muted">{zar(value, rate) && `≈ ${zar(value, rate)}`}</span>
+      {isFinite(rate) && (
+        <span className="chip-row">
+          {[500, 1000, 5000].map((r) => (
+            <button key={r} type="button" className="chip" disabled={locked} onClick={() => onChange(Number((r / rate).toFixed(2)))} title={`R${r} at ${rate.toFixed(2)} ZAR/USD`}>
+              R{r}
+            </button>
+          ))}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** What one trade looks like at this balance, including what fees take. */
+function SizingPreview({ p }: { p: AmtParams }) {
+  const rate = useZarRate();
+  const bal = p.accountUsd;
+  const risk = (bal * p.riskPct) / 100;
+  // a typical scalp stop of 0.2 % of price
+  const stopPct = 0.2;
+  const notional = Math.min(risk / (stopPct / 100), bal * p.maxLeverage, p.maxPositionUsd);
+  const fees = (notional * 2 * (p.feeBps + p.slippageBps)) / 1e4;
+  const realRisk = (notional * stopPct) / 100;
+  return (
+    <div className="amt-preview">
+      With {usd(bal).replace('+', '')}
+      {zar(bal, rate) && ` (${zar(bal, rate)})`}: a trade with a {stopPct}% stop puts about <b>${fmtNum(notional, 2)}</b> to work ({fmtNum(notional / Math.max(bal, 1e-9), 1)}× the balance), risks <b>${fmtNum(realRisk, 2)}</b>
+      {zar(realRisk, rate) && ` (${zar(realRisk, rate)})`} and pays about <b>${fmtNum(fees, 2)}</b> in fees and slippage — {fmtNum((fees / Math.max(realRisk, 1e-9)) * 100, 0)}% of the risk. A 2R winner nets about ${fmtNum(2 * realRisk - fees, 2)}.
+      {fees / Math.max(realRisk, 1e-9) > 0.3 && <span className="down"> Fees are a large share of each trade: fewer, larger-target trades matter more than many small ones.</span>}
+    </div>
+  );
+}
+
+/** Walk-forward training on recorded trades. */
+function Train({ bot, locked, onApplied }: { bot: AmtBot; locked: boolean; onApplied: () => void }) {
+  const [instruments, setInstruments] = useState<{ venue: string; symbol: string; n: number; first: number; last: number }[]>([]);
+  const [pick, setPick] = useState('');
+  const [days, setDays] = useState(3);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [res, setRes] = useState<AmtTrainResult | null>(null);
+  const [err, setErr] = useState('');
+  const [applied, setApplied] = useState(false);
+  useEffect(() => {
+    desktop!.db
+      .stats()
+      .then((s) => {
+        setInstruments(s);
+        if (s[0]) setPick(`${s[0].venue}|${s[0].symbol}`);
+      })
+      .catch(() => undefined);
+    return desktop!.amt.onTrain((m) => setProgress(m.progress));
+  }, []);
+  const run = async () => {
+    const [venue, symbol] = pick.split('|');
+    setBusy(true);
+    setErr('');
+    setRes(null);
+    setApplied(false);
+    setProgress(0);
+    try {
+      setRes(await desktop!.amt.train(bot.params, venue, symbol, { days }));
+    } catch (e) {
+      setErr(String((e as Error).message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const apply = async () => {
+    if (!res?.params) return;
+    // only the searched knobs change; the owner's risk settings stay
+    const patch = res.best!.params;
+    await desktop!.amt.save({ id: bot.id, name: bot.name, mode: bot.mode, exchangeId: bot.exchangeId, symbol: bot.symbol, secretId: bot.secretId, exchangeStop: bot.exchangeStop, params: { ...bot.params, ...patch } });
+    setApplied(true);
+    onApplied();
+  };
+  const seg = (label: string, m: AmtTrainSegment) => (
+    <>
+      <td className="muted">{label}</td>
+      <td>{m.trades}</td>
+      <td>{m.winRate === null ? '—' : `${Math.round(m.winRate * 100)}%`}</td>
+      <td className={m.growthPct >= 0 ? 'up' : 'down'}>
+        {m.growthPct >= 0 ? '+' : ''}
+        {fmtNum(m.growthPct, 1)}%
+      </td>
+      <td>{fmtNum(m.maxDrawdownPct, 1)}%</td>
+      <td>{m.profitFactor === null ? '—' : fmtNum(m.profitFactor, 2)}</td>
+    </>
+  );
+  const sel = instruments.find((i) => `${i.venue}|${i.symbol}` === pick);
+  return (
+    <div className="amt-backtest">
+      <p className="muted" style={{ marginTop: 0 }}>
+        Tries {40} variations of this bot’s order-flow, auction and trade settings on the trades the terminal recorded. Each is ranked on the <b>first 70%</b> of the data only; the best few are then checked on
+        the <b>last 30%</b>, which the ranking never saw. A result is offered only if it also grew the balance there, after fees — otherwise the data shows no edge and nothing changes. Your risk settings are never
+        altered. Recorded data has no order book, so book filters are skipped.
+      </p>
+      {instruments.length === 0 ? (
+        <div className="muted">No recorded trades yet — keep “Record trades” on in the Database panel and let the terminal run for a day or more on the market you want to trade.</div>
+      ) : (
+        <div className="input-with-chips">
+          <Select value={pick} options={instruments.map((i) => ({ value: `${i.venue}|${i.symbol}`, label: `${i.venue} ${i.symbol} · ${fmtNum(i.n, 0)} trades` }))} onChange={setPick} />
+          <Select value={days} options={[1, 2, 3, 5, 7].map((d) => ({ value: d, label: `last ${d} day${d > 1 ? 's' : ''}` }))} onChange={setDays} />
+          <button className="btn" disabled={busy || locked || !pick} onClick={() => void run()} title={locked ? 'Switch the bot off first' : ''}>
+            {busy ? `Training… ${Math.round(progress * 100)}%` : 'Train'}
+          </button>
+        </div>
+      )}
+      {sel && sel.last - sel.first < 12 * 3_600_000 && <div className="muted amt-hint">Only {fmtNum((sel.last - sel.first) / 3_600_000, 1)} h recorded for this market — results from less than a day of data are weak evidence.</div>}
+      {busy && (
+        <div className="ph-bar amt-train-bar">
+          <div style={{ width: `${progress * 100}%` }} />
+        </div>
+      )}
+      {err && <div className="down amt-hint">{err}</div>}
+      {res && (
+        <>
+          <div className="muted amt-hint">
+            {fmtNum(res.count, 0)} trades of {res.venue} {res.symbol} · {new Date(res.from).toLocaleString()} → {new Date(res.to).toLocaleString()} · unseen part from {new Date(res.splitT).toLocaleString()} ·{' '}
+            {res.searched} settings tried
+          </div>
+          {res.verdict === 'verified' && res.best ? (
+            <div className="confirm-card buy">
+              <div>
+                <b>Found settings that held up on unseen data.</b> On the last 30% they {res.best.test.growthPct >= 0 ? 'grew' : 'changed'} the balance {fmtNum(res.best.test.growthPct, 1)}% over {res.best.test.trades} trades
+                (max drawdown {fmtNum(res.best.test.maxDrawdownPct, 1)}%), against {fmtNum(res.baseline.test.growthPct, 1)}% for the current settings. Paper-trade it before going live: a few days of one market is not a
+                guarantee.
+              </div>
+              <div className="confirm-actions">
+                {applied ? (
+                  <span className="up">Applied to {bot.name}.</span>
+                ) : (
+                  <button className="btn buy" disabled={locked} onClick={() => void apply()}>
+                    Apply to this bot
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : res.leaders.length === 0 ? (
+            <div className="confirm-card sell">
+              <b>None of the {res.searched} settings took enough trades to judge</b> (at least 8 in the training part) — nothing was changed. The growth filters are deliberately strict; record more days of this
+              market, or try a busier one.
+            </div>
+          ) : (
+            <div className="confirm-card sell">
+              <b>No settings grew the balance on the unseen part of the data</b> — nothing was changed. That is a real answer: on this market and period the setups did not beat fees. Try another market, more
+              recorded days, or the other style.
+            </div>
+          )}
+          {res.leaders.length > 0 && (
+          <table className="grid amt-train">
+            <thead>
+              <tr>
+                <th>Settings</th>
+                <th>Part</th>
+                <th>Trades</th>
+                <th>Win</th>
+                <th>Growth</th>
+                <th>Max DD</th>
+                <th>PF</th>
+              </tr>
+            </thead>
+            <tbody>
+              {res.leaders.map((l, i) => (
+                <Fragment key={i}>
+                  <tr className={res.best && l.params === res.best.params ? 'best' : ''}>
+                    <td rowSpan={2} className="mono amt-train-params" title={JSON.stringify(l.params)}>
+                      {l.base ? 'current' : `#${i + 1}`}
+                      <div className="muted">
+                        Δ{l.params.deltaThreshold} · int {l.params.intensityMin} · RR {l.params.minRR} · stop {l.params.stopBufferBins} · prof {l.params.profileMinutes}m · BE {l.params.breakevenAtR} · fee× {l.params.targetCostX}
+                      </div>
+                    </td>
+                    {seg('train', l.train)}
+                  </tr>
+                  <tr className={res.best && l.params === res.best.params ? 'best' : ''}>{seg('unseen', l.test)}</tr>
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+          )}
+        </>
+      )}
     </div>
   );
 }

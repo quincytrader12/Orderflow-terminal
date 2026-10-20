@@ -71,6 +71,25 @@ export const DEFAULT_AMT = {
   maxDailyLossUsd: 50,
   maxTradesPerHour: 12,
   allowShort: true,
+  // sizing: 'fixed' risks riskUsd per trade; 'balance' risks riskPct of the
+  // current balance, so position sizes compound up with gains and shrink
+  // after losses (and the loss limits below scale with the balance too)
+  sizing: 'fixed',
+  /** starting balance for paper trading and backtests (live uses the exchange balance) */
+  accountUsd: 1000,
+  riskPct: 1,
+  /** position value at most balance × this */
+  maxLeverage: 5,
+  dailyLossPct: 6,
+  /** stop the bot for good once the balance is this far below its peak */
+  maxDrawdownPct: 25,
+  /** after this many losses in a row, sit out pauseMin minutes (0 = off) */
+  lossStreak: 0,
+  pauseMin: 60,
+  /** smallest order the exchange accepts (USD value), filled in from the market */
+  minNotionalUsd: 0,
+  /** the target must be at least this many times the round-trip fees + slippage */
+  targetCostX: 1.5,
   // paper/backtest fill model
   feeBps: 5,
   slippageBps: 1,
@@ -88,6 +107,36 @@ export const INTRADAY_PRESET = {
   cooldownSec: 900,
   maxTradesPerHour: 2,
   breakevenAtR: 1,
+};
+
+/**
+ * Small account growth: compounds a balance-based risk on A+ scalps only.
+ * Stricter order-flow confirmation, wider targets that clear fees several
+ * times, a 2R minimum, breakeven at 1R, a pause after a losing streak and a
+ * hard stop at a 20 % drawdown. Fees, not setups, decide whether a small
+ * account grows, so fewer and larger-edge trades beat many small ones.
+ */
+export const GROWTH_PRESET = {
+  style: 'scalp',
+  sizing: 'balance',
+  accountUsd: 30,
+  riskPct: 2,
+  maxLeverage: 5,
+  dailyLossPct: 6,
+  maxDrawdownPct: 20,
+  lossStreak: 3,
+  pauseMin: 120,
+  setups: { fade: true, breakout: true, reentry: true, ibBreakout: false, priorAccept: false, priorReject: false },
+  deltaThreshold: 0.35,
+  intensityMin: 2,
+  bookImbalanceMin: 0.15,
+  minRR: 2,
+  targetCostX: 4,
+  breakevenAtR: 1,
+  maxHoldSec: 1800,
+  cooldownSec: 300,
+  maxTradesPerHour: 4,
+  maxSpreadBps: 3,
 };
 
 export function mergeConfig(cfg = {}) {
@@ -246,6 +295,10 @@ export class AmtEngine {
     this.pos = null;
     this.pending = null;
     this.halted = null;
+    this.haltedForGood = false;
+    this.streak = 0;
+    /** live balance from the exchange; paper and backtests use accountUsd + P&L */
+    this.liveBalance = NaN;
     this.cooldownUntil = 0;
     this.entryTimes = [];
     this.lastSignal = null;
@@ -604,17 +657,45 @@ export class AmtEngine {
     if ((risk / p) * 1e4 <= costBps) return this.skip(ev, `stop ${((risk / p) * 1e4).toFixed(1)} bps is inside round-trip costs (${costBps} bps)`);
     if (reward / risk < c.minRR) return this.skip(ev, `R:R ${(reward / risk).toFixed(2)} < ${c.minRR}`);
     if ((reward / p) * 1e4 <= costBps * 1.5) return this.skip(ev, `target ${((reward / p) * 1e4).toFixed(1)} bps does not clear fees`);
-    const qty = Math.min(c.riskUsd / risk, c.maxPositionUsd / p);
+    if ((reward / p) * 1e4 < costBps * c.targetCostX) return this.skip(ev, `target ${((reward / p) * 1e4).toFixed(1)} bps is under ${c.targetCostX}× round-trip costs`);
+    const size = this.size(p, risk);
+    if (size.skip) return this.skip(ev, size.skip);
+    const qty = size.qty;
     this.pending = { kind: 'entry', side, stop, target, setup, why, t };
     this.lastSignal = { t, event: ev, setup, side, price: p, stop, target, why };
     return { type: 'enter', side, qty, price: p, stop, target, setup, reason: why };
+  }
+
+  /** Balance the sizing works from: live balance when known, else start + realised P&L. */
+  balance() {
+    return Number.isFinite(this.liveBalance) ? this.liveBalance : this.cfg.accountUsd + this.stats.pnl;
+  }
+
+  /** Position size for an entry at p with a stop `risk` away (price units). */
+  size(p, risk) {
+    const c = this.cfg;
+    if (c.sizing !== 'balance') return { qty: Math.min(c.riskUsd / risk, c.maxPositionUsd / p) };
+    const bal = this.balance();
+    if (!(bal > 0)) return { skip: 'no balance to trade' };
+    const riskUsd = (bal * c.riskPct) / 100;
+    const cap = Math.min(bal * c.maxLeverage, c.maxPositionUsd);
+    let qty = Math.min(riskUsd / risk, cap / p);
+    if (qty * p < c.minNotionalUsd) {
+      // round up to the exchange minimum only if that still fits the leverage
+      // cap and does not more than double the intended risk
+      const minQty = c.minNotionalUsd / p;
+      if (c.minNotionalUsd > cap) return { skip: `exchange minimum $${c.minNotionalUsd} is above ${c.maxLeverage}× the $${bal.toFixed(2)} balance` };
+      if (minQty * risk > riskUsd * 2) return { skip: `exchange minimum $${c.minNotionalUsd} would risk $${(minQty * risk).toFixed(2)} (> 2× the ${c.riskPct}% plan) — stop too wide for this balance` };
+      qty = minQty;
+    }
+    return { qty };
   }
 
   gate(side, book) {
     const c = this.cfg;
     const t = this.now;
     // the daily loss limit lasts until the next UTC day
-    if (this.halted && dayOf(t) !== this.haltedDay) this.halted = null;
+    if (this.halted && !this.haltedForGood && dayOf(t) !== this.haltedDay) this.halted = null;
     if (this.halted) return this.halted;
     if (side === 'sell' && !c.allowShort) return 'shorts disabled';
     if (t < this.cooldownUntil) return 'cooling down after a loss';
@@ -696,10 +777,17 @@ export class AmtEngine {
     if (trade.pnl >= 0) {
       s.wins++;
       s.grossWin += trade.pnl;
+      this.streak = 0;
     } else {
       s.losses++;
       s.grossLoss -= trade.pnl;
       this.cooldownUntil = trade.closed + c.cooldownSec * 1000;
+      this.streak = (this.streak ?? 0) + 1;
+      if (c.lossStreak > 0 && this.streak >= c.lossStreak) {
+        // a losing streak usually means the market changed character: sit out
+        this.cooldownUntil = Math.max(this.cooldownUntil, trade.closed + c.pauseMin * MIN);
+        this.streak = 0;
+      }
     }
     s.peak = Math.max(s.peak, s.pnl);
     s.maxDrawdown = Math.max(s.maxDrawdown, s.peak - s.pnl);
@@ -707,12 +795,22 @@ export class AmtEngine {
     if (d !== s.day) {
       s.day = d;
       s.pnlToday = 0;
+      s.dayStartBalance = this.balance() - trade.pnl;
     }
     s.pnlToday += trade.pnl;
     this.equity.push([trade.closed, s.pnl]);
-    if (s.pnlToday <= -c.maxDailyLossUsd) {
-      this.halted = `daily loss limit ($${c.maxDailyLossUsd}) reached`;
+    const balanceMode = c.sizing === 'balance';
+    const dayLimit = balanceMode ? ((s.dayStartBalance ?? c.accountUsd) * c.dailyLossPct) / 100 : c.maxDailyLossUsd;
+    if (s.pnlToday <= -dayLimit) {
+      this.halted = balanceMode ? `daily loss limit (${c.dailyLossPct}% of the balance) reached` : `daily loss limit ($${c.maxDailyLossUsd}) reached`;
       this.haltedDay = d;
+    }
+    if (balanceMode && c.maxDrawdownPct > 0) {
+      const peakBal = c.accountUsd + s.peak;
+      if (peakBal > 0 && (s.peak - s.pnl) / peakBal >= c.maxDrawdownPct / 100) {
+        this.halted = `drawdown limit (${c.maxDrawdownPct}% below the peak balance) reached — review before restarting`;
+        this.haltedForGood = true;
+      }
     }
   }
 
@@ -752,6 +850,7 @@ export class AmtEngine {
       book: book && { imbalance: book.imbalance, spreadBps: book.spreadBps },
       position: pos,
       pending: this.pending?.kind ?? null,
+      balance: this.cfg.sizing === 'balance' ? this.balance() : null,
       stats: { ...this.stats, pnlToday: this.stats.day === dayOf(this.now) ? this.stats.pnlToday : 0, winRate: this.stats.trades ? this.stats.wins / this.stats.trades : null, profitFactor: this.stats.grossLoss > 0 ? this.stats.grossWin / this.stats.grossLoss : null },
       halted: this.halted,
       warmupSec: Math.round(warm),

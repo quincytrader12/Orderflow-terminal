@@ -266,6 +266,41 @@ try {
   const bt = await page.locator('.amt-backtest').innerText();
   expect(/Trades\s*[1-9]/.test(bt) && /breakout/.test(bt), 'backtest found the breakout trade');
   await page.screenshot({ path: `${OUT}desktop-amt-backtest.png` });
+
+  step('AMT growth preset: balance sizing and walk-forward training');
+  await page.click('.amt .toolbar button:text-is("Settings")');
+  await page.click('.amt-settings .seg button:text-is("Growth (small account)")');
+  await page.locator('.amt-balance input').fill('27');
+  const preview = await page.locator('.amt-preview').innerText();
+  expect(/\$27\.00/.test(preview) && /fees/.test(preview), `sizing preview explains a $27 trade (${preview.slice(0, 80)}…)`);
+  await page.click('.amt-settings button:text-is("Save")');
+  const growthBot = (await page.evaluate(() => window.novus.amt.list()))[0];
+  expect(growthBot.params.sizing === 'balance' && growthBot.params.accountUsd === 27 && growthBot.params.riskPct === 2, 'growth preset saved with balance sizing');
+  const seeded = await page.evaluate(() => {
+    // repeating auctions: balance, a failed probe above value, then rotation or a rally
+    let s = 5;
+    const r = () => ((s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296);
+    let t = Date.now() - 30 * 3_600_000;
+    const out = [];
+    const add = (p, side, q) => out.push({ t: (t += 500), p: Number(p.toFixed(2)), q, s: side });
+    for (let c = 0; c < 24; c++) {
+      for (let i = 0; i < 4800; i++) add(100 + (r() + r() - 1) * 0.5, r() < 0.5 ? 'buy' : 'sell', 0.1 + r() * 0.2);
+      for (let i = 0; i < 40; i++) add(100.2 + (0.12 * i) / 40, 'buy', 0.3);
+      for (let i = 0; i < 40; i++) add(100.32 - (0.15 * i) / 40, 'sell', 0.6);
+      const works = r() < 0.6;
+      for (let i = 0; i < 120; i++) add(works ? 100.17 - (0.2 * i) / 120 : 100.17 + (0.5 * i) / 120, works ? 'sell' : 'buy', 0.3);
+    }
+    return window.novus.db.record('binancef', 'TRAINTEST', out);
+  });
+  expect(seeded > 100_000, `recorded ${seeded} trades for training`);
+  await page.click('.amt .toolbar button:text-is("Train")');
+  await page.selectOption('.amt-backtest select >> nth=0', 'binancef|TRAINTEST');
+  const t0 = Date.now();
+  await page.click('.amt-backtest button:text-is("Train")');
+  await page.waitForSelector('.amt-backtest .confirm-card', { timeout: 240_000 });
+  const trained = await page.locator('.amt-backtest').innerText();
+  expect(/40 settings tried/.test(trained) && /(held up on unseen data|nothing was changed)/.test(trained), `training finished in ${((Date.now() - t0) / 1000).toFixed(0)} s with a verdict`);
+  await page.screenshot({ path: `${OUT}desktop-amt-train.png` });
   await page.click('.amt .toolbar button:text-is("Monitor")');
   await page.click('.amt .algo-switch');
   await page.waitForSelector('.amt .algo-switch.on');

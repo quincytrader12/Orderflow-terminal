@@ -15,7 +15,7 @@
     "history-server": "node server/history-server.mjs",
     "e2e:smoke": "node e2e/smoke.mjs",
     "e2e:venues": "node e2e/venues.mjs",
-    "build:main": "esbuild electron/main.mjs --bundle --platform=node --format=esm --target=node22 --outfile=dist-electron/main.mjs --external:electron --external:ccxt",
+    "build:main": "esbuild electron/main.mjs --bundle --platform=node --format=esm --target=node22 --outfile=dist-electron/main.mjs --external:electron --external:ccxt && esbuild electron/amt/trainWorker.mjs --bundle --platform=node --format=esm --target=node22 --outfile=dist-electron/trainWorker.mjs",
     "desktop": "npm run build && npm run build:main && electron .",
     "desktop:dev": "npm run build:main && node scripts/dev-desktop.mjs",
     "icon": "python3 scripts/make-icons.py",
@@ -60,6 +60,9 @@
       "output": "release",
       "buildResources": "build"
     },
+    "asarUnpack": [
+      "dist-electron/trainWorker.mjs"
+    ],
     "files": [
       "dist/**",
       "dist-electron/**",

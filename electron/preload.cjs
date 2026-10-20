@@ -9,8 +9,8 @@ async function call(channel, ...args) {
 }
 
 const ccxtListeners = new Set();
-const amtListeners = { status: new Set(), event: new Set() };
-for (const ch of ['status', 'event']) ipcRenderer.on(`amt:${ch}`, (_e, msg) => amtListeners[ch].forEach((fn) => fn(msg)));
+const amtListeners = { status: new Set(), event: new Set(), train: new Set() };
+for (const ch of ['status', 'event', 'train']) ipcRenderer.on(`amt:${ch}`, (_e, msg) => amtListeners[ch].forEach((fn) => fn(msg)));
 const listen = (set, fn) => {
   set.add(fn);
   return () => set.delete(fn);
@@ -67,6 +67,8 @@ contextBridge.exposeInMainWorld('novus', {
     snapshot: (id) => call('amt:snapshot', id),
     events: (id) => call('amt:events', id),
     backtest: (params, venue, symbol, from) => call('amt:backtest', params, venue, symbol, from),
+    train: (params, venue, symbol, opts) => call('amt:train', params, venue, symbol, opts),
+    onTrain: (fn) => listen(amtListeners.train, fn),
     onStatus: (fn) => listen(amtListeners.status, fn),
     onEvent: (fn) => listen(amtListeners.event, fn),
   },

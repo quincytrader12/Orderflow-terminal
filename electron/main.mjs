@@ -1,7 +1,7 @@
 // Novus Ordo desktop shell (Electron main process).
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, screen, shell } from 'electron';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BotManager } from './amt/bots.mjs';
 import { Db } from './db.mjs';
@@ -12,12 +12,15 @@ import { reportData } from './reports.mjs';
 import { AttemptGate, isLedgerRecord, ledgerMatches, makeLedger, PUBLIC_CHANNELS } from '../src/shared/ledger.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { Vault } from './vault.mjs';
+import { Worker } from 'node:worker_threads';
 import { initLog, log, logFile } from './log.mjs';
 import { initialWindow, loadWindowState, MIN_H, MIN_W, saveWindowState } from './windowState.mjs';
 
 // bundled to dist-electron/main.mjs; app root is one level up
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
+// training worker: bundled next to main.mjs and kept outside the asar archive
+const trainWorkerPath = join(here, 'trainWorker.mjs').replace(`app.asar${sep}`, `app.asar.unpacked${sep}`);
 const DAY = 86_400_000;
 
 // NOVUS_USER_DATA relocates the database, vault and settings (tests, portable installs)
@@ -343,6 +346,7 @@ function registerIpc() {
   handle('amt:snapshot', (_e, id) => bots.snapshot(id));
   handle('amt:events', (_e, id) => bots.eventsFor(id));
   handle('amt:backtest', (_e, params, venue, symbol, from) => bots.backtest(params, venue, symbol, from));
+  handle('amt:train', (_e, params, venue, symbol, opts) => bots.train(params, venue, symbol, opts));
   handle('ccxt:subscribe', (e, sid, id, symbol) => {
     const wc = e.sender;
     ccxtSvc.subscribe(sid, id, symbol, (msg) => {
@@ -484,6 +488,7 @@ app.whenReady().then(() => {
       bots = new BotManager({
         ccxt: ccxtSvc,
         db,
+        makeWorker: () => new Worker(trainWorkerPath),
         emit: (ch, payload) => {
           for (const w of BrowserWindow.getAllWindows()) if (!w.webContents.isDestroyed()) w.webContents.send(`amt:${ch}`, payload);
         },
