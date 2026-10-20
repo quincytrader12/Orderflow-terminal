@@ -120,9 +120,15 @@ describe('Binance futures adapter', () => {
       'fetch',
       vi.fn(async () => ({ ok: true, json: async () => ({ lastUpdateId: 1, bids: [['100', '1']], asks: [['101', '1']] }) })),
     );
-    const { out, ws, conn } = await open(binanceFutures, 'BTCUSDT');
-    expect(ws.url).toContain('btcusdt@aggTrade/btcusdt@depth@100ms');
-    expect(ws.url).toContain('btcusdt@forceOrder');
+    const { out, conn } = await open(binanceFutures, 'BTCUSDT');
+    // routed endpoints (the bare /stream URL stopped delivering trades on 2026-04-23)
+    const sockets = FakeWS.instances.slice(-2);
+    const pub = sockets.find((x) => x.url.includes('/public/'))!;
+    const ws = sockets.find((x) => x.url.includes('/market/'))!;
+    expect(pub.url).toBe('wss://fstream.binance.com/public/stream?streams=btcusdt@depth@100ms');
+    expect(ws.url).toBe('wss://fstream.binance.com/market/stream?streams=btcusdt@aggTrade/btcusdt@ticker/btcusdt@forceOrder/btcusdt@markPrice@1s');
+    await vi.waitFor(() => expect(sockets.every((x) => x.readyState === 1)).toBe(true));
+    await vi.waitFor(() => expect(out.states.at(-1)).toBe('open'));
     ws.emit({ stream: 'btcusdt@aggTrade', data: { e: 'aggTrade', E: 1, s: 'BTCUSDT', a: 5, p: '100.5', q: '0.2', T: 1000, m: true } });
     ws.emit({ stream: 'btcusdt@forceOrder', data: { e: 'forceOrder', E: 2, o: { s: 'BTCUSDT', S: 'SELL', q: '0.5', p: '99', ap: '99.5', z: '0.5', T: 2000 } } });
     ws.emit({ stream: 'btcusdt@markPrice', data: { e: 'markPriceUpdate', E: 3, s: 'BTCUSDT', p: '100.1', i: '100', r: '0.0001', T: 9999 } });
@@ -131,6 +137,9 @@ describe('Binance futures adapter', () => {
     expect(out.liqs[0]).toMatchObject({ position: 'long', price: 99.5, qty: 0.5 });
     expect(out.stats).toMatchObject({ markPrice: 100.1, indexPrice: 100, fundingRate: 0.0001, last: 100.4, change24hPct: -1.5, volume24hUsd: 123456 });
     await vi.waitFor(() => expect(out.books.some((b) => b.snapshot)).toBe(true), { timeout: 3000 });
+    // either route dropping marks the feed as not open
+    ws.close();
+    expect(out.states.at(-1)).toBe('error');
     conn.close();
   });
 });

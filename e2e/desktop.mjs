@@ -64,6 +64,17 @@ try {
   await page.waitForSelector('.topbar', { timeout: 30_000 });
   expect(await page.evaluate(() => window.novus.vault.list().then(() => true, () => false)), 'vault opens after the ledger key');
 
+  step('window fills the screen');
+  const win = await app.evaluate(({ BrowserWindow, screen }) => {
+    const w = BrowserWindow.getAllWindows()[0];
+    return { maximized: w.isMaximized(), bounds: w.getBounds(), work: screen.getPrimaryDisplay().workArea, resizable: w.isResizable() };
+  });
+  expect(win.resizable, 'window is resizable');
+  expect(win.bounds.width <= win.work.width + 16 && win.bounds.height <= win.work.height + 16, `window fits the screen (${win.bounds.width}×${win.bounds.height} in ${win.work.width}×${win.work.height})`);
+  console.log(`  window ${win.maximized ? 'maximised' : 'not maximised (no window manager?)'} ${win.bounds.width}×${win.bounds.height}`);
+  const vp = await page.evaluate(() => ({ w: innerWidth, h: innerHeight, app: document.querySelector('.app').getBoundingClientRect() }));
+  expect(Math.abs(vp.app.width - vp.w) < 2 && Math.abs(vp.app.height - vp.h) < 2, 'terminal fills the window');
+
   step('desktop bridge and database');
   const info = await page.evaluate(() => window.novus.app.info());
   expect(info.db.file.startsWith(userData), `database lives in user data (${info.db.file})`);
@@ -270,6 +281,16 @@ try {
   await page.waitForSelector('.amt .algo-switch:not(.on)');
   const bots = await page.evaluate(() => window.novus.amt.list());
   expect(bots.length === 1 && !bots[0].running, 'top-bar kill switch stopped the bot');
+
+  step('every panel has a close ×');
+  const tabCount = await page.locator('.flexlayout__tab_button').count();
+  const closers = await page.locator('.flexlayout__tab_button .flexlayout__tab_button_trailing').count();
+  expect(closers === tabCount && tabCount > 3, `close button on all ${tabCount} tabs`);
+  const unselected = page.locator('.flexlayout__tab_button--unselected').first();
+  const name = await unselected.locator('.flexlayout__tab_button_content').innerText();
+  await unselected.locator('.flexlayout__tab_button_trailing').click();
+  await page.waitForTimeout(300);
+  expect((await page.locator('.flexlayout__tab_button').count()) === tabCount - 1, `closed “${name}” with its × outside edit mode`);
 
   step('layout edit mode and focus');
   await page.click('button[title^="Edit layout"]');

@@ -1,4 +1,4 @@
-import type { BookUpdate, Kline, MarketStats, Ticker } from '../core/types';
+import type { BookUpdate, ConnState, Kline, MarketStats, Ticker } from '../core/types';
 import { sleep, type HistTrade, type MarketHandlers, type OiPoint, type VenueAdapter } from './adapter';
 import { fetchJson, ManagedSocket, num } from './ws';
 
@@ -97,7 +97,12 @@ function parseKlines(rows: any[]): Kline[] {
 
 function makeBinance(futures: boolean): VenueAdapter {
   const rest = futures ? 'https://fapi.binance.com/fapi/v1' : 'https://api.binance.com/api/v3';
-  const wsBase = futures ? 'wss://fstream.binance.com/stream?streams=' : 'wss://stream.binance.com:9443/stream?streams=';
+  // USDⓈ-M futures streams are routed by path since 2026-03 (the bare URL was
+  // retired 2026-04-23): depth/bookTicker on /public, trades, tickers, mark
+  // price and liquidations on /market. An unrouted socket still gets depth but
+  // silently stops receiving trades — a live book with a frozen footprint.
+  const wsBase = futures ? 'wss://fstream.binance.com/market/stream?streams=' : 'wss://stream.binance.com:9443/stream?streams=';
+  const wsPublic = 'wss://fstream.binance.com/public/stream?streams=';
   const id = futures ? 'binancef' : 'binance';
 
   return {
@@ -111,8 +116,9 @@ function makeBinance(futures: boolean): VenueAdapter {
 
     connect(symbol, h: MarketHandlers) {
       const s = symbol.toLowerCase();
-      const streams = [`${s}@aggTrade`, `${s}@depth@100ms`, `${s}@ticker`];
+      const streams = [`${s}@aggTrade`, `${s}@ticker`];
       if (futures) streams.push(`${s}@forceOrder`, `${s}@markPrice@1s`);
+      else streams.push(`${s}@depth@100ms`);
       let snapshotAbort: AbortController | null = null;
       const sync = new BinanceDepthSync(futures, (u) => h.onBook(u), () => void loadSnapshot());
 
@@ -136,64 +142,79 @@ function makeBinance(futures: boolean): VenueAdapter {
         }
       }
 
-      const sock = new ManagedSocket({
-        url: wsBase + streams.join('/'),
-        staleMs: 30_000,
-        onState: (st, err) => h.onStatus(st, err),
-        onOpen: () => {
-          sync.reset();
-          void loadSnapshot();
-        },
-        onMessage: (msg: any) => {
-          const d = msg?.data;
-          if (!d) return;
-          h.onFrame(d.E);
-          switch (d.e) {
-            case 'aggTrade':
-              h.onTrades([{ venue: id, price: num(d.p), qty: num(d.q), side: d.m ? 'sell' : 'buy', time: d.T }]);
-              break;
-            case 'depthUpdate':
-              sync.onEvent(d);
-              break;
-            case 'forceOrder': {
-              const o = d.o;
-              h.onLiquidation({
-                venue: id,
-                symbol: o.s,
-                // a SELL liquidation order closes a long position
-                position: o.S === 'SELL' ? 'long' : 'short',
-                price: num(o.ap) || num(o.p),
-                qty: num(o.z) || num(o.q),
-                time: o.T,
-              });
-              break;
-            }
-            case 'markPriceUpdate':
-              h.onStats({
-                markPrice: num(d.p),
-                indexPrice: num(d.i),
-                fundingRate: num(d.r),
-                nextFundingTime: d.T,
-                fundingIntervalH: 8,
-              });
-              break;
-            case '24hrTicker':
-              h.onStats({
-                last: num(d.c),
-                change24hPct: num(d.P),
-                high24h: num(d.h),
-                low24h: num(d.l),
-                volume24hUsd: num(d.q),
-              });
-              break;
+      // futures: one socket per route; the feed counts as open only when both are
+      const states: Record<string, { st: ConnState; err?: string }> = {};
+      const report = (name: string, st: ConnState, err?: string) => {
+        states[name] = { st, err };
+        const all = Object.values(states);
+        const bad = all.find((x) => x.st === 'error') ?? all.find((x) => x.st !== 'open');
+        if (bad) h.onStatus(bad.st, bad.err);
+        else h.onStatus('open');
+      };
+      const onMessage = (msg: any) => {
+        const d = msg?.data;
+        if (!d) return;
+        h.onFrame(d.E);
+        switch (d.e) {
+          case 'aggTrade':
+            h.onTrades([{ venue: id, price: num(d.p), qty: num(d.q), side: d.m ? 'sell' : 'buy', time: d.T }]);
+            break;
+          case 'depthUpdate':
+            sync.onEvent(d);
+            break;
+          case 'forceOrder': {
+            const o = d.o;
+            h.onLiquidation({
+              venue: id,
+              symbol: o.s,
+              // a SELL liquidation order closes a long position
+              position: o.S === 'SELL' ? 'long' : 'short',
+              price: num(o.ap) || num(o.p),
+              qty: num(o.z) || num(o.q),
+              time: o.T,
+            });
+            break;
           }
-        },
-      });
-      void sock.connect();
+          case 'markPriceUpdate':
+            h.onStats({
+              markPrice: num(d.p),
+              indexPrice: num(d.i),
+              fundingRate: num(d.r),
+              nextFundingTime: d.T,
+              fundingIntervalH: 8,
+            });
+            break;
+          case '24hrTicker':
+            h.onStats({
+              last: num(d.c),
+              change24hPct: num(d.P),
+              high24h: num(d.h),
+              low24h: num(d.l),
+              volume24hUsd: num(d.q),
+            });
+            break;
+        }
+      };
+      const depthOpen = () => {
+        sync.reset();
+        void loadSnapshot();
+      };
+      const socks: ManagedSocket[] = [];
+      if (futures) {
+        states.public = { st: 'connecting' };
+        states.market = { st: 'connecting' };
+        socks.push(
+          new ManagedSocket({ url: `${wsPublic}${s}@depth@100ms`, staleMs: 30_000, onState: (st, err) => report('public', st, err), onOpen: depthOpen, onMessage }),
+          new ManagedSocket({ url: wsBase + streams.join('/'), staleMs: 30_000, onState: (st, err) => report('market', st, err), onMessage }),
+        );
+      } else {
+        socks.push(new ManagedSocket({ url: wsBase + streams.join('/'), staleMs: 30_000, onState: (st, err) => h.onStatus(st, err), onOpen: depthOpen, onMessage }));
+      }
+      for (const k of socks) void k.connect();
       return {
         close() {
           snapshotAbort?.abort();
-          sock.close();
+          for (const k of socks) k.close();
         },
       };
     },

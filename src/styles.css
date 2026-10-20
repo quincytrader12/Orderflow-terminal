@@ -2518,3 +2518,21 @@ ol.steps li.done::marker {
   font-size: 11px;
   cursor: help;
 }
+
+/* every panel tab shows its close ×; quieter on tabs that are not selected */
+.flexlayout__tab_button_trailing,
+.flexlayout__border_button_trailing {
+  visibility: visible;
+  opacity: 0.45;
+}
+.flexlayout__tab_button--selected .flexlayout__tab_button_trailing,
+.flexlayout__border_button--selected .flexlayout__border_button_trailing,
+.flexlayout__tab_button:hover .flexlayout__tab_button_trailing,
+.flexlayout__border_button:hover .flexlayout__border_button_trailing {
+  opacity: 1;
+}
+.flexlayout__tab_button_trailing:hover,
+.flexlayout__border_button_trailing:hover {
+  opacity: 1;
+  color: var(--sell);
+}

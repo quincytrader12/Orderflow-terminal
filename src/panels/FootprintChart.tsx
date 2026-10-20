@@ -560,6 +560,22 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
       ctx.fillText(fmtTime(candles[i].time, c.barType !== 'time' || size < 60_000), slotX(i) + v.colW / 2, yCursor + TIME_H / 2);
     }
 
+    // ---- silent trade stream: say so rather than show a chart that looks frozen ----
+    const silent = feed.status.tradesSilentS;
+    if (silent) {
+      const msg = `No trades from ${feed.adapter.name} for ${Math.round(silent / 60)} min while its order book is live — the exchange's trade stream is not arriving. Try another venue in the top bar.`;
+      ctx.font = font(11, 600, false);
+      const tw = Math.min(plotW - 20, ctx.measureText(msg).width + 20);
+      ctx.fillStyle = rgba(pal.warnRgb, 0.16);
+      ctx.fillRect(10, 8, tw, 24);
+      ctx.strokeStyle = pal.warn;
+      ctx.strokeRect(10.5, 8.5, tw - 1, 23);
+      ctx.fillStyle = pal.warn;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(msg, 20, 20, tw - 20);
+    }
+
     // ---- crosshair + tooltip ----
     const pt = pointer.current;
     if (pt?.inside && pt.x < plotW && pt.y < plotH) {

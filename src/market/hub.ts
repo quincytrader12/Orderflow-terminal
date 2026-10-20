@@ -43,6 +43,9 @@ export class Feed {
   /** messages per second (EMA) */
   rate = 0;
   private frames = 0;
+  private lastTradeAt = 0;
+  private lastBookAt = 0;
+  private openedAt = 0;
   private conn: Connection | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   refs = 0;
@@ -60,18 +63,23 @@ export class Feed {
     if (this.conn) return;
     this.conn = this.adapter.connect(this.inst.symbol, {
       onTrades: (trades) => {
+        this.lastTradeAt = Date.now();
         for (const t of trades) {
           this.store.pushTrade(t);
           this.hub.emitTrade(t, this);
         }
       },
-      onBook: (u) => this.book.apply(u),
+      onBook: (u) => {
+        this.lastBookAt = Date.now();
+        this.book.apply(u);
+      },
       onLiquidation: (l) => {
         this.liqs.push(l);
         this.hub.emitLiq(l, this);
       },
       onStats: (s) => this.mergeStats(s),
       onStatus: (state, error) => {
+        if (state === 'open' && this.status.state !== 'open') this.openedAt = Date.now();
         this.status = { ...this.status, state, error: state === 'open' ? undefined : error ?? this.status.error };
         if (state === 'open' && this.inst.venue !== 'sim') this.book.clear();
         this.hub.bump();
@@ -136,6 +144,15 @@ export class Feed {
     this.frames = 0;
     const mid = this.book.mid();
     if (isFinite(mid)) this.mids.push({ time: now, value: mid });
+    // trade-stream watchdog: a live book with no trades for 2 min means the
+    // trade channel is broken, not that the market is quiet
+    const since = Math.max(this.lastTradeAt, this.openedAt);
+    const silent = this.status.state === 'open' && this.inst.venue !== 'sim' && this.openedAt && now - since > 120_000 && now - this.lastBookAt < 10_000 ? Math.round((now - since) / 1000) : undefined;
+    if (silent !== this.status.tradesSilentS && (silent === undefined || this.status.tradesSilentS === undefined)) {
+      if (silent) console.warn(`[${this.key}] no trades for ${silent}s while the book is live`);
+      this.status = { ...this.status, tradesSilentS: silent };
+      this.hub.bump();
+    } else if (silent) this.status.tradesSilentS = silent;
     const oiUsd = this.stats.openInterestUsd;
     const last = this.oi.last;
     if (oiUsd && (!last || now - last.time >= 15_000)) this.oi.push({ time: now, value: oiUsd });
@@ -405,6 +422,10 @@ export class MarketHub {
 
 let hubInstance: MarketHub | null = null;
 export function hub(): MarketHub {
-  if (!hubInstance) hubInstance = new MarketHub();
+  if (!hubInstance) {
+    hubInstance = new MarketHub();
+    // read-only handle for e2e checks of the live data path
+    if (typeof window !== 'undefined') (window as unknown as { __hub: MarketHub }).__hub = hubInstance;
+  }
   return hubInstance;
 }

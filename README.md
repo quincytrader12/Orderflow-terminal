@@ -60,7 +60,7 @@ Development: `npm run desktop:dev` (Vite + Electron with hot reload) or `npm run
 - **Telegram bot**: create a bot with @BotFather, add its token in 🔌 Connect (**Telegram bot** tile), press Start on your bot, then **Detect chat** and **Send test message** in the **Telegram Bot** panel. Fired alerts are forwarded to your chat, and you can let the bot answer `/price`, `/status` and `/help` — only from your own chat, while the app is open.
 - **Phantom data**: the wallet panel reads your address's SOL and SPL token balances, their USD value and the 25 most recent transactions (Activity tab, linked to Solscan) from the Solana blockchain. Phantom itself only shares your public address and a signature; nothing can read or move funds.
 
-The layout defaults to **Chart Center**: the footprint chart in the middle, DOM and book on the left, tape, summary and wallet on the right. Every split is draggable; **⤢ Chart** maximises the main chart. **✎ Edit layout** unlocks rearranging: drag a panel by its tab onto another panel to stack it or onto an edge to split, × closes, and the bar that appears offers Add panel, Layouts and Reset; **Done** locks it again. **🤖 Bots** opens the AMT bots panel.
+The layout defaults to **Chart Center**: the footprint chart in the middle, DOM and book on the left, tape, summary and wallet on the right. Every split is draggable; **⤢ Chart** maximises the main chart. Every panel has a **×** on its tab to close it (re-add it with **+ Panel**). **✎ Edit layout** unlocks rearranging: drag a panel by its tab onto another panel to stack it or onto an edge to split, × closes, and the bar that appears offers Add panel, Layouts and Reset; **Done** locks it again. **🤖 Bots** opens the AMT bots panel.
 
 **Put anything anywhere.** Drag any tab by its title onto the top, bottom, left, right or centre of any panel, or onto the window edge. **+ Panel** also asks where to place it: as a tab in the active area, a new column on the left or right, a new row at the bottom, or in a collapsible **left / right / bottom dock**. Panels redraw to whatever size they are given, and you can open the same panel type several times with different settings. Layouts save automatically; name and reload them under ▦ Layouts.
 
@@ -104,7 +104,7 @@ Requires Node 22+.
 
 | Venue | Symbol format | Trades | Order book | Liquidations | Funding / OI | Klines | REST history backfill |
 |---|---|---|---|---|---|---|---|
-| Binance Futures | `BTCUSDT` | ✓ aggTrade | ✓ diff-depth, snapshot sync (`pu` continuity) | ✓ forceOrder | ✓ markPrice / REST OI, L/S ratio, OI history | ✓ | ✓ aggTrades |
+| Binance Futures | `BTCUSDT` | ✓ aggTrade (routed `/market` + `/public` sockets) | ✓ diff-depth, snapshot sync (`pu` continuity) | ✓ forceOrder | ✓ markPrice / REST OI, L/S ratio, OI history | ✓ | ✓ aggTrades |
 | Binance Spot | `BTCUSDT` | ✓ | ✓ diff-depth, snapshot sync | — | — | ✓ | ✓ aggTrades |
 | Bybit Perp | `BTCUSDT` | ✓ | ✓ 200 levels, seq checked | ✓ allLiquidation | ✓ tickers / account ratio / OI history | ✓ | — |
 | OKX Perp | `BTC-USDT-SWAP` | ✓ (contracts → base via `ctVal`) | ✓ 400 levels, `seqId` gap → resubscribe | ✓ liquidation-orders | ✓ funding / OI / mark / index | ✓ | — |

@@ -3,7 +3,7 @@ import logo from '../assets/logo-96.png';
 import { fmtPct, fmtPrice } from '../core/format';
 import type { VenueId } from '../core/types';
 import { ADAPTERS, POPULAR_BASES, VENUE_IDS } from '../exchanges';
-import { hub } from '../market/hub';
+import { hub, type Feed } from '../market/hub';
 import { useSettings } from '../store/settings';
 import { Select, useHubVersion, useTicker } from '../ui/controls';
 import { VENUE_COLORS } from '../ui/theme';
@@ -16,6 +16,15 @@ import { sealTerminal } from './LockScreen';
 /** Pyramid mark with three candles — Novus Ordo. */
 export function Logo({ size = 26 }: { size?: number }) {
   return <img className="logo" src={logo} width={size} height={size} alt="" aria-hidden draggable={false} />;
+}
+
+/** Status dot class and tooltip; a live book with a silent trade stream shows amber. */
+function feedDot(f: Feed) {
+  const silent = f.status.tradesSilentS;
+  return {
+    cls: `status-dot status-${silent ? 'connecting' : f.status.state}`,
+    title: `${f.adapter.name}: ${f.status.state}${f.status.error ? ' — ' + f.status.error : ''}${silent ? ` — no trades for ${Math.round(silent / 60)} min while the order book is live` : ''}`,
+  };
 }
 
 export type ModalKind = 'connection' | 'layouts' | 'add' | 'settings' | 'keys' | null;
@@ -144,7 +153,7 @@ function AggregateChips() {
       <button className="chip" onClick={() => setOpen(!open)} title="Aggregate set: venues streamed for composite panels">
         Σ
         {feeds.map((f) => (
-          <span key={f.key} className={`status-dot status-${f.status.state}`} style={{ outline: `1px solid ${VENUE_COLORS[f.inst.venue]}`, outlineOffset: 1 }} title={`${f.adapter.name}: ${f.status.state}${f.status.error ? ' — ' + f.status.error : ''}`} />
+          <span key={f.key} className={feedDot(f).cls} style={{ outline: `1px solid ${VENUE_COLORS[f.inst.venue]}`, outlineOffset: 1 }} title={feedDot(f).title} />
         ))}
       </button>
       {open && (
@@ -163,7 +172,7 @@ function AggregateChips() {
                 </span>
                 {f && (
                   <span className="muted mono" style={{ fontSize: 10 }}>
-                    <span className={`status-dot status-${f.status.state}`} /> {f.rate.toFixed(0)}/s{f.status.latencyMs !== undefined ? ` · ${f.status.latencyMs.toFixed(0)}ms` : ''}
+                    <span className={feedDot(f).cls} title={feedDot(f).title} /> {f.rate.toFixed(0)}/s{f.status.latencyMs !== undefined ? ` · ${f.status.latencyMs.toFixed(0)}ms` : ''}
                   </span>
                 )}
               </label>
@@ -238,7 +247,7 @@ export function TopBar({ onOpen, onFocusChart, onOpenPanel, alertCount, editing,
       <div className="group">
         <span className={`price-big ${(ch ?? 0) >= 0 ? 'up' : 'down'}`}>{fmtPrice(last)}</span>
         {ch !== undefined && <span className={(ch ?? 0) >= 0 ? 'up mono' : 'down mono'}>{fmtPct(ch)}</span>}
-        <span className={`status-dot status-${f.status.state}`} title={`${f.adapter.name} ${f.status.state}${f.status.error ? ': ' + f.status.error : ''}`} />
+        <span className={feedDot(f).cls} title={feedDot(f).title} />
       </div>
       <div className="sep" />
       <AggregateChips />

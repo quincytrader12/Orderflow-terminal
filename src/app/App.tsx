@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Actions, DockLocation, Layout, Model, type BorderNode, type IJsonModel, type ILayoutApi, type TabNode } from 'flexlayout-react';
+import { Actions, DockLocation, ICloseType, Layout, Model, type BorderNode, type IJsonModel, type ILayoutApi, type TabNode } from 'flexlayout-react';
 import 'flexlayout-react/style/dark.css';
 import { startAlerts, useToasts } from '../alerts/engine';
 import { startAmtService } from '../desktop/amt';
@@ -66,12 +66,13 @@ export function App() {
     setModel(m);
   }, []);
 
-  // outside edit mode tabs can't be dragged, docked or closed (no accidental
-  // rearranging); the gaps between panels always stay resizable
+  // outside edit mode tabs can't be dragged or docked (no accidental
+  // rearranging); every panel can always be closed with its ×, and the gaps
+  // between panels always stay resizable
   const [editing, setEditing] = useState(false);
   useEffect(() => {
     const on = editing;
-    model.doAction(Actions.updateModelAttributes({ tabEnableDrag: on, tabSetEnableDrag: on, tabSetEnableDrop: on, tabEnableClose: on, tabSetEnableDivide: on }));
+    model.doAction(Actions.updateModelAttributes({ tabEnableDrag: on, tabSetEnableDrag: on, tabSetEnableDrop: on, tabEnableClose: true, tabCloseType: ICloseType.Always, tabSetEnableDivide: on }));
   }, [model, editing]);
 
   /** Maximise (or restore) the tabset holding the main chart. */

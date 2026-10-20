@@ -138,6 +138,11 @@ export interface VenueStatus {
   lastMsg: number;
   error?: string;
   latencyMs?: number;
+  /**
+   * Seconds without a trade while the order book keeps updating: the socket
+   * is fine but the trade stream is not (e.g. an exchange moved its streams).
+   */
+  tradesSilentS?: number;
 }
 
 export const INTERVALS: Record<string, number> = {

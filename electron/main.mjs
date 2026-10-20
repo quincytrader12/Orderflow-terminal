@@ -1,5 +1,5 @@
 // Novus Ordo desktop shell (Electron main process).
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, screen, shell } from 'electron';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,7 @@ import { AttemptGate, isLedgerRecord, ledgerMatches, makeLedger, PUBLIC_CHANNELS
 import { createHash, randomBytes } from 'node:crypto';
 import { Vault } from './vault.mjs';
 import { initLog, log, logFile } from './log.mjs';
+import { initialWindow, loadWindowState, MIN_H, MIN_W, saveWindowState } from './windowState.mjs';
 
 // bundled to dist-electron/main.mjs; app root is one level up
 const here = dirname(fileURLToPath(import.meta.url));
@@ -84,11 +85,19 @@ let bots;
 let services = null;
 
 function createWindow() {
+  // opens maximised (or where it was last left), always within the screen:
+  // a fixed 1600×1000 with a 960×600 minimum did not fit scaled laptop screens
+  const stateFile = join(userDataDir, 'window-state.json');
+  const primary = screen.getPrimaryDisplay();
+  const displays = [primary, ...screen.getAllDisplays().filter((d) => d.id !== primary.id)].map((d) => d.workArea);
+  const placed = initialWindow(loadWindowState(stateFile), displays);
   win = new BrowserWindow({
-    width: 1600,
-    height: 1000,
-    minWidth: 960,
-    minHeight: 600,
+    ...placed.bounds,
+    minWidth: Math.min(MIN_W, displays[0].width),
+    minHeight: Math.min(MIN_H, displays[0].height),
+    resizable: true,
+    maximizable: true,
+    fullscreenable: true,
     title: 'Novus Ordo — by Quincy Gininda',
     // black like the lock screen, and only shown once the first frame is painted
     backgroundColor: '#000000',
@@ -116,6 +125,8 @@ function createWindow() {
   const w = win;
   const reveal = () => {
     if (!w.isDestroyed() && !w.isVisible()) {
+      if (placed.maximized) w.maximize();
+      if (placed.fullScreen) w.setFullScreen(true);
       w.show();
       log('info', 'window shown');
     }
@@ -144,6 +155,7 @@ function createWindow() {
   });
   if (process.env.VITE_DEV_SERVER_URL) void win.loadURL(process.env.VITE_DEV_SERVER_URL);
   else void win.loadFile(join(root, 'dist', 'index.html')).catch((e) => log('error', 'loadFile failed', e));
+  win.on('close', () => saveWindowState(stateFile, w));
   win.on('closed', () => {
     win = null;
     ccxtSvc?.closeAll();
