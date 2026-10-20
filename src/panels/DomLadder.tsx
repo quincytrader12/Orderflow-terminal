@@ -69,24 +69,13 @@ export function DomLadder({ config: c, setConfig }: PanelProps<DomConfig>) {
     const topPrice = bucket(v.center + Math.floor(rows / 2) * tick, tick, 'round');
 
     // columns
-    const cols = c.showDelta
-      ? [
-          { k: 'sold', label: 'Sold', w: 0.13 },
-          { k: 'bid', label: 'Bid', w: 0.16 },
-          { k: 'price', label: 'Price', w: 0.17 },
-          { k: 'ask', label: 'Ask', w: 0.16 },
-          { k: 'bought', label: 'Bought', w: 0.13 },
-          { k: 'delta', label: 'Δ', w: 0.1 },
-          { k: 'vol', label: 'Volume', w: 0.15 },
-        ]
-      : [
-          { k: 'sold', label: 'Sold', w: 0.15 },
-          { k: 'bid', label: 'Bid', w: 0.19 },
-          { k: 'price', label: 'Price', w: 0.18 },
-          { k: 'ask', label: 'Ask', w: 0.19 },
-          { k: 'bought', label: 'Bought', w: 0.15 },
-          { k: 'vol', label: 'Volume', w: 0.14 },
-        ];
+    // narrow ladders drop the secondary columns instead of overlapping them
+    const WEIGHT: Record<string, number> = { sold: 0.13, bid: 0.16, price: 0.17, ask: 0.16, bought: 0.13, delta: 0.1, vol: 0.15 };
+    const LABEL: Record<string, string> = { sold: 'Sold', bid: 'Bid', price: 'Price', ask: 'Ask', bought: 'Bought', delta: 'Δ', vol: 'Volume' };
+    const drop = w < 250 ? ['sold', 'bought', 'delta', 'vol'] : w < 310 ? ['delta', 'vol'] : w < 370 ? ['vol'] : [];
+    const keys = ['sold', 'bid', 'price', 'ask', 'bought', ...(c.showDelta ? ['delta'] : []), 'vol'].filter((k) => !drop.includes(k));
+    const sumW = keys.reduce((a, k) => a + WEIGHT[k], 0);
+    const cols = keys.map((k) => ({ k, label: LABEL[k], w: WEIGHT[k] / sumW }));
     let x = 0;
     const colX: Record<string, [number, number]> = {};
     for (const col of cols) {
@@ -124,7 +113,18 @@ export function DomLadder({ config: c, setConfig }: PanelProps<DomConfig>) {
     const bestBid = feed.book.bestBid()?.price;
     const bestAsk = feed.book.bestAsk()?.price;
     const lastBucket = isFinite(lp) ? bucket(lp, tick, 'floor') : NaN;
-    ctx.font = font(Math.min(12, rowH - 5));
+    // font sized so a full price fits its column
+    const fontPx = Math.max(8, Math.min(12, rowH - 5, colX.price[1] / (fmtPrice(topPrice, tick).length * 0.64)));
+    ctx.font = font(fontPx);
+    // text never spills into the next column
+    const clipText = (text: string, tx: number, ty: number, [cx, cw]: [number, number]) => {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(cx + 1, ty - rowH / 2, cw - 2, rowH);
+      ctx.clip();
+      ctx.fillText(text, tx, ty);
+      ctx.restore();
+    };
     visible.forEach((p, r) => {
       const y = headerH + r * rowH;
       const ym = y + rowH / 2;
@@ -142,7 +142,7 @@ export function DomLadder({ config: c, setConfig }: PanelProps<DomConfig>) {
         ctx.fillRect(cx + cw - cw * (bq / (maxBook || 1)), y + 1, cw * (bq / (maxBook || 1)), rowH - 2);
         ctx.fillStyle = pal.text;
         ctx.textAlign = 'right';
-        ctx.fillText(fmtQ(bq, p), cx + cw - 4, ym);
+        clipText(fmtQ(bq, p), cx + cw - 4, ym, colX.bid);
       }
       if (aq > 0) {
         const [cx, cw] = colX.ask;
@@ -150,7 +150,7 @@ export function DomLadder({ config: c, setConfig }: PanelProps<DomConfig>) {
         ctx.fillRect(cx, y + 1, cw * (aq / (maxBook || 1)), rowH - 2);
         ctx.fillStyle = pal.text;
         ctx.textAlign = 'left';
-        ctx.fillText(fmtQ(aq, p), cx + 4, ym);
+        clipText(fmtQ(aq, p), cx + 4, ym, colX.ask);
       }
       // price
       const [px, pw] = colX.price;
@@ -160,9 +160,9 @@ export function DomLadder({ config: c, setConfig }: PanelProps<DomConfig>) {
       ctx.fillRect(px + 1, y + 1, pw - 2, rowH - 2);
       ctx.textAlign = 'center';
       ctx.fillStyle = isLast ? ink(pal.accent) : bq > 0 ? pal.buy : aq > 0 ? pal.sell : pal.muted;
-      ctx.font = font(Math.min(12, rowH - 5), isLast ? 700 : 500);
+      ctx.font = font(fontPx, isLast ? 700 : 500);
       ctx.fillText(fmtPrice(p, tick), px + pw / 2, ym);
-      ctx.font = font(Math.min(12, rowH - 5));
+      ctx.font = font(fontPx);
       if (p === bucket(prof.high, tick, 'floor')) {
         ctx.fillStyle = pal.warn;
         ctx.fillRect(px + 1, y + 1, 3, rowH - 2);
@@ -173,43 +173,45 @@ export function DomLadder({ config: c, setConfig }: PanelProps<DomConfig>) {
       }
       if (l) {
         const flash = now - l.last < 700;
-        const [sx, sw] = colX.sold;
-        const [bx, bw] = colX.bought;
-        if (l.sell > 0) {
+        if (l.sell > 0 && colX.sold) {
+          const [sx, sw] = colX.sold;
           ctx.fillStyle = flash ? rgba(pal.sellRgb, 0.35) : 'transparent';
           ctx.fillRect(sx, y + 1, sw, rowH - 2);
           ctx.fillStyle = pal.sell;
           ctx.textAlign = 'right';
-          ctx.fillText(fmtQ(l.sell, p), sx + sw - 4, ym);
+          clipText(fmtQ(l.sell, p), sx + sw - 4, ym, colX.sold);
         }
-        if (l.buy > 0) {
+        if (l.buy > 0 && colX.bought) {
+          const [bx, bw] = colX.bought;
           ctx.fillStyle = flash ? rgba(pal.buyRgb, 0.35) : 'transparent';
           ctx.fillRect(bx, y + 1, bw, rowH - 2);
           ctx.fillStyle = pal.buy;
           ctx.textAlign = 'left';
-          ctx.fillText(fmtQ(l.buy, p), bx + 4, ym);
+          clipText(fmtQ(l.buy, p), bx + 4, ym, colX.bought);
         }
-        if (c.showDelta) {
+        if (colX.delta) {
           const [dx, dw] = colX.delta;
           const d = l.buy - l.sell;
           ctx.fillStyle = rgba(d >= 0 ? pal.buyRgb : pal.sellRgb, 0.1 + 0.5 * (Math.abs(d) / (maxDelta || 1)));
           ctx.fillRect(dx + 1, y + 1, dw - 2, rowH - 2);
           ctx.fillStyle = pal.text;
           ctx.textAlign = 'center';
-          ctx.fillText((d > 0 ? '+' : '') + fmtQ(d, p), dx + dw / 2, ym);
+          clipText((d > 0 ? '+' : '') + fmtQ(d, p), dx + dw / 2, ym, colX.delta);
         }
-        const [vx, vw] = colX.vol;
-        const tot = l.buy + l.sell;
-        const bw2 = (tot / (maxTraded || 1)) * (vw - 6);
-        const sellW = (l.sell / (tot || 1)) * bw2;
-        ctx.fillStyle = rgba(pal.sellRgb, 0.55);
-        ctx.fillRect(vx + 3, y + 3, sellW, rowH - 6);
-        ctx.fillStyle = rgba(pal.buyRgb, 0.55);
-        ctx.fillRect(vx + 3 + sellW, y + 3, bw2 - sellW, rowH - 6);
-        if (vw > 60) {
-          ctx.fillStyle = pal.text;
-          ctx.textAlign = 'right';
-          ctx.fillText(fmtQ(tot, p), vx + vw - 4, ym);
+        if (colX.vol) {
+          const [vx, vw] = colX.vol;
+          const tot = l.buy + l.sell;
+          const bw2 = (tot / (maxTraded || 1)) * (vw - 6);
+          const sellW = (l.sell / (tot || 1)) * bw2;
+          ctx.fillStyle = rgba(pal.sellRgb, 0.55);
+          ctx.fillRect(vx + 3, y + 3, sellW, rowH - 6);
+          ctx.fillStyle = rgba(pal.buyRgb, 0.55);
+          ctx.fillRect(vx + 3 + sellW, y + 3, bw2 - sellW, rowH - 6);
+          if (vw > 60) {
+            ctx.fillStyle = pal.text;
+            ctx.textAlign = 'right';
+            clipText(fmtQ(tot, p), vx + vw - 4, ym, colX.vol);
+          }
         }
       }
     });

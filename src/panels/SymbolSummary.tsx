@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { fmtDuration, fmtNum, fmtPct, fmtPrice, fmtUsd } from '../core/format';
+import { fmtDuration, fmtNum, fmtPct, fmtPrice, fmtTime, fmtUsd } from '../core/format';
 import { hub } from '../market/hub';
 import { Spacer, Toolbar, useTicker, VenueTag, type PanelProps } from '../ui/controls';
 
@@ -30,7 +30,12 @@ export function SymbolSummary(_: PanelProps<SummaryConfig>) {
   const perps = H.aggregate.filter((x) => x.adapter.kind === 'perp');
   const aggOi = perps.reduce((a, x) => a + (x.stats.openInterestUsd ?? 0), 0);
   const aggVol = H.aggregate.reduce((a, x) => a + (x.stats.volume24hUsd ?? 0), 0);
-  const range = s.high24h && s.low24h ? ((last - s.low24h) / (s.high24h - s.low24h)) * 100 : NaN;
+  // venues without 24h stats: use the prices this session has seen instead
+  const mids = s.high24h && s.low24h ? [] : f.mids.items.filter((p) => p.time >= now - 86_400_000);
+  const hi = s.high24h ?? (mids.length ? Math.max(...mids.map((p) => p.value)) : NaN);
+  const lo = s.low24h ?? (mids.length ? Math.min(...mids.map((p) => p.value)) : NaN);
+  const seenSince = !s.high24h && mids.length ? mids[0].time : null;
+  const range = hi > lo ? ((last - lo) / (hi - lo)) * 100 : NaN;
 
   return (
     <div className="panel">
@@ -44,7 +49,11 @@ export function SymbolSummary(_: PanelProps<SummaryConfig>) {
       <div className="scroll">
         <div className="stat-grid">
           <Stat k="Last" v={fmtPrice(last)} s={s.change24hPct !== undefined ? fmtPct(s.change24hPct) + ' 24h' : undefined} cls={(s.change24hPct ?? 0) >= 0 ? 'up' : 'down'} />
-          <Stat k="24h range" v={`${fmtPrice(s.low24h ?? NaN)} – ${fmtPrice(s.high24h ?? NaN)}`} s={isFinite(range) ? `${range.toFixed(0)}% of range` : undefined} />
+          <Stat
+            k={seenSince ? 'Range (session)' : '24h range'}
+            v={isFinite(lo) && isFinite(hi) ? `${fmtPrice(lo)} – ${fmtPrice(hi)}` : '—'}
+            s={isFinite(range) ? `${range.toFixed(0)}% of range${seenSince ? ` · since ${fmtTime(seenSince, false)}` : ''}` : undefined}
+          />
           <Stat k="24h volume" v={fmtUsd(s.volume24hUsd ?? NaN)} s={`all venues ${fmtUsd(aggVol)}`} />
           {f.adapter.kind === 'perp' && (
             <>

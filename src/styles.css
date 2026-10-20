@@ -2069,3 +2069,46 @@ ol.steps li.done::marker {
     animation: none;
   }
 }
+
+/* ---------- top bar on smaller screens: icons only, then drop extras ---------- */
+@media (max-width: 1700px) {
+  .topbar .chip .lbl {
+    display: none;
+  }
+}
+@media (max-width: 1360px) {
+  .topbar .brand-by,
+  .topbar select[title="Display filter"] {
+    display: none;
+  }
+}
+@media (max-width: 1200px) {
+  .topbar .hide-sm {
+    display: none;
+  }
+}
+.topbar img.logo {
+  display: block;
+  filter: drop-shadow(0 0 6px rgba(220, 225, 235, 0.25));
+}
+
+/* long option labels wrap (with a hanging indent) instead of widening the panel */
+.amt-settings .check,
+.ledger-settings .check,
+.panel .scroll .check {
+  display: block;
+  white-space: normal;
+  line-height: 1.45;
+  padding-left: 21px;
+  text-indent: -21px;
+}
+.amt-settings .check input,
+.ledger-settings .check input,
+.panel .scroll .check input {
+  margin: 0 7px 0 0;
+  vertical-align: -2px;
+  text-indent: 0;
+}
+.amt-body {
+  overflow-x: hidden;
+}

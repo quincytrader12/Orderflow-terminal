@@ -218,11 +218,21 @@ try {
   expect(recorded > 5000, `recorded ${recorded} synthetic trades for the backtest`);
   await page.click('button[title="Add a panel"]');
   await page.click('.modal .chip:text-is("New column — right")');
-  await page.click('.panel-item:has(b:text-is("AMT Scalper"))');
+  await page.click('.panel-item:has(b:text-is("AMT Bots"))');
   await page.waitForSelector('.amt-intro');
   await page.click('.amt-intro button:text-is("Create a bot")');
   await page.waitForSelector('.amt-settings');
   expect((await page.locator('.amt-settings input[type="number"]').count()) >= 25, 'all AMT parameters editable');
+  await page.click('.amt-settings .seg button:text-is("Intraday")');
+  await page.waitForSelector('.amt-settings :text("Initial-balance extension")');
+  expect((await page.locator('.amt-settings input[type="number"]').count()) >= 35, 'intraday style shows its session parameters');
+  await page.click('.amt-settings button:text-is("Save")');
+  await page.waitForTimeout(300);
+  const saved = await page.evaluate(() => window.novus.amt.list());
+  expect(saved[0].params.style === 'intraday' && saved[0].params.maxHoldSec === 28_800, 'intraday bot saved with its preset');
+  await page.screenshot({ path: `${OUT}desktop-amt-intraday-settings.png` });
+  // back to scalp for the breakout backtest below
+  await page.click('.amt-settings .seg button:text-is("Scalp")');
   await page.click('.amt-settings button:text-is("Save")');
   await page.click('.amt .toolbar button:text-is("Backtest")');
   await page.selectOption('.amt-backtest select', 'binancef|AMTTEST');

@@ -274,9 +274,18 @@ export function drawSeries(
   ctx.font = font(10);
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
+  // axis labels make way for the last-value tags drawn on the same axis
+  const tagYs = series.flatMap((sr) => {
+    for (let i = sr.points.length - 1; i >= 0; i--) {
+      const p = sr.points[i];
+      if (p.time >= range.from && isFinite(p.value)) return [y(p.value)];
+    }
+    return [];
+  });
   for (const v of axisTicks(min, max, Math.max(2, rect.h / 40))) {
     const yy = Math.round(y(v)) + 0.5;
     line(ctx, rect.x, yy, rect.x + plotW, yy, pal.grid);
+    if (tagYs.some((ty) => Math.abs(ty - yy) < 11)) continue;
     ctx.fillStyle = pal.muted;
     ctx.fillText(fmt(v), rect.x + plotW + 6, yy);
   }

@@ -70,10 +70,38 @@ const ADVANCED_FIELDS: [string, [NumKey, string, string][]][] = [
   ],
 ];
 
-const SETUPS: [keyof AmtParams['setups'], string, string][] = [
-  ['fade', 'Responsive fade', 'Probe beyond VAH/VAL is rejected → trade back to POC'],
-  ['breakout', 'Initiative breakout', 'Price accepted outside value with strong delta → trade the extension'],
-  ['reentry', '80% rule', 'Session opens outside prior value, re-enters and holds → trade to the far edge'],
+type Style = AmtParams['style'];
+
+const SETUPS: Record<Style, [keyof AmtParams['setups'], string, string][]> = {
+  scalp: [
+    ['fade', 'Responsive fade', 'Probe beyond VAH/VAL is rejected → trade back to POC'],
+    ['breakout', 'Initiative breakout', 'Price accepted outside value with strong delta → trade the extension'],
+    ['reentry', '80% rule', 'Session opens outside prior value, re-enters and holds → trade to the far edge'],
+  ],
+  intraday: [
+    ['ibBreakout', 'Initial-balance extension', 'First-hour range broken and held → range extension of 1× IB (trend day)'],
+    ['priorAccept', 'Prior-value acceptance', 'Accepted outside yesterday’s value → value migrating, trade one value-area width'],
+    ['priorReject', 'Prior-value rejection', 'Probe beyond yesterday’s value fails → responsive trade back to prior POC'],
+    ['reentry', '80% rule', 'Session opens outside prior value, re-enters and holds → trade to the far edge'],
+  ],
+};
+
+const STYLE_TEXT: Record<Style, string> = {
+  scalp: 'Seconds to minutes. Rolling value area, order-flow confirmation, many small trades.',
+  intraday: 'Hours. Session structure (initial balance, prior-day value), wider stops, at most a few trades a session, trailing stop, flat before the session closes.',
+};
+
+const INTRADAY_FIELDS: [NumKey, string, string][] = [
+  ['ibMinutes', 'Initial balance (min)', 'Opening range length — 60 is the classic first hour'],
+  ['ibAcceptMin', 'IB extension held (min)', 'Time beyond the IB edge before the extension counts'],
+  ['priorAcceptMin', 'Prior-value acceptance (min)', 'Time outside yesterday’s value that counts as acceptance'],
+  ['priorRejectMin', 'Prior-value rejection (min)', 'A probe back inside within this is a rejection'],
+  ['intradayFlowSec', 'Flow window (s)', 'Delta window for intraday confirmation (max 590)'],
+  ['intradayDelta', 'Delta threshold', '(buy−sell)/total needed, 0–1'],
+  ['ibTargetX', 'IB target ×', 'Target = IB edge ± this many IB ranges'],
+  ['maxTradesPerSession', 'Max trades / session', ''],
+  ['flatBeforeCloseMin', 'Flat before close (min)', 'Exit open positions this long before the session ends'],
+  ['trailAtR', 'Trail at R', 'Trail the stop to the developing session POC after this many R (0 = off)'],
 ];
 
 const usd = (v: number | null | undefined) => (v === null || v === undefined || !isFinite(v) ? '—' : `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`);
@@ -156,7 +184,7 @@ export function AmtScalper({ config: c, setConfig }: PanelProps<AmtConfig>) {
   return (
     <div className="panel amt">
       <Toolbar>
-        <Select value={c.botId} options={[{ value: '', label: bots.length ? 'Choose bot…' : 'No bots yet' }, ...bots.map((b) => ({ value: b.id, label: `${b.running ? '● ' : ''}${b.name}` }))]} onChange={(botId) => setConfig({ botId })} width={150} />
+        <Select value={c.botId} options={[{ value: '', label: bots.length ? 'Choose bot…' : 'No bots yet' }, ...bots.map((b) => ({ value: b.id, label: `${b.running ? '● ' : ''}${b.name}${b.params.style === 'intraday' ? ' · intraday' : ''}` }))]} onChange={(botId) => setConfig({ botId })} width={150} />
         <button className="chip" onClick={() => void create()} title="New AMT bot">
           + New
         </button>
@@ -216,18 +244,23 @@ export function AmtScalper({ config: c, setConfig }: PanelProps<AmtConfig>) {
 function Intro({ onCreate }: { onCreate: () => void }) {
   return (
     <div className="amt-intro">
-      <h3>Auction Market Theory scalper</h3>
+      <h3>Auction Market Theory bots</h3>
       <p>
         The bot builds a rolling volume profile (POC and the 70% value area), tracks whether price is in <b>balance</b> inside value, <b>probing</b> outside it, or has been <b>accepted</b> outside it, and
         waits for order flow — aggressor delta, volume intensity and the order book — to agree before it trades:
       </p>
-      <ul>
-        {SETUPS.map(([k, name, text]) => (
-          <li key={k}>
-            <b>{name}</b> — {text}
-          </li>
-        ))}
-      </ul>
+      {(['scalp', 'intraday'] as Style[]).map((st) => (
+        <div key={st}>
+          <b>{st === 'scalp' ? 'Scalp' : 'Intraday'}</b> <span className="muted">— {STYLE_TEXT[st]}</span>
+          <ul>
+            {SETUPS[st].map(([k, name, text]) => (
+              <li key={k}>
+                <b>{name}</b> — {text}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
       <p className="muted">Every bot starts in paper mode on the live market. Switch to live only after it has paper-traded and backtested well, and start on a testnet key.</p>
       <button className="btn" onClick={onCreate}>
         Create a bot
@@ -281,6 +314,10 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
       .catch(() => undefined);
   }, [ex]);
 
+  const [presets, setPresets] = useState<Record<Style, AmtParams> | null>(null);
+  useEffect(() => {
+    desktop!.amt.presets().then(setPresets).catch(() => undefined);
+  }, []);
   const P = d.params;
   const setP = (patch: Partial<AmtParams>) => setD({ ...d, params: { ...P, ...patch } });
   const num = (k: NumKey, label: string, hint: string) => (
@@ -369,8 +406,28 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
         </Check>
       )}
 
+      <div className="section-title">Style</div>
+      <div className="seg">
+        {(['scalp', 'intraday'] as Style[]).map((st) => (
+          <button
+            key={st}
+            type="button"
+            className={`chip ${P.style === st ? 'active' : ''}`}
+            onClick={() => {
+              if (P.style === st || !presets) return;
+              // load the style's preset but keep the owner's risk and cost settings
+              const keep = { riskUsd: P.riskUsd, maxPositionUsd: P.maxPositionUsd, maxDailyLossUsd: P.maxDailyLossUsd, allowShort: P.allowShort, useBook: P.useBook, feeBps: P.feeBps, slippageBps: P.slippageBps };
+              setD({ ...d, params: { ...presets[st], ...keep } });
+            }}
+          >
+            {st === 'scalp' ? 'Scalp' : 'Intraday'}
+          </button>
+        ))}
+      </div>
+      <div className="muted amt-hint">{STYLE_TEXT[P.style]}</div>
+
       <div className="section-title">Setups</div>
-      {SETUPS.map(([k, name, text]) => (
+      {SETUPS[P.style].map(([k, name, text]) => (
         <Check key={k} checked={P.setups[k]} onChange={(v) => setP({ setups: { ...P.setups, [k]: v } })}>
           <b>{name}</b> <span className="muted">— {text}</span>
         </Check>
@@ -387,6 +444,12 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
 
       <details className="amt-adv">
         <summary>Advanced AMT parameters</summary>
+        {P.style === 'intraday' && (
+          <div>
+            <div className="section-title">Intraday session</div>
+            <div className="amt-grid">{INTRADAY_FIELDS.map(([k, l, h]) => num(k, l, h))}</div>
+          </div>
+        )}
         {ADVANCED_FIELDS.map(([group, fields]) => (
           <div key={group}>
             <div className="section-title">{group}</div>
@@ -449,6 +512,15 @@ function Monitor({ bot, snap, running, events }: { bot: AmtBot; snap: AmtSnapsho
             <Stat label="Intensity" value={s.flow?.intensity ? `${fmtNum(s.flow.intensity, 1)}×` : '—'} />
             <Stat label="Book imb." value={s.book ? fmtNum(s.book.imbalance, 2) : '—'} tone={s.book?.imbalance ?? 0} />
             <Stat label="Prior value" value={s.prior ? `${fmtPrice(s.prior.val)}–${fmtPrice(s.prior.vah)}` : 'after 1 session'} />
+            {s.style === 'intraday' && s.session && (
+              <>
+                <Stat label="Initial balance" value={s.session.ib ? `${fmtPrice(s.session.ib.low)}–${fmtPrice(s.session.ib.high)}${s.session.ib.done ? '' : ' (forming)'}` : 'next session'} />
+                <Stat label="Session range" value={`${fmtPrice(s.session.low)}–${fmtPrice(s.session.high)}`} />
+                <Stat label="Session POC" value={s.session.value ? fmtPrice(s.session.value.poc) : '—'} />
+                <Stat label="Trades / session" value={`${s.session.trades}/${bot.params.maxTradesPerSession}`} />
+                <Stat label="Session closes" value={new Date(s.session.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} />
+              </>
+            )}
           </div>
           {s.profile.length > 0 && <ProfileView snap={s} />}
           {pos ? (

@@ -46,6 +46,9 @@ export function AccountsPanel({ config: c, setConfig }: PanelProps<AccountsConfi
   }, [keys]);
 
   useEffect(() => {
+    // never show (or act on) one key's data while another key is selected
+    setData(null);
+    setErr('');
     if (!c.secretId) return;
     if (!desktop) {
       setErr(new DesktopOnlyError('Exchange accounts').message);

@@ -6,7 +6,7 @@
 //
 // Bots never start on their own: after a restart every bot is off.
 import { randomUUID } from 'node:crypto';
-import { AmtEngine, DEFAULT_AMT, finishBacktest, mergeConfig, paperFill, replay } from './engine.mjs';
+import { AmtEngine, DEFAULT_AMT, finishBacktest, INTRADAY_PRESET, mergeConfig, paperFill, replay } from './engine.mjs';
 
 const KEY = 'amtBots';
 const MAX_EVENTS = 200;
@@ -34,12 +34,17 @@ export class BotManager {
   list() {
     return this.configs().map((c) => {
       const b = this.running.get(c.id);
-      return { ...c, running: Boolean(b), feed: b?.feed ?? null };
+      // configs saved by older versions get any new parameters filled in
+      return { ...c, params: mergeConfig(c.params), running: Boolean(b), feed: b?.feed ?? null };
     });
   }
 
   defaults() {
     return DEFAULT_AMT;
+  }
+
+  presets() {
+    return { scalp: mergeConfig({}), intraday: mergeConfig(INTRADAY_PRESET) };
   }
 
   save(input) {
@@ -100,7 +105,7 @@ export class BotManager {
     if (this.running.has(id)) return true;
     const cfg = this.configs().find((c) => c.id === id);
     if (!cfg) throw new Error('bot not found');
-    const params = { ...cfg.params };
+    const params = mergeConfig(cfg.params);
     let exchangeId = cfg.exchangeId;
     let sandbox = false;
     let live = null;
@@ -111,7 +116,8 @@ export class BotManager {
       sandbox = info.sandbox;
       live = { secretId: cfg.secretId, contract: info.contract };
       // the bot plays inside the terminal-wide limits, never against them
-      params.maxPositionUsd = Math.min(params.maxPositionUsd, info.limits.maxOrderUsd);
+      // 2 % headroom: the order is re-valued at the ticker price, which may have ticked up
+      params.maxPositionUsd = Math.min(params.maxPositionUsd, info.limits.maxOrderUsd * 0.98);
       if (!info.contract) params.allowShort = false;
       if (info.taker) params.feeBps = Math.max(params.feeBps, info.taker * 1e4);
     }
@@ -162,69 +168,106 @@ export class BotManager {
     for (const intent of intents) {
       if (b.cfg.mode === 'paper') {
         const fill = paperFill(e, intent);
-        this.report(id, intent, fill.price);
-      } else void this.executeLive(id, intent);
+        this.report(b, intent, fill.price);
+      } else void this.executeLive(b, intent);
     }
     if (e.halted && !e.pos && !e.pending && !b.stopping) void this.stop(id, { reason: e.halted });
   }
 
-  report(id, intent, price) {
-    const e = this.running.get(id)?.engine;
+  report(b, intent, price) {
+    const id = b.cfg.id;
+    const e = b.engine;
     if (intent.type === 'enter') {
       this.event(id, 'entry', `${intent.side === 'buy' ? 'LONG' : 'SHORT'} ${tidy(intent.qty)} @ ${tidy(price)} · ${intent.setup} · stop ${tidy(intent.stop)} · target ${tidy(intent.target)} — ${intent.reason}`, { ...intent, price });
-    } else {
-      const last = e?.trades[e.trades.length - 1];
-      const pnl = last ? last.pnl : 0;
-      const cfg = this.running.get(id)?.cfg;
-      if (last && cfg) {
-        try {
-          this.db.recordAmtTrade({ ...last, botId: id, botName: cfg.name, symbol: cfg.symbol, mode: cfg.mode });
-        } catch (err) {
-          console.warn('amt trade log', err?.message ?? err);
-        }
-      }
-      this.event(id, 'exit', `EXIT ${intent.reason} @ ${tidy(price)} · ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USD`, { ...intent, price, pnl });
+      return;
     }
+    const last = e.trades[e.trades.length - 1];
+    const pnl = last ? last.pnl : 0;
+    if (last) {
+      try {
+        this.db.recordAmtTrade({ ...last, botId: id, botName: b.cfg.name, symbol: b.cfg.symbol, mode: b.cfg.mode });
+      } catch (err) {
+        console.warn('amt trade log', err?.message ?? err);
+      }
+    }
+    this.event(id, 'exit', `EXIT ${intent.reason} @ ${tidy(price)} · ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USD`, { ...intent, price, pnl });
   }
 
-  async executeLive(id, intent) {
-    const b = this.running.get(id);
-    if (!b) return;
+  /**
+   * Live orders. Positions are tracked in exchange units (contracts, or coins
+   * on spot) exactly as filled, so exits and the protective stop close what
+   * was opened. The bot object is passed in because a stop can remove it from
+   * `running` while an order is still in flight.
+   */
+  async executeLive(b, intent) {
+    const id = b.cfg.id;
     const e = b.engine;
     const { secretId, contract } = b.live;
     const symbol = b.cfg.symbol;
+    const opposite = (side) => (side === 'buy' ? 'sell' : 'buy');
     const feeOf = (price, qty) => (price * qty * e.cfg.feeBps) / 1e4;
     try {
       if (intent.type === 'enter') {
         const r = await this.ccxt.placeOrder(secretId, { symbol, side: intent.side, type: 'market', sizeMode: 'base', size: intent.qty });
+        b.amount = r.amount;
         const qty = r.baseQty ?? intent.qty;
         const price = r.price ?? e.last;
         e.filled({ price, qty, fee: feeOf(price, qty) });
-        this.report(id, { ...intent, qty }, price);
+        this.report(b, { ...intent, qty }, price);
+        if (b.stopping) {
+          // the bot was switched off while this entry was in flight
+          if (b.flattenOnFill) {
+            e.pending = { kind: 'exit', reason: 'flatten' };
+            await this.executeLive(b, { type: 'exit', side: opposite(intent.side), qty, price: e.last, reason: 'flatten' });
+          } else this.event(id, 'warn', `entry filled after the bot was stopped — position left open: ${intent.side} ${tidy(qty)} ${symbol}`);
+          return;
+        }
         if (contract && b.cfg.exchangeStop) {
-          // disaster stop on the exchange in case the app or connection dies
+          // disaster stop half a risk unit beyond the bot's own stop, so the bot normally exits first
+          const dir = intent.side === 'buy' ? 1 : -1;
+          b.stopTrigger = intent.stop - dir * 0.5 * Math.abs(price - intent.stop);
           try {
-            const s = await this.ccxt.placeOrder(secretId, { symbol, side: intent.side === 'buy' ? 'sell' : 'buy', type: 'stop-market', sizeMode: 'base', size: qty, triggerPrice: intent.stop, reduceOnly: true });
+            const s = await this.ccxt.placeOrder(secretId, { symbol, side: opposite(intent.side), type: 'stop-market', sizeMode: 'contracts', size: b.amount, triggerPrice: b.stopTrigger, reduceOnly: true });
             b.stopOrderId = s.id;
           } catch (err) {
             this.event(id, 'warn', `protective stop not placed (${err.message}); the bot's own stop still applies`);
           }
         }
       } else {
+        const posQty = e.pos?.qty ?? intent.qty;
+        let req;
+        if (contract) req = { symbol, side: intent.side, type: 'market', sizeMode: 'contracts', size: b.amount, reduceOnly: true };
+        else {
+          // spot fees may be taken from the bought coin: sell what is actually held
+          const info = await this.ccxt.marketInfo(secretId, symbol);
+          const held = info.freeBase ?? b.amount;
+          req = { symbol, side: intent.side, type: 'market', sizeMode: 'contracts', size: Math.min(b.amount, held), closeSpot: true };
+        }
+        let r;
+        try {
+          r = await this.ccxt.placeOrder(secretId, req);
+        } catch (err) {
+          // the exchange stop may already have closed the position
+          const left = contract ? await this.ccxt.positionContracts(secretId, symbol).catch(() => null) : null;
+          if (left !== 0) throw err;
+          const price = b.stopTrigger ?? e.last;
+          if (e.pending) e.pending.reason = 'exchange stop';
+          e.filled({ price, qty: posQty, fee: feeOf(price, posQty) });
+          b.amount = 0;
+          b.stopOrderId = null;
+          this.report(b, { ...intent, reason: 'exchange stop' }, price);
+          this.event(id, 'warn', 'position was already closed by the exchange stop; exit price estimated at its trigger');
+          return;
+        }
+        // only once the position is closed, remove the disaster stop
         if (b.stopOrderId) {
-          await this.ccxt.cancelOrder(secretId, b.stopOrderId, symbol).catch(() => undefined);
+          await this.ccxt.cancelOrder(secretId, b.stopOrderId, symbol).catch((err) => this.event(id, 'warn', `could not cancel the exchange stop ${b.stopOrderId}: ${err.message}`));
           b.stopOrderId = null;
         }
-        let size = intent.qty;
-        if (!contract) {
-          // spot fees may be taken from the bought coin: sell what is actually there
-          const info = await this.ccxt.marketInfo(secretId, symbol);
-          if (info.freeBase !== null) size = Math.min(size, info.freeBase);
-        }
-        const r = await this.ccxt.placeOrder(secretId, { symbol, side: intent.side, type: 'market', sizeMode: 'base', size, reduceOnly: contract || undefined });
         const price = r.price ?? e.last;
-        e.filled({ price, qty: size, fee: feeOf(price, size) });
-        this.report(id, intent, price);
+        e.filled({ price, qty: posQty, fee: feeOf(price, posQty) });
+        b.amount = 0;
+        this.report(b, intent, price);
       }
       if (e.halted && !e.pos && !b.stopping) await this.stop(id, { reason: e.halted });
     } catch (err) {
@@ -237,6 +280,11 @@ export class BotManager {
     }
   }
 
+  /** Is this vault key driving a running live bot? */
+  usesKey(secretId) {
+    return [...this.running.values()].some((b) => b.live?.secretId === secretId);
+  }
+
   /** Stop streaming and trading; optionally close the open position at market. */
   async stop(id, { flatten = false, reason = 'stopped' } = {}) {
     const b = this.running.get(id);
@@ -245,11 +293,15 @@ export class BotManager {
     clearInterval(b.timer);
     this.ccxt.unsubscribe(b.sid);
     const e = b.engine;
-    if (flatten && e.pos && !e.pending) {
+    if (e.pending?.kind === 'entry' && b.cfg.mode === 'live') {
+      // an entry is in flight: deal with it when it fills
+      b.flattenOnFill = flatten;
+      this.event(id, 'warn', flatten ? 'entry order in flight — it will be closed as soon as it fills' : 'entry order in flight — the position will stay open when it fills');
+    } else if (flatten && e.pos && !e.pending) {
       const intent = { type: 'exit', side: e.pos.side === 'buy' ? 'sell' : 'buy', qty: e.pos.qty, price: e.last, reason: 'flatten' };
       e.pending = { kind: 'exit', reason: 'flatten' };
-      if (b.cfg.mode === 'paper') this.report(id, intent, paperFill(e, intent).price);
-      else await this.executeLive(id, intent);
+      if (b.cfg.mode === 'paper') this.report(b, intent, paperFill(e, intent).price);
+      else await this.executeLive(b, intent);
     } else if (e.pos && b.cfg.mode === 'live') {
       this.event(id, 'warn', `position left open: ${e.pos.side} ${tidy(e.pos.qty)} ${b.cfg.symbol}${b.stopOrderId ? ' (exchange stop in place)' : ''}`);
     }

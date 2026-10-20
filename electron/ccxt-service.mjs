@@ -178,6 +178,7 @@ export class CcxtService {
       if (seen.size > 5000) seen.clear();
       if (out.length) emit({ kind: 'trades', trades: out });
     };
+    let failing = false;
     while (!state.stop) {
       try {
         if (ex.has.watchTrades) push(await ex.watchTrades(symbol));
@@ -185,11 +186,16 @@ export class CcxtService {
           push(await ex.fetchTrades(symbol, lastT ? lastT : undefined));
           await sleep(1500);
         }
+        // report the feed as open again only once trades actually arrive
+        if (failing) {
+          failing = false;
+          status('open');
+        }
       } catch (e) {
         if (state.stop) return;
+        failing = true;
         status('error', String(e?.message ?? e));
         await sleep(3000);
-        status('open');
       }
     }
   }
@@ -441,15 +447,32 @@ export class CcxtService {
       const market = ex.markets[req.symbol];
       const { price } = await this.refPrice(ex, req.symbol);
       const quoteUsd = market && !USD_QUOTES.has(market.quote) ? await this.quoteUsd(ex, market.quote) : 1;
+      // a spot close sells coins you hold: it may exceed the cap, but never what is held
+      let capExempt = false;
+      if (req.closeSpot) {
+        if (!market || market.contract || req.side !== 'sell') throw new Error('closeSpot is only for selling a spot holding');
+        const bal = await ex.fetchBalance();
+        const held = bal.free?.[market.base] ?? 0;
+        if (!(req.size <= held * 1.000001)) throw new Error(`cannot sell ${req.size} ${market.base}: only ${held} held`);
+        capExempt = true;
+      }
       const o = buildOrder(req, market, {
         refPrice: price,
         quoteUsd,
         limits,
+        capExempt,
         amountToPrecision: (x) => Number(ex.amountToPrecision(req.symbol, x)),
         priceToPrecision: (x) => Number(ex.priceToPrecision(req.symbol, x)),
       });
+      // reduce-only can never be larger than the position it reduces
+      if (o.params.reduceOnly && market.contract && ex.has.fetchPositions) {
+        const open = await this.positionContracts(ex, req.symbol, req.side === 'sell' ? 'long' : 'short').catch(() => null);
+        if (open === 0) throw new Error(`no ${req.side === 'sell' ? 'long' : 'short'} position in ${req.symbol} to reduce`);
+        if (open !== null && o.amount > open) o.amount = Number(ex.amountToPrecision(req.symbol, open));
+      }
       Object.assign(row, { amount: o.amount, price: o.price, triggerPrice: o.params.triggerPrice, notionalUsd: o.notionalUsd });
-      this.gate.take(limits.maxOrdersPerMinute);
+      // orders that only reduce risk are never held back by the rate limit
+      if (!o.params.reduceOnly && !capExempt) this.gate.take(limits.maxOrdersPerMinute);
       if (req.leverage) await this.applyLeverage(ex, req.leverage, market);
       row.status = 'error';
       const res = await ex.createOrder(o.symbol, o.type, o.side, o.amount, o.price, o.params);
@@ -528,6 +551,15 @@ export class CcxtService {
     }
   }
 
+  /** Open contracts in a symbol (optionally one side); null when the venue can't say. */
+  async positionContracts(exOrSecret, symbol, side) {
+    const ex = typeof exOrSecret === 'string' ? this.privateExchange(exOrSecret) : exOrSecret;
+    await ex.loadMarkets();
+    if (!ex.has.fetchPositions) return null;
+    const ps = await ex.fetchPositions([symbol]);
+    return ps.filter((p) => p.symbol === symbol && (!side || p.side === side)).reduce((a, p) => a + Math.abs(p.contracts ?? 0), 0);
+  }
+
   /** Flatten a derivatives position with a reduce-only market order. */
   async closePosition(secretId, symbol, side) {
     const row = { action: 'close', secretId, symbol, type: 'market', status: 'rejected' };
@@ -535,7 +567,6 @@ export class CcxtService {
       const s = this.tradingKey(secretId);
       row.exchange = s.exchange;
       row.sandbox = s.fields.sandbox === 'true';
-      const limits = this.limits();
       const ex = this.privateExchange(secretId);
       await ex.loadMarkets();
       if (!ex.has.fetchPositions) throw new Error(`${ex.name} does not report positions through CCXT`);
@@ -544,7 +575,6 @@ export class CcxtService {
       const o = closeOrderFor(p);
       o.amount = Number(ex.amountToPrecision(symbol, o.amount));
       Object.assign(row, { side: o.side, amount: o.amount });
-      this.gate.take(limits.maxOrdersPerMinute);
       row.status = 'error';
       const res = await ex.createOrder(o.symbol, o.type, o.side, o.amount, undefined, o.params);
       row.status = 'placed';

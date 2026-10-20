@@ -149,12 +149,18 @@ function registerIpc() {
 
   // vault
   handle('vault:list', () => vault.list());
+  // a key that drives a running live bot cannot change under it (e.g. testnet → live)
+  const guardKey = (id) => {
+    if (id && bots?.usesKey(id)) throw new Error('A live AMT bot is using this key — stop the bot before editing or deleting it');
+  };
   handle('vault:save', (_e, rec) => {
+    guardKey(rec?.id);
     const id = vault.save(rec);
     ccxtSvc.invalidate(id);
     return id;
   });
   handle('vault:remove', (_e, id) => {
+    guardKey(id);
     ccxtSvc.invalidate(id);
     return vault.remove(id);
   });
@@ -188,6 +194,7 @@ function registerIpc() {
   // AMT scalper bots
   handle('amt:list', () => bots.list());
   handle('amt:defaults', () => bots.defaults());
+  handle('amt:presets', () => bots.presets());
   handle('amt:save', (_e, cfg) => bots.save(cfg));
   handle('amt:remove', (_e, id) => bots.remove(id));
   handle('amt:start', (_e, id) => bots.start(id));

@@ -168,7 +168,18 @@ export interface AmtParams {
   acceptSec: number;
   rejectSec: number;
   reentrySec: number;
-  setups: { fade: boolean; breakout: boolean; reentry: boolean };
+  style: 'scalp' | 'intraday';
+  setups: { fade: boolean; breakout: boolean; reentry: boolean; ibBreakout: boolean; priorAccept: boolean; priorReject: boolean };
+  ibMinutes: number;
+  ibAcceptMin: number;
+  priorAcceptMin: number;
+  priorRejectMin: number;
+  intradayFlowSec: number;
+  intradayDelta: number;
+  ibTargetX: number;
+  maxTradesPerSession: number;
+  flatBeforeCloseMin: number;
+  trailAtR: number;
   stopBufferBins: number;
   minRR: number;
   maxHoldSec: number;
@@ -237,6 +248,8 @@ export interface AmtSnapshot {
   feed: string;
   feedError: string | null;
   startedAt: number;
+  style: 'scalp' | 'intraday';
+  session: { start: number; end: number; open: number; high: number; low: number; ib: { high: number; low: number; done: boolean } | null; trades: number; value: { vah: number; val: number; poc: number } | null } | null;
   state: string;
   t: number;
   last: number;
@@ -328,6 +341,7 @@ export interface NovusApi {
   amt: {
     list(): Promise<AmtBot[]>;
     defaults(): Promise<AmtParams>;
+    presets(): Promise<Record<'scalp' | 'intraday', AmtParams>>;
     save(cfg: AmtBotInput): Promise<string>;
     remove(id: string): Promise<void>;
     start(id: string): Promise<boolean>;

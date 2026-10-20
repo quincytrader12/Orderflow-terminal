@@ -24,9 +24,11 @@ const pos = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
 /**
  * Turn a ticket request into CCXT createOrder arguments.
  *
- * req: { symbol, side, type, sizeMode: 'base'|'quote', size, price?, triggerPrice?,
- *        reduceOnly?, postOnly?, tif? }
- * ctx: { refPrice, quoteUsd (USD per 1 quote unit), limits,
+ * req: { symbol, side, type, sizeMode: 'base'|'quote'|'contracts', size, price?,
+ *        triggerPrice?, reduceOnly?, postOnly?, tif? }
+ *        ('contracts' = exchange units as returned by a fill; exits use it so
+ *         they close exactly what was opened)
+ * ctx: { refPrice, quoteUsd (USD per 1 quote unit), limits, capExempt?,
  *        amountToPrecision?(n) → n, priceToPrecision?(n) → n }
  *
  * Returns { symbol, type, side, amount, price, params, notionalUsd, baseQty }.
@@ -79,7 +81,9 @@ export function buildOrder(req, market, ctx) {
 
   // size in base units (or USD for inverse contracts) → exchange amount
   let amount;
-  if (inverse) {
+  if (req.sizeMode === 'contracts') {
+    amount = req.size;
+  } else if (inverse) {
     // inverse contracts are denominated in USD per contract
     const usd = req.sizeMode === 'quote' ? req.size : req.size * execPx;
     amount = usd / contractSize;
@@ -101,8 +105,8 @@ export function buildOrder(req, market, ctx) {
   const minCost = market.limits?.cost?.min;
   if (!inverse && pos(minCost) && notionalQuote < minCost) throw new Error(`minimum order value is ${minCost} ${market.quote}`);
 
-  // reduce-only orders can only shrink exposure, so the cap does not apply
-  if (!req.reduceOnly) {
+  // reduce-only orders (and verified spot closes) only shrink exposure, so the cap does not apply
+  if (!req.reduceOnly && !ctx.capExempt) {
     if (!Number.isFinite(notionalUsd)) throw new Error(`cannot value ${market.quote} in USD to check your order cap`);
     if (notionalUsd > limits.maxOrderUsd) throw new Error(`order value $${notionalUsd.toFixed(2)} is above your cap of $${limits.maxOrderUsd} (change it in the ticket's ⚙ limits)`);
   }

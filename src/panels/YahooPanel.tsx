@@ -203,10 +203,10 @@ export function YahooPanel({ config: c, setConfig }: PanelProps<YahooConfig>) {
                   const ok = v && 'price' in v;
                   return (
                     <tr key={s} className="clickable" onClick={() => setConfig({ selected: s })} style={s === c.selected ? { background: 'var(--accent-soft)' } : undefined}>
-                      <td className="l" title={ok ? (v as YahooQuote).name : ''}>
+                      <td className="l" title={ok ? (v as YahooQuote).name : v ? (v as { error: string }).error : ''}>
                         <b>{s}</b>
                         <div className="muted" style={{ fontSize: 10, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {ok ? (v as YahooQuote).name : v ? 'error' : '…'}
+                          {ok ? (v as YahooQuote).name : v ? 'unavailable' : '…'}
                         </div>
                       </td>
                       <td>{ok ? fmtPrice((v as YahooQuote).price) : ''}</td>

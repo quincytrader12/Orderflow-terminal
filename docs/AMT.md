@@ -83,7 +83,43 @@ All setups must also pass:
 
 The **Backtest** tab replays trades the terminal recorded into its SQLite database through the bot's current settings, with paper fills. It reports the trade list, win rate, net PnL, profit factor, maximum drawdown, fees and an equity curve. Recorded data has no order book, so book filters are skipped there.
 
-## 4. HFT: what is and isn't possible from a laptop
+## 4. Intraday style — longer holds
+
+The same engine has a second **style**, chosen per bot under **Settings → Style**. It trades the session's auction structure instead of the rolling value, and it holds positions for hours. Running a scalp bot and an intraday bot on the same market spreads the automation across two timeframes and two kinds of edge.
+
+| Setup | AMT idea | Entry needs | Stop | Target |
+|---|---|---|---|---|
+| **Initial-balance extension** | The first hour (IB) is where the day's early buyers and sellers set the range. An extension beyond it that holds signals a trend day. | Price spends `ibAcceptMin` (15 min) beyond the IB high or low. 5-minute delta confirms. The trade isn't against prior-day value. | Back inside the IB by 25 % of its range | IB edge ± 1× IB range |
+| **Prior-value acceptance** | Price accepted outside yesterday's value means value is migrating. | `priorAcceptMin` (30 min) outside prior VAH or VAL. Delta confirms. | Back inside prior value | One value-area width beyond the edge, or the prior high/low if further |
+| **Prior-value rejection** | A failed auction beyond yesterday's value is a responsive opportunity. | A probe beyond prior VAH or VAL returns inside within `priorRejectMin` (30 min). Delta confirms. | Beyond the probe extreme | Prior POC |
+| **80 % rule** | Same as the scalp style | | | |
+
+**Trade management for the intraday style:**
+
+- Stops are wider and fewer trades are taken: at most `maxTradesPerSession` (3), with R:R ≥ 2 and a 15-minute cooldown after a loss.
+- At +1R the stop moves to breakeven. At +2R it **trails to the developing session POC**.
+- Every position is closed **15 minutes before the session ends** (UTC midnight with 24 h sessions), so nothing is carried overnight. The maximum hold is 8 h.
+- The IB setup only arms when the bot has seen the session from its open. The prior-value setups need one complete session first, so a fresh intraday bot spends its first day building context. Run it in paper mode alongside the scalp bot meanwhile.
+
+## 5. Safety behaviour of live bots
+
+- **Exact sizing.** Live positions are tracked in exchange units (contracts) exactly as filled. Exits and the exchange stop close what was opened.
+- **Exchange stop placement.**
+  - The protective stop sits half a risk unit beyond the bot's own stop, so the bot normally exits first.
+  - The stop is cancelled only **after** the exit has filled.
+  - If the exchange stop already closed the position, the bot records that and carries on.
+- **Order rules.**
+  - Reduce-only orders are trimmed to the open position.
+  - Spot exits may only sell what is actually held.
+  - Risk-reducing orders are never held back by the per-minute rate limit.
+- **Switching off.** If you click **Stop & close position** while an entry is still in flight, the bot closes that entry as soon as it fills.
+- **Entry filters.**
+  - No entry is taken on stale data (no trades for 30 s, or for the flow window if that is longer).
+  - No entry is taken when the stop would sit inside round-trip costs.
+  - Breakeven never moves the stop past the current price.
+- **Keys.** A key used by a running live bot cannot be edited or deleted until the bot stops.
+
+## 6. HFT: what is and isn't possible from a laptop
 
 True high-frequency trading means co-located servers, sub-millisecond reaction, maker rebates and queue position. A desktop app talking to an exchange's public API over the internet sees **tens to hundreds of milliseconds** of latency, has to respect API rate limits, and pays **taker fees of roughly 2–10 bps per side**. One example: a round trip at Hyperliquid's base taker fee costs 0.09% of notional ([buildix](https://www.buildix.trade/blog/crypto-scalping-orderflow-realistic-guide)). Racing for single ticks under those conditions has negative expected value. Fees and slippage erase a small edge, and in thin markets book signals are easier to fake ([CoinAPI](https://www.coinapi.io/blog/crypto-scalping-trading-faq-profitability-tools-data-insights), [Block3](https://www.block3finance.com/scalping-in-crypto-techniques-risks-and-reality)).
 

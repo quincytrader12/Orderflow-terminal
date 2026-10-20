@@ -18,11 +18,12 @@
     "build:main": "esbuild electron/main.mjs --bundle --platform=node --format=esm --target=node22 --outfile=dist-electron/main.mjs --external:electron --external:ccxt",
     "desktop": "npm run build && npm run build:main && electron .",
     "desktop:dev": "npm run build:main && node scripts/dev-desktop.mjs",
-    "icon": "node scripts/make-icon.mjs",
+    "icon": "python3 scripts/make-icons.py",
     "dist:win": "npm run build && npm run build:main && electron-builder --win portable nsis --x64",
     "dist:mac": "npm run build && npm run build:main && electron-builder --mac dmg",
     "dist:linux": "npm run build && npm run build:main && electron-builder --linux AppImage",
-    "e2e:desktop": "npm run build && npm run build:main && node e2e/desktop.mjs"
+    "e2e:desktop": "npm run build && npm run build:main && node e2e/desktop.mjs",
+    "dist:win:local": "npm run build && npm run build:main && electron-builder --win dir --x64 -c.win.signAndEditExecutable=false && node scripts/set-exe-icon.mjs && electron-builder --win portable --x64 --prepackaged release/win-unpacked -c.win.signAndEditExecutable=false"
   },
   "engines": {
     "node": ">=22"
@@ -42,6 +43,7 @@
     "playwright-core": "^1.64.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "resedit": "^2.0.3",
     "typescript": "^5.9.3",
     "vite": "^8.3.4",
     "vitest": "^5.0.5",
@@ -76,7 +78,7 @@
         "portable",
         "nsis"
       ],
-      "icon": "build/icon.png"
+      "icon": "build/icon.ico"
     },
     "portable": {
       "artifactName": "NovusOrdo-${version}-portable.exe"

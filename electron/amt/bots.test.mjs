@@ -35,11 +35,17 @@ function fakeCcxt() {
     subscribe: vi.fn((sid, ex, sym, emit, opts) => streams.set(sid, { emit, ex, sym, opts })),
     unsubscribe: vi.fn((sid) => streams.delete(sid)),
     marketInfo: vi.fn(async () => ({ exchangeId: 'bybit', trading: true, sandbox: true, contract: true, taker: 0.00055, limits: { maxOrderUsd: 300 }, freeBase: null })),
+    // contracts of 0.01 BTC, like OKX: base size → contracts, fills report both
     placeOrder: vi.fn(async (_id, req) => {
       orders.push(req);
-      return { id: `o${orders.length}`, price: null, baseQty: req.size };
+      const amount = req.sizeMode === 'contracts' ? req.size : Math.floor(req.size / 0.01);
+      return { id: `o${orders.length}`, price: null, amount, baseQty: amount * 0.01 };
     }),
-    cancelOrder: vi.fn(async () => true),
+    cancelOrder: vi.fn(async (...args) => {
+      orders.push({ cancel: args[1] });
+      return true;
+    }),
+    positionContracts: vi.fn(async () => null),
   };
 }
 
@@ -70,6 +76,13 @@ describe('BotManager', () => {
     const id = m.save({ mode: 'paper', exchangeId: 'Binance', symbol: 'BTC/USDT', params: { riskUsd: 5 } });
     const again = new BotManager({ ccxt: fakeCcxt(), db, emit: () => {} });
     expect(again.list()).toEqual([expect.objectContaining({ id, exchangeId: 'binance', name: 'AMT BTC/USDT', running: false, params: expect.objectContaining({ riskUsd: 5, minRR: 1.5 }) })]);
+  });
+
+  it('upgrades configs saved before the intraday style existed', () => {
+    db.set('amtBots', [{ id: 'old', name: 'Old', mode: 'paper', exchangeId: 'binance', symbol: 'BTC/USDT', params: { riskUsd: 7, setups: { fade: true, breakout: false, reentry: true } } }]);
+    const m = new BotManager({ ccxt: fakeCcxt(), db, emit: () => {} });
+    expect(m.list()[0].params).toMatchObject({ style: 'scalp', riskUsd: 7, setups: { breakout: false, ibBreakout: true } });
+    expect(m.presets().intraday).toMatchObject({ style: 'intraday', maxHoldSec: 28_800 });
   });
 
   it('paper-trades a live stream and reports entries and exits', async () => {
@@ -105,18 +118,65 @@ describe('BotManager', () => {
     const tape = breakoutTape();
     feed(ccxt, `amt-${id}`, tape);
     await vi.waitFor(() => expect(ccxt.orders.length).toBe(2));
+    expect(ccxt.orders[1].triggerPrice).toBeLessThan(m.snapshot(id).position.stop);
     // the market keeps trading after the fill and runs into the target
     const t1 = tape.at(-1).t;
     feed(ccxt, `amt-${id}`, Array.from({ length: 120 }, (_, i) => ({ t: t1 + 500 * (i + 1), p: Number((101.3 + i * 0.02).toFixed(2)), q: 0.3, s: 'buy' })));
-    await vi.waitFor(() => expect(ccxt.orders.length).toBe(3));
-    const [entry, stop, exit] = ccxt.orders;
+    await vi.waitFor(() => expect(ccxt.orders.length).toBe(4));
+    const [entry, stop, exit, cancel] = ccxt.orders;
     expect(entry).toMatchObject({ symbol: 'BTC/USDT:USDT', side: 'buy', type: 'market', sizeMode: 'base' });
-    // capped by the terminal-wide $300 order limit, not the bot's $5000
-    expect(entry.size * 100.3).toBeLessThanOrEqual(300.5);
-    expect(stop).toMatchObject({ side: 'sell', type: 'stop-market', reduceOnly: true, size: entry.size });
+    // capped by the terminal-wide $300 order limit (with 2 % headroom), not the bot's $5000
+    expect(entry.size * 100.3).toBeLessThanOrEqual(300 * 0.98 + 0.5);
+    const contracts = Math.floor(entry.size / 0.01);
+    // stop and exit close exactly the contracts that were filled
+    expect(stop).toMatchObject({ side: 'sell', type: 'stop-market', reduceOnly: true, sizeMode: 'contracts', size: contracts });
     expect(stop.triggerPrice).toBeLessThan(100.3);
-    expect(exit).toMatchObject({ side: 'sell', type: 'market', reduceOnly: true });
-    expect(ccxt.cancelOrder).toHaveBeenCalledWith('k1', 'o2', 'BTC/USDT:USDT');
+    expect(exit).toMatchObject({ side: 'sell', type: 'market', reduceOnly: true, sizeMode: 'contracts', size: contracts });
+    // the disaster stop is cancelled only after the exit went through
+    expect(cancel).toEqual({ cancel: 'o2' });
+    await m.stopAll();
+  });
+
+  it('closes an entry that fills after "Stop & close position"', async () => {
+    const ccxt = fakeCcxt();
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const place = ccxt.placeOrder.getMockImplementation();
+    ccxt.placeOrder.mockImplementationOnce(async (...a) => {
+      await gate;
+      return place(...a);
+    });
+    const m = new BotManager({ ccxt, db, emit: () => {}, now: () => T0 });
+    const id = m.save({ mode: 'live', secretId: 'k1', symbol: 'BTC/USDT:USDT', params });
+    await m.start(id);
+    feed(ccxt, `amt-${id}`, breakoutTape());
+    await vi.waitFor(() => expect(ccxt.placeOrder).toHaveBeenCalledTimes(1));
+    await m.stop(id, { flatten: true, reason: 'test' });
+    release();
+    await vi.waitFor(() => expect(ccxt.orders.some((o) => o.reduceOnly && o.type === 'market')).toBe(true));
+    const exit = ccxt.orders.find((o) => o.reduceOnly && o.type === 'market');
+    expect(exit).toMatchObject({ side: 'sell', sizeMode: 'contracts' });
+    expect(ccxt.orders.some((o) => o.type === 'stop-market')).toBe(false);
+    expect(m.eventsFor(id).map((e) => e.text).join('\n')).toMatch(/in flight — it will be closed[\s\S]*EXIT flatten/);
+  });
+
+  it('records a position the exchange stop already closed instead of failing', async () => {
+    const ccxt = fakeCcxt();
+    const m = new BotManager({ ccxt, db, emit: () => {}, now: () => T0 });
+    const id = m.save({ mode: 'live', secretId: 'k1', symbol: 'BTC/USDT:USDT', params });
+    await m.start(id);
+    const tape = breakoutTape();
+    feed(ccxt, `amt-${id}`, tape);
+    await vi.waitFor(() => expect(ccxt.orders.length).toBe(2));
+    // the exit is rejected because the exchange stop fired first
+    ccxt.placeOrder.mockRejectedValueOnce(new Error('reduce-only order would increase position'));
+    ccxt.positionContracts.mockResolvedValueOnce(0);
+    const t1 = tape.at(-1).t;
+    feed(ccxt, `amt-${id}`, Array.from({ length: 200 }, (_, i) => ({ t: t1 + 500 * (i + 1), p: Number((101.3 - i * 0.01).toFixed(2)), q: 0.3, s: 'sell' })));
+    await vi.waitFor(() => expect(m.eventsFor(id).some((e) => /already closed by the exchange stop/.test(e.text))).toBe(true));
+    expect(m.list()[0].running).toBe(true);
+    expect(m.snapshot(id).position).toBeNull();
+    expect(db.amtTrades(0, Number.MAX_SAFE_INTEGER).at(-1)).toMatchObject({ reason: 'exchange stop' });
     await m.stopAll();
   });
 

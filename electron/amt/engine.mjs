@@ -10,10 +10,18 @@
 //   prior value / 80% rule — a session that opens outside the prior session's
 //                value and then holds back inside it tends to cross that value
 // Order flow (aggressor delta, volume intensity, book imbalance) has to agree
-// before any setup fires:
+// before any setup fires. Two styles:
+//
+// scalp (seconds to minutes, rolling value):
 //   fade      responsive: rejected probe → trade back toward POC
 //   breakout  initiative: accepted move with strong delta → trade the extension
 //   reentry   80% rule: re-accepted prior value → trade to the far edge
+//
+// intraday (hours, session structure; flat before the session closes):
+//   ibBreakout   initial balance (first hour) extended and held → IB-range target
+//   priorAccept  accepted outside prior-day value → trend one value-area width
+//   priorReject  failed probe beyond prior-day value → back to prior POC
+//   reentry      80% rule, as above
 
 const MIN = 60_000;
 
@@ -38,7 +46,19 @@ export const DEFAULT_AMT = {
   rejectSec: 120,
   reentrySec: 300,
   // setups
-  setups: { fade: true, breakout: true, reentry: true },
+  style: 'scalp',
+  setups: { fade: true, breakout: true, reentry: true, ibBreakout: true, priorAccept: true, priorReject: true },
+  // intraday style (session structure)
+  ibMinutes: 60,
+  ibAcceptMin: 15,
+  priorAcceptMin: 30,
+  priorRejectMin: 30,
+  intradayFlowSec: 300,
+  intradayDelta: 0.1,
+  ibTargetX: 1,
+  maxTradesPerSession: 3,
+  flatBeforeCloseMin: 15,
+  trailAtR: 2,
   // trade management
   stopBufferBins: 2,
   minRR: 1.5,
@@ -54,6 +74,20 @@ export const DEFAULT_AMT = {
   // paper/backtest fill model
   feeBps: 5,
   slippageBps: 1,
+};
+
+/** Starting values when a bot is switched to the intraday style. */
+export const INTRADAY_PRESET = {
+  style: 'intraday',
+  profileMinutes: 1440,
+  warmupMinutes: 60,
+  setups: { fade: false, breakout: false, reentry: true, ibBreakout: true, priorAccept: true, priorReject: true },
+  stopBufferBins: 4,
+  minRR: 2,
+  maxHoldSec: 8 * 3600,
+  cooldownSec: 900,
+  maxTradesPerHour: 2,
+  breakevenAtR: 1,
 };
 
 export function mergeConfig(cfg = {}) {
@@ -187,6 +221,7 @@ class FlowWindow {
   }
 }
 
+const fmt = (p) => Number(p.toPrecision(7));
 const dirOf = (side) => (side === 'buy' ? 1 : -1);
 const dayOf = (t) => Math.floor(t / 86_400_000);
 
@@ -207,6 +242,7 @@ export class AmtEngine {
     this.last = NaN;
     this.t0 = NaN;
     this.now = 0;
+    this.lastTradeT = -Infinity;
     this.pos = null;
     this.pending = null;
     this.halted = null;
@@ -231,7 +267,9 @@ export class AmtEngine {
     const idx = Math.round(p / this.bin);
     this.now = Math.max(this.now, t);
     this.last = p;
+    this.lastTradeT = this.now;
     this.rollSession(this.now, p);
+    this.trackSession(this.now, p);
     this.profile.add(t, idx, q, buy);
     this.session.bins.set(idx, (this.session.bins.get(idx) ?? 0) + q);
     this.flow.add(t, p * q, buy);
@@ -257,14 +295,49 @@ export class AmtEngine {
     if (this.session?.start === start) return;
     if (this.session) {
       const va = valueArea(this.session.bins, this.cfg.valueAreaPct);
-      if (va && this.session.full) this.prior = { vah: va.vah * this.bin, val: va.val * this.bin, poc: va.poc * this.bin, start: this.session.start };
+      if (va && this.session.full) this.prior = { vah: va.vah * this.bin, val: va.val * this.bin, poc: va.poc * this.bin, high: this.session.high, low: this.session.low, start: this.session.start };
     }
     // a session counts for the 80% rule only when it was seen from its open
-    this.session = { start, open: p, bins: new Map(), full: Boolean(this.session), inSince: null, done: false };
+    const fromOpen = Boolean(this.session) || this.t0 <= start + MIN;
+    this.session = {
+      start,
+      end: start + len,
+      open: p,
+      high: p,
+      low: p,
+      bins: new Map(),
+      full: Boolean(this.session),
+      fromOpen,
+      inSince: null,
+      done: false,
+      // initial balance: range of the first ibMinutes
+      ibEnd: start + this.cfg.ibMinutes * MIN,
+      ibHigh: p,
+      ibLow: p,
+      ibUp: 0,
+      ibDn: 0,
+      ibLastT: start,
+      ibFired: false,
+      pv: null,
+      paFired: false,
+      prFired: false,
+      trades: 0,
+    };
   }
 
-  flowStats() {
-    return this.flow.stats(this.now, this.cfg.flowSec);
+  /** Session high/low and initial balance (intraday style). */
+  trackSession(t, p) {
+    const s = this.session;
+    s.high = Math.max(s.high, p);
+    s.low = Math.min(s.low, p);
+    if (t < s.ibEnd) {
+      s.ibHigh = Math.max(s.ibHigh, p);
+      s.ibLow = Math.min(s.ibLow, p);
+    }
+  }
+
+  flowStats(sec = this.cfg.style === 'intraday' ? this.cfg.intradayFlowSec : this.cfg.flowSec) {
+    return this.flow.stats(this.now, Math.min(sec, 590));
   }
 
   bookStats() {
@@ -299,6 +372,12 @@ export class AmtEngine {
       this.va = va && { vah: va.vah * this.bin, val: va.val * this.bin, poc: va.poc * this.bin };
       this.vaAt = t;
     }
+    const intraday = c.style === 'intraday';
+    if (intraday && t - (this.sessionVaAt ?? -Infinity) >= 5000) {
+      const sv = valueArea(this.session.bins, c.valueAreaPct);
+      this.sessionVa = sv && { vah: sv.vah * this.bin, val: sv.val * this.bin, poc: sv.poc * this.bin };
+      this.sessionVaAt = t;
+    }
     const out = [];
     if (this.pos && !this.pending) {
       const x = this.manage(p, t);
@@ -308,9 +387,11 @@ export class AmtEngine {
       this.state = 'warmup';
       return out;
     }
-    const ev = this.reentryEvent(p, t) ?? this.auction(p, t);
+    const ev = this.reentryEvent(p, t) ?? (intraday ? this.sessionAuction(p, t) : this.auction(p, t));
     if (ev && !this.pos && !this.pending) {
-      const e = this.setup(ev, p, t);
+      // never enter on a frozen price (feed outage while the clock keeps ticking)
+      const staleMs = Math.max(c.flowSec * 1000, 30_000);
+      const e = t - this.lastTradeT > staleMs ? this.skip(ev, `no trades for ${Math.round((t - this.lastTradeT) / 1000)}s — market data stale`) : this.setup(ev, p, t);
       if (e) out.push(e);
     }
     return out;
@@ -349,6 +430,70 @@ export class AmtEngine {
       }
     }
     return null;
+  }
+
+  /** Intraday auction: initial-balance extension and prior-day value acceptance/rejection. */
+  sessionAuction(p, t) {
+    const c = this.cfg;
+    const s = this.session;
+    const pr = this.prior;
+    let ev = null;
+    // initial balance extension, only when the IB was seen from the session open
+    if (s.fromOpen && t >= s.ibEnd && s.ibHigh > s.ibLow && !s.ibFired) {
+      const dt = Math.max(0, t - Math.max(s.ibLastT, s.ibEnd));
+      if (p > s.ibHigh) s.ibUp += dt;
+      else if (p < s.ibLow) s.ibDn += dt;
+      if (c.setups.ibBreakout && s.ibUp >= c.ibAcceptMin * MIN) ev = 'ib-up';
+      else if (c.setups.ibBreakout && s.ibDn >= c.ibAcceptMin * MIN) ev = 'ib-down';
+      if (ev) s.ibFired = true;
+    }
+    s.ibLastT = t;
+    // probes of the prior session's value
+    if (pr) {
+      if (!s.pv) {
+        if (p > pr.vah) s.pv = { dir: 1, start: t, outside: 0, lastT: t, extreme: p, accepted: false };
+        else if (p < pr.val) s.pv = { dir: -1, start: t, outside: 0, lastT: t, extreme: p, accepted: false };
+      } else {
+        const pv = s.pv;
+        const up = pv.dir > 0;
+        if (up ? p > pr.vah : p < pr.val) pv.outside += t - pv.lastT;
+        pv.lastT = t;
+        pv.extreme = up ? Math.max(pv.extreme, p) : Math.min(pv.extreme, p);
+        if (!pv.accepted && pv.outside >= c.priorAcceptMin * MIN) {
+          pv.accepted = true;
+          if (!ev && c.setups.priorAccept && !s.paFired) {
+            s.paFired = true;
+            ev = up ? 'prior-accept-up' : 'prior-accept-down';
+          }
+        }
+        if (up ? p < pr.vah : p > pr.val) {
+          const deep = Math.abs(pv.extreme - (up ? pr.vah : pr.val)) >= c.probeBins * this.bin;
+          const rejected = !pv.accepted && deep && t - pv.start <= c.priorRejectMin * MIN;
+          this.lastProbe = { extreme: pv.extreme, ref: pr };
+          s.pv = null;
+          if (!ev && rejected && c.setups.priorReject && !s.prFired) {
+            s.prFired = true;
+            ev = up ? 'prior-reject-up' : 'prior-reject-down';
+          }
+        }
+      }
+    }
+    const pv = s.pv;
+    this.state =
+      t < s.ibEnd && s.fromOpen
+        ? 'ib-forming'
+        : pv?.accepted
+          ? pv.dir > 0
+            ? 'accepted-up'
+            : 'accepted-down'
+          : pv
+            ? pv.dir > 0
+              ? 'probe-up'
+              : 'probe-down'
+            : !pr
+              ? 'awaiting-prior'
+              : 'balance';
+    return ev;
   }
 
   /** 80% rule: opened outside prior value, then held back inside it. */
@@ -407,6 +552,39 @@ export class AmtEngine {
       stop = up ? ref.vah - buf : ref.val + buf;
       target = up ? p + (ref.vah - ref.val) : p - (ref.vah - ref.val);
       why = `accepted ${up ? 'above VAH' : 'below VAL'}, initiative ${up ? 'buyers' : 'sellers'} (Δ ${f.deltaRatio.toFixed(2)}, ${f.intensity.toFixed(1)}× volume)`;
+    } else if (ev === 'ib-up' || ev === 'ib-down') {
+      const up = ev === 'ib-up';
+      const s = this.session;
+      side = up ? 'buy' : 'sell';
+      setup = 'ibBreakout';
+      if (dirOf(side) * f.deltaRatio < c.intradayDelta) return this.skip(ev, `${c.intradayFlowSec}s delta ${f.deltaRatio.toFixed(2)} does not confirm`);
+      // do not buy an IB break while still below prior value (or sell one above it)
+      if (this.prior && (up ? p < this.prior.val : p > this.prior.vah)) return this.skip(ev, `IB break against prior value (${up ? 'below VAL' : 'above VAH'})`);
+      const range = s.ibHigh - s.ibLow;
+      const room = Math.max(range * 0.25, buf);
+      stop = up ? s.ibHigh - room : s.ibLow + room;
+      target = up ? s.ibHigh + c.ibTargetX * range : s.ibLow - c.ibTargetX * range;
+      why = `initial balance ${up ? 'high' : 'low'} extended and held ${c.ibAcceptMin} min — range extension (IB ${fmt(s.ibLow)}–${fmt(s.ibHigh)}, Δ ${f.deltaRatio.toFixed(2)})`;
+    } else if (ev === 'prior-accept-up' || ev === 'prior-accept-down') {
+      const up = ev === 'prior-accept-up';
+      const pr = this.prior;
+      side = up ? 'buy' : 'sell';
+      setup = 'priorAccept';
+      if (dirOf(side) * f.deltaRatio < c.intradayDelta) return this.skip(ev, `${c.intradayFlowSec}s delta ${f.deltaRatio.toFixed(2)} does not confirm`);
+      if (book && dirOf(side) * book.imbalance < -c.bookImbalanceMin) return this.skip(ev, `book leans against the trade (${book.imbalance.toFixed(2)})`);
+      const width = pr.vah - pr.val;
+      stop = up ? pr.vah - buf : pr.val + buf;
+      target = up ? Math.max(pr.vah + width, pr.high ?? 0) : Math.min(pr.val - width, pr.low ?? Infinity);
+      why = `accepted ${up ? 'above' : 'below'} prior-day value for ${c.priorAcceptMin} min — value migrating ${up ? 'higher' : 'lower'}`;
+    } else if (ev === 'prior-reject-up' || ev === 'prior-reject-down') {
+      const up = ev === 'prior-reject-up';
+      const { extreme, ref } = this.lastProbe;
+      side = up ? 'sell' : 'buy';
+      setup = 'priorReject';
+      if (dirOf(side) * f.deltaRatio < c.intradayDelta) return this.skip(ev, `${c.intradayFlowSec}s delta ${f.deltaRatio.toFixed(2)} does not confirm`);
+      stop = up ? extreme + buf : extreme - buf;
+      target = ref.poc;
+      why = `probe ${up ? 'above prior VAH' : 'below prior VAL'} failed inside ${c.priorRejectMin} min — responsive return to prior POC`;
     } else {
       const short = ev === 'reentry-short';
       side = short ? 'sell' : 'buy';
@@ -422,8 +600,9 @@ export class AmtEngine {
     const risk = (p - stop) * dir;
     const reward = (target - p) * dir;
     if (!(risk > 0) || !(reward > 0)) return this.skip(ev, 'price already past stop or target');
-    if (reward / risk < c.minRR) return this.skip(ev, `R:R ${(reward / risk).toFixed(2)} < ${c.minRR}`);
     const costBps = 2 * (c.feeBps + c.slippageBps);
+    if ((risk / p) * 1e4 <= costBps) return this.skip(ev, `stop ${((risk / p) * 1e4).toFixed(1)} bps is inside round-trip costs (${costBps} bps)`);
+    if (reward / risk < c.minRR) return this.skip(ev, `R:R ${(reward / risk).toFixed(2)} < ${c.minRR}`);
     if ((reward / p) * 1e4 <= costBps * 1.5) return this.skip(ev, `target ${((reward / p) * 1e4).toFixed(1)} bps does not clear fees`);
     const qty = Math.min(c.riskUsd / risk, c.maxPositionUsd / p);
     this.pending = { kind: 'entry', side, stop, target, setup, why, t };
@@ -434,12 +613,16 @@ export class AmtEngine {
   gate(side, book) {
     const c = this.cfg;
     const t = this.now;
+    // the daily loss limit lasts until the next UTC day
+    if (this.halted && dayOf(t) !== this.haltedDay) this.halted = null;
     if (this.halted) return this.halted;
     if (side === 'sell' && !c.allowShort) return 'shorts disabled';
     if (t < this.cooldownUntil) return 'cooling down after a loss';
     this.entryTimes = this.entryTimes.filter((x) => t - x < 3_600_000);
     if (this.entryTimes.length >= c.maxTradesPerHour) return `${c.maxTradesPerHour} trades this hour`;
     if (book && book.spreadBps > c.maxSpreadBps) return `spread ${book.spreadBps.toFixed(1)} bps`;
+    if (c.style === 'intraday' && this.session.trades >= c.maxTradesPerSession) return `${c.maxTradesPerSession} trades this session`;
+    if (c.style === 'intraday' && t >= this.session.end - c.flatBeforeCloseMin * MIN * 4) return 'too close to the session close';
     return null;
   }
 
@@ -448,14 +631,24 @@ export class AmtEngine {
     const pos = this.pos;
     const dir = dirOf(pos.side);
     if (c.breakevenAtR > 0 && !pos.be && (p - pos.entry) * dir >= c.breakevenAtR * pos.risk) {
-      // move the stop to entry plus round-trip costs
-      pos.stop = pos.entry * (1 + (dir * 2 * (c.feeBps + c.slippageBps)) / 1e4);
-      pos.be = true;
+      // move the stop to entry plus round-trip costs — only once price is beyond that level
+      const be = pos.entry * (1 + (dir * 2 * (c.feeBps + c.slippageBps)) / 1e4);
+      if ((p - be) * dir > 0 && (be - pos.stop) * dir > 0) {
+        pos.stop = be;
+        pos.be = true;
+      }
+    }
+    // intraday: once well in profit, trail the stop to the developing session POC
+    const sv = this.sessionVa;
+    if (c.style === 'intraday' && c.trailAtR > 0 && sv && (p - pos.entry) * dir >= c.trailAtR * pos.risk && (sv.poc - pos.stop) * dir > 0 && (p - sv.poc) * dir > 0) {
+      pos.stop = sv.poc;
+      pos.trailed = true;
     }
     let reason = null;
-    if ((p - pos.stop) * dir <= 0) reason = pos.be ? 'breakeven' : 'stop';
+    if ((p - pos.stop) * dir <= 0) reason = pos.trailed ? 'trail' : pos.be ? 'breakeven' : 'stop';
     else if ((p - pos.target) * dir >= 0) reason = 'target';
     else if (t - pos.t >= c.maxHoldSec * 1000) reason = 'time';
+    else if (c.style === 'intraday' && t >= this.session.end - c.flatBeforeCloseMin * MIN) reason = 'session close';
     if (!reason) return null;
     this.pending = { kind: 'exit', reason, t };
     return { type: 'exit', side: pos.side === 'buy' ? 'sell' : 'buy', qty: pos.qty, price: p, reason };
@@ -472,6 +665,7 @@ export class AmtEngine {
       // stop/target keep their distance if the fill slipped
       this.pos = { side: pd.side, entry: price, qty, stop: pd.stop, target: pd.target, setup: pd.setup, why: pd.why, t, fees: fee, risk: Math.abs(price - pd.stop), be: false };
       this.entryTimes.push(t);
+      if (this.session) this.session.trades++;
       return;
     }
     const pos = this.pos;
@@ -516,7 +710,10 @@ export class AmtEngine {
     }
     s.pnlToday += trade.pnl;
     this.equity.push([trade.closed, s.pnl]);
-    if (s.pnlToday <= -c.maxDailyLossUsd) this.halted = `daily loss limit ($${c.maxDailyLossUsd}) reached`;
+    if (s.pnlToday <= -c.maxDailyLossUsd) {
+      this.halted = `daily loss limit ($${c.maxDailyLossUsd}) reached`;
+      this.haltedDay = d;
+    }
   }
 
   // ---------- reporting ----------
@@ -531,7 +728,19 @@ export class AmtEngine {
       for (let k = mid - bins / 2; k <= mid + bins / 2; k++) profile.push([k * this.bin, this.profile.vol.get(k) ?? 0, this.profile.delta.get(k) ?? 0]);
     }
     const warm = Number.isFinite(this.t0) ? Math.max(0, this.cfg.warmupMinutes * 60 - (this.now - this.t0) / 1000) : this.cfg.warmupMinutes * 60;
+    const se = this.session;
     return {
+      style: this.cfg.style,
+      session: se && {
+        start: se.start,
+        end: se.end,
+        open: se.open,
+        high: se.high,
+        low: se.low,
+        ib: se.fromOpen ? { high: se.ibHigh, low: se.ibLow, done: this.now >= se.ibEnd } : null,
+        trades: se.trades,
+        value: this.sessionVa ?? null,
+      },
       state: this.state,
       t: this.now,
       last: this.last,
@@ -543,7 +752,7 @@ export class AmtEngine {
       book: book && { imbalance: book.imbalance, spreadBps: book.spreadBps },
       position: pos,
       pending: this.pending?.kind ?? null,
-      stats: { ...this.stats, winRate: this.stats.trades ? this.stats.wins / this.stats.trades : null, profitFactor: this.stats.grossLoss > 0 ? this.stats.grossWin / this.stats.grossLoss : null },
+      stats: { ...this.stats, pnlToday: this.stats.day === dayOf(this.now) ? this.stats.pnlToday : 0, winRate: this.stats.trades ? this.stats.wins / this.stats.trades : null, profitFactor: this.stats.grossLoss > 0 ? this.stats.grossWin / this.stats.grossLoss : null },
       halted: this.halted,
       warmupSec: Math.round(warm),
       lastSignal: this.lastSignal,

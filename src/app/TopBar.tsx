@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import logo from '../assets/logo-96.png';
 import { fmtPct, fmtPrice } from '../core/format';
 import type { VenueId } from '../core/types';
 import { ADAPTERS, POPULAR_BASES, VENUE_IDS } from '../exchanges';
@@ -13,20 +14,7 @@ import { sealTerminal } from './LockScreen';
 
 /** Pyramid mark with three candles — Novus Ordo. */
 export function Logo({ size = 26 }: { size?: number }) {
-  return (
-    <svg className="logo" width={size} height={size} viewBox="0 0 32 32" aria-hidden>
-      <defs>
-        <linearGradient id="lg-glass" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="rgba(255,255,255,0.55)" />
-          <stop offset="1" stopColor="rgba(255,255,255,0.08)" />
-        </linearGradient>
-      </defs>
-      <path d="M16 3 L29 27 H3 Z" fill="url(#lg-glass)" stroke="var(--accent)" strokeWidth="1.6" strokeLinejoin="round" />
-      <rect x="10" y="17" width="3" height="7" rx="1" fill="var(--buy)" />
-      <rect x="14.5" y="12" width="3" height="12" rx="1" fill="var(--accent)" />
-      <rect x="19" y="15" width="3" height="9" rx="1" fill="var(--sell)" />
-    </svg>
-  );
+  return <img className="logo" src={logo} width={size} height={size} alt="" aria-hidden draggable={false} />;
 }
 
 export type ModalKind = 'connection' | 'layouts' | 'add' | 'settings' | 'keys' | null;
@@ -250,24 +238,24 @@ export function TopBar({ onOpen, onFocusChart, alertCount }: { onOpen: (m: Modal
       <div style={{ flex: 1 }} />
       <AlgoKill />
       <button className="chip" onClick={() => onOpen('keys')} title="API key vault">
-        🔑 Keys
+        🔑 <span className="lbl">Keys</span>
       </button>
       <button className="chip" onClick={() => onOpen('add')} title="Add a panel">
-        + Panel
+        + <span className="lbl">Panel</span>
       </button>
       <button className="chip" onClick={onFocusChart} title="Maximise the main chart (click again to restore)">
-        ⤢ Chart
+        ⤢ <span className="lbl">Chart</span>
       </button>
       <button className={`chip ${locked ? 'locked' : ''}`} onClick={() => setS({ layoutLocked: !locked })} title={locked ? 'Layout locked — click to unlock' : 'Lock the layout (splits stay resizable)'}>
         {locked ? '🔒' : '🔓'}
       </button>
       <button className="chip" onClick={() => onOpen('layouts')} title="Layout gallery & saved layouts">
-        ▦ Layouts
+        ▦ <span className="lbl">Layouts</span>
       </button>
       <ThemeSwatches />
       <FilterSelect />
       <button className="chip seal" onClick={() => void sealTerminal()} title="Seal the terminal — back to the ledger-key lock screen (bots keep running)">
-        ⛨ Seal
+        ⛨ <span className="lbl">Seal</span>
       </button>
       <button className="chip" onClick={() => onOpen('settings')} title="Settings">
         ⚙

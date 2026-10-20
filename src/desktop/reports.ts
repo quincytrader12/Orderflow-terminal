@@ -145,8 +145,17 @@ export async function sendReport(kind: ReportKind, built?: BuiltReport) {
   if (!s.telegramSecretId) throw new Error('Choose a Telegram bot first');
   const r = built ?? (await buildReport(kind));
   await telegram.send(s.telegramSecretId, r.html);
-  for (const img of r.images) await telegram.sendPhoto(s.telegramSecretId, img.png, img.caption);
-  return r;
+  // the report counts as sent once its text is delivered; a refused image is not a reason to resend
+  const imageErrors: string[] = [];
+  for (const img of r.images) {
+    try {
+      await telegram.sendPhoto(s.telegramSecretId, img.png, img.caption);
+    } catch (e) {
+      imageErrors.push(String((e as Error).message ?? e));
+    }
+  }
+  if (imageErrors.length) console.warn('telegram report images', imageErrors);
+  return { ...r, imageErrors };
 }
 
 let started = false;

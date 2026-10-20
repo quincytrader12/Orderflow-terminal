@@ -73,6 +73,15 @@ describe('buildOrder', () => {
     expect(buildOrder({ ...r, price: 49_000, postOnly: true, tif: 'GTC' }, spot, ctx).params).toEqual({ postOnly: true });
   });
 
+  it('sizes exits in exact contracts and exempts verified spot closes from the cap', () => {
+    const okx = { ...perp, contractSize: 0.01 };
+    const o = buildOrder({ symbol: 'BTC/USDT:USDT', side: 'sell', type: 'market', sizeMode: 'contracts', size: 58, reduceOnly: true }, okx, { ...ctx, amountToPrecision: (x) => Math.floor(x) });
+    expect(o.amount).toBe(58);
+    const big = { symbol: 'BTC/USDT', side: 'sell', type: 'market', sizeMode: 'contracts', size: 0.1 };
+    expect(() => buildOrder(big, spot, ctx)).toThrow(/above your cap/);
+    expect(buildOrder(big, spot, { ...ctx, capExempt: true }).amount).toBe(0.1);
+  });
+
   it('clamps limits and rate-limits orders per minute', () => {
     expect(sanitizeLimits({ maxOrderUsd: -5, maxOrdersPerMinute: 'x' })).toEqual({ maxOrderUsd: 1, maxOrdersPerMinute: 10, maxPriceDeviationPct: 50 });
     const g = new RateGate();
@@ -218,6 +227,20 @@ describe('CcxtService trading', () => {
     const svc = new CcxtService(vault, { db, lib });
     const id = vault.save({ label: 'Test', kind: 'exchange', exchange: 'fakeex', fields: { apiKey: 'k', trading: 'enabled', sandbox: 'true' } });
     await expect(svc.placeOrder(id, order)).rejects.toThrow(/has no testnet/);
+  });
+
+  it('checks spot closes against holdings and clamps reduce-only to the position', async () => {
+    const { lib, created } = fakeLib();
+    const svc = new CcxtService(vault, { db, lib });
+    const id = vault.save({ label: 'T', kind: 'exchange', exchange: 'fakeex', fields: { apiKey: 'k', trading: 'enabled' } });
+    await expect(svc.placeOrder(id, { symbol: 'BTC/USDT', side: 'sell', type: 'market', sizeMode: 'contracts', size: 0.6, closeSpot: true })).rejects.toThrow(/only 0.5 held/);
+    // 0.5 BTC ≈ $25k: far above the $1000 cap, but it only sells what is held
+    await svc.placeOrder(id, { symbol: 'BTC/USDT', side: 'sell', type: 'market', sizeMode: 'contracts', size: 0.5, closeSpot: true });
+    expect(created.at(-1)).toMatchObject({ symbol: 'BTC/USDT', side: 'sell', amount: 0.5 });
+    // the fake account holds a 7-contract long: a 9-contract reduce-only sell is trimmed to 7
+    await svc.placeOrder(id, { symbol: 'BTC/USDT:USDT', side: 'sell', type: 'market', sizeMode: 'contracts', size: 9, reduceOnly: true });
+    expect(created.at(-1)).toMatchObject({ amount: 7, params: { reduceOnly: true } });
+    await expect(svc.placeOrder(id, { symbol: 'BTC/USDT:USDT', side: 'buy', type: 'market', sizeMode: 'contracts', size: 1, reduceOnly: true })).rejects.toThrow(/no short position/);
   });
 
   it('reports market info for the ticket', async () => {

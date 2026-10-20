@@ -58,6 +58,7 @@ contextBridge.exposeInMainWorld('novus', {
   amt: {
     list: () => call('amt:list'),
     defaults: () => call('amt:defaults'),
+    presets: () => call('amt:presets'),
     save: (cfg) => call('amt:save', cfg),
     remove: (id) => call('amt:remove', id),
     start: (id) => call('amt:start', id),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AmtEngine, backtest, mergeConfig, niceBin, paperFill, valueArea } from './engine.mjs';
+import { AmtEngine, backtest, INTRADAY_PRESET, mergeConfig, niceBin, paperFill, valueArea } from './engine.mjs';
 
 const MIN = 60_000;
 const T0 = Date.UTC(2026, 0, 5, 0, 10);
@@ -67,7 +67,8 @@ describe('profile maths', () => {
   it('accepts partial configs and ignores unknown or mistyped keys', () => {
     const c = mergeConfig({ riskUsd: 25, setups: { reentry: false }, bogus: 1, minRR: '3' });
     expect(c.riskUsd).toBe(25);
-    expect(c.setups).toEqual({ fade: true, breakout: true, reentry: false });
+    expect(c.setups).toMatchObject({ fade: true, breakout: true, reentry: false, ibBreakout: true });
+    expect(c.style).toBe('scalp');
     expect(c.minRR).toBe(1.5);
     expect('bogus' in c).toBe(false);
   });
@@ -227,5 +228,149 @@ describe('risk controls', () => {
     expect(r.trades[0]).toMatchObject({ side: 'buy', setup: 'breakout' });
     expect(r.equity.length).toBe(r.stats.trades);
     expect(va.vah).toBeLessThan(r.trades[0].entry);
+  });
+});
+
+describe('intraday style', () => {
+  const H = 3_600_000;
+  // 4-hour sessions keep the scenarios short; the defaults use 24 h
+  const intra = { ...INTRADAY_PRESET, ...base, sessionHours: 4, ibMinutes: 30, ibAcceptMin: 10, priorAcceptMin: 20, priorRejectMin: 20, warmupMinutes: 20, minRR: 1.5, useBook: false, cooldownSec: 0 };
+  const S0 = Math.ceil(T0 / (4 * H)) * 4 * H; // a session boundary
+
+  it('starts from the preset: hours-long holds and session setups only', () => {
+    const c = mergeConfig(INTRADAY_PRESET);
+    expect(c).toMatchObject({ style: 'intraday', maxHoldSec: 28_800, minRR: 2 });
+    expect(c.setups).toMatchObject({ fade: false, breakout: false, ibBreakout: true, priorAccept: true, priorReject: true });
+  });
+
+  it('trades an initial-balance extension and holds it to the IB-range target', () => {
+    const rand = rng(21);
+    const e = new AmtEngine({ ...intra, setups: { ...INTRADAY_PRESET.setups, priorAccept: false, priorReject: false, reentry: false } });
+    // the IB forms in the first 30 minutes between ~99.5 and ~100.5
+    run(e, balance(S0, 30, 100, 0.5, rand));
+    const ib = e.snapshot().session.ib;
+    expect(ib.done).toBe(false);
+    expect(e.snapshot().state).toBe('ib-forming');
+    // buyers extend above the IB high and hold there
+    let t = S0 + 30 * MIN;
+    const intents = run(e, path(t, 900, ib.high + 0.05, ib.high + 0.3, 'buy', 2, 0.4));
+    t += 900_000;
+    const entry = intents.find((i) => i.type === 'enter');
+    expect(entry).toMatchObject({ side: 'buy', setup: 'ibBreakout' });
+    expect(entry.target).toBeCloseTo(ib.high + (ib.high - ib.low), 6);
+    expect(entry.stop).toBeLessThan(ib.high);
+    expect(entry.reason).toMatch(/initial balance high extended/);
+    // an hour later the extension reaches its target
+    const out = run(e, path(t, 3600, ib.high + 0.3, ib.high + (ib.high - ib.low) + 0.1, 'buy', 1, 0.3));
+    expect(out.find((i) => i.type === 'exit')).toMatchObject({ reason: expect.stringMatching(/target|trail/) });
+    const tr = e.snapshot().trades[0];
+    expect(tr.closed - tr.opened).toBeGreaterThan(30 * MIN);
+    expect(tr.pnl).toBeGreaterThan(0);
+  });
+
+  it('goes with acceptance outside prior-day value and is flat before the session closes', () => {
+    const rand = rng(22);
+    const e = new AmtEngine({ ...intra, setups: { ...INTRADAY_PRESET.setups, ibBreakout: false, priorReject: false, reentry: false }, maxHoldSec: 24 * 3600 });
+    // a partial session, then a full balanced session that becomes prior value
+    run(e, balance(S0 - 2 * H, 120, 100, 0.5, rand));
+    run(e, balance(S0, 240, 100, 0.5, rand, 1));
+    const S1 = S0 + 4 * H;
+    run(e, balance(S1, 10, 100, 0.3, rand, 1));
+    const prior = e.snapshot().prior;
+    expect(prior.vah).toBeGreaterThan(100);
+    // price moves above prior VAH and is accepted there for 20+ minutes
+    // held just above prior VAH (entering late after a big run would fail the R:R filter)
+    const intents = run(e, path(S1 + 10 * MIN, 1800, prior.vah + 0.02, prior.vah + 0.08, 'buy', 1, 0.4));
+    const entry = intents.find((i) => i.type === 'enter');
+    expect(entry).toMatchObject({ side: 'buy', setup: 'priorAccept' });
+    expect(entry.stop).toBeLessThan(prior.vah);
+    expect(entry.target).toBeGreaterThanOrEqual(prior.vah + (prior.vah - prior.val) - 1e-9);
+    // price drifts sideways for hours: the position is closed 15 min before the session ends
+    const quiet = [];
+    for (let t = S1 + 41 * MIN; t < S1 + 4 * H; t += 2000) quiet.push({ t, p: Number((prior.vah + 0.2 + rand() * 0.04).toFixed(2)), q: 0.2, s: rand() < 0.5 ? 'buy' : 'sell' });
+    const out = run(e, quiet);
+    const exit = out.find((i) => i.type === 'exit');
+    expect(exit.reason).toBe('session close');
+    const tr = e.snapshot().trades.at(-1);
+    expect(tr.closed).toBeLessThan(S1 + 4 * H - 14 * MIN);
+    expect(tr.closed - tr.opened).toBeGreaterThan(2 * H);
+  });
+
+  it('fades a failed probe of prior value back to the prior POC', () => {
+    const rand = rng(23);
+    const e = new AmtEngine({ ...intra, setups: { ...INTRADAY_PRESET.setups, ibBreakout: false, priorAccept: false, reentry: false } });
+    run(e, balance(S0 - 2 * H, 120, 100, 0.5, rand));
+    // a wider prior value area leaves room back to its POC
+    run(e, balance(S0, 240, 100, 1.2, rand, 1));
+    const S1 = S0 + 4 * H;
+    run(e, balance(S1, 40, 100, 0.2, rand, 1));
+    const prior = e.snapshot().prior;
+    const t = S1 + 40 * MIN;
+    const intents = run(e, [...path(t, 300, prior.vah, prior.vah + 0.1, 'buy', 1), ...path(t + 300_000, 300, prior.vah + 0.1, prior.vah - 0.02, 'sell', 1, 0.6)]);
+    const entry = intents.find((i) => i.type === 'enter');
+    expect(entry).toMatchObject({ side: 'sell', setup: 'priorReject' });
+    expect(entry.target).toBeCloseTo(prior.poc, 6);
+  });
+
+  it('trails the stop to the developing session POC after 2R', () => {
+    const e = new AmtEngine({ ...intra });
+    e.now = S0 + H;
+    e.rollSession(e.now, 100);
+    e.sessionVa = { poc: 100.6, vah: 100.8, val: 100.2 };
+    e.pending = { kind: 'entry', side: 'buy', stop: 99.5, target: 105, setup: 'ibBreakout' };
+    e.filled({ price: 100, qty: 1, t: S0 + H });
+    expect(e.manage(101.2, S0 + H + 1000)).toBeNull();
+    expect(e.pos.stop).toBe(100.6);
+    expect(e.manage(100.55, S0 + H + 2000)).toMatchObject({ reason: 'trail' });
+  });
+});
+
+describe('audit regressions', () => {
+  it('never moves the breakeven stop past the current price', () => {
+    const e = new AmtEngine({ ...base, feeBps: 6, slippageBps: 1 });
+    e.pending = { kind: 'entry', side: 'buy', stop: 99.92, target: 101, setup: 'fade' };
+    e.filled({ price: 100, qty: 1, t: T0 });
+    // +1R (0.08) is less than round-trip costs (14 bps = 0.14): keep the original stop
+    expect(e.manage(100.08, T0 + 1000)).toBeNull();
+    expect(e.pos.stop).toBe(99.92);
+    expect(e.pos.be).toBe(false);
+  });
+
+  it('refuses setups whose stop is inside round-trip costs', () => {
+    const e = new AmtEngine({ ...base, feeBps: 6, slippageBps: 1, minRR: 1 });
+    Object.assign(e, { now: T0, last: 100, bin: 0.01, t0: T0 - 3_600_000, lastTradeT: T0 });
+    e.probe = { dir: 1, ref: { vah: 99.99, val: 99.5, poc: 99.8 }, extreme: 100.01, outside: 120_000, lastT: T0, accepted: true, start: T0 };
+    e.flow.add(T0 - 300_000, 10, true);
+    e.flow.add(T0 - 500, 1000, true);
+    expect(e.setup('accept-up', 100, T0)).toBeNull();
+    expect(e.lastSkip.reason).toMatch(/inside round-trip costs/);
+  });
+
+  it('does not enter on a frozen price when trades stop arriving', () => {
+    const rand = rng(31);
+    const e = new AmtEngine({ ...base, setups: { fade: false, breakout: false, reentry: true }, sessionHours: 1, warmupMinutes: 10, reentrySec: 60 });
+    const h = 3_600_000;
+    const s1 = Math.floor(T0 / h) * h;
+    run(e, balance(T0, 50, 100, 0.5, rand));
+    run(e, balance(s1 + h, 60, 100, 0.5, rand));
+    run(e, path(s1 + 2 * h, 30, 101, 100.1, 'sell'));
+    // the feed dies inside prior value; only the wall clock moves
+    const out = [];
+    for (let k = 1; k <= 120; k++) out.push(...e.tick(s1 + 2 * h + 30_000 + k * 1000));
+    expect(out.find((i) => i.type === 'enter')).toBeUndefined();
+    expect(e.lastSkip.reason).toMatch(/market data stale/);
+  });
+
+  it('lifts the daily loss halt on the next UTC day', () => {
+    const e = new AmtEngine({ ...base, maxDailyLossUsd: 5 });
+    e.now = T0;
+    e.pending = { kind: 'entry', side: 'buy', stop: 99, target: 103, setup: 'fade' };
+    e.filled({ price: 100, qty: 10, t: T0 });
+    e.pending = { kind: 'exit', reason: 'stop' };
+    e.filled({ price: 99, qty: 10, t: T0 + 1000 });
+    expect(e.gate('buy', null)).toMatch(/daily loss/);
+    e.now = T0 + 86_400_000;
+    expect(e.gate('buy', null)).toBeNull();
+    expect(e.snapshot().stats.pnlToday).toBe(0);
   });
 });

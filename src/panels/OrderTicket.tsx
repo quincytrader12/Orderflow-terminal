@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { fmtNum, fmtPrice, fmtTime, fmtUsd } from '../core/format';
-import { desktop, DesktopOnlyError, type MarketInfo, type OrderLogRow, type OrderRequest, type OrderType, type TimeInForce } from '../desktop/bridge';
+import { desktop, DesktopOnlyError, type MarketInfo, type OrderLogRow, type OrderRequest, type OrderType, type TimeInForce, type TradingLimits } from '../desktop/bridge';
 import { forwardAlert } from '../desktop/telegram';
 import { describeOrder, estimateValue, pickSymbol, TYPE_LABEL, unifiedCandidates, useTicket } from '../desktop/trading';
 import { useVaultKeys } from '../desktop/vault';
@@ -45,6 +45,10 @@ export function OrderTicket({ config: c, setConfig }: PanelProps<TicketConfig>) 
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [log, setLog] = useState<OrderLogRow[]>([]);
+  const [limitsView, setLimitsView] = useState<TradingLimits | null>(null);
+  useEffect(() => {
+    desktop?.trade.limits().then(setLimitsView).catch(() => undefined);
+  }, []);
 
   // default to the first key that may trade
   useEffect(() => {
@@ -189,11 +193,19 @@ export function OrderTicket({ config: c, setConfig }: PanelProps<TicketConfig>) 
     setSize(c.sizeMode === 'quote' ? q.toFixed(2) : String(Number((q / px).toPrecision(6))));
   };
 
-  const setLimits = (patch: Partial<MarketInfo['limits']>) =>
-    desktop!.trade
-      .setLimits({ ...info?.limits, ...patch })
-      .then((limits) => info && setInfo({ ...info, limits }))
-      .catch(() => undefined);
+  // always merge into the limits the desktop process holds, and only write real changes
+  const setLimits = async (patch: Partial<TradingLimits>) => {
+    try {
+      const current = await desktop!.trade.limits();
+      const key = Object.keys(patch)[0] as keyof TradingLimits;
+      if (!(Number(patch[key]) > 0) || current[key] === patch[key]) return;
+      const limits = await desktop!.trade.setLimits({ ...current, ...patch });
+      setLimitsView(limits);
+      if (info) setInfo({ ...info, limits });
+    } catch {
+      /* desktop process unavailable */
+    }
+  };
 
   return (
     <div className="panel ticket">
@@ -225,15 +237,15 @@ export function OrderTicket({ config: c, setConfig }: PanelProps<TicketConfig>) 
           </div>
           <label className="form-row compact">
             <span>Max order value (USD)</span>
-            <input className="ctl" type="number" min={1} defaultValue={info?.limits.maxOrderUsd ?? 1000} onBlur={(e) => void setLimits({ maxOrderUsd: Number(e.target.value) })} />
+            <input className="ctl" type="number" min={1} key={`cap-${limitsView?.maxOrderUsd}`} defaultValue={limitsView?.maxOrderUsd ?? ''} onBlur={(e) => void setLimits({ maxOrderUsd: Number(e.target.value) })} />
           </label>
           <label className="form-row compact">
             <span>Max orders / minute</span>
-            <input className="ctl" type="number" min={1} defaultValue={info?.limits.maxOrdersPerMinute ?? 10} onBlur={(e) => void setLimits({ maxOrdersPerMinute: Number(e.target.value) })} />
+            <input className="ctl" type="number" min={1} key={`rate-${limitsView?.maxOrdersPerMinute}`} defaultValue={limitsView?.maxOrdersPerMinute ?? ''} onBlur={(e) => void setLimits({ maxOrdersPerMinute: Number(e.target.value) })} />
           </label>
           <label className="form-row compact">
             <span>Max distance from market %</span>
-            <input className="ctl" type="number" min={1} defaultValue={info?.limits.maxPriceDeviationPct ?? 50} onBlur={(e) => void setLimits({ maxPriceDeviationPct: Number(e.target.value) })} />
+            <input className="ctl" type="number" min={1} key={`dev-${limitsView?.maxPriceDeviationPct}`} defaultValue={limitsView?.maxPriceDeviationPct ?? ''} onBlur={(e) => void setLimits({ maxPriceDeviationPct: Number(e.target.value) })} />
           </label>
           <Check checked={settings.confirmOrders} onChange={(confirmOrders) => settings.set({ confirmOrders })}>
             Confirm every order before sending

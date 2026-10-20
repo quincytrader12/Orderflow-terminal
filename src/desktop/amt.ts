@@ -79,4 +79,6 @@ export const AMT_STATE_LABEL: Record<string, string> = {
   'probe-down': 'Probing below value',
   'accepted-up': 'Accepted above value — imbalance up',
   'accepted-down': 'Accepted below value — imbalance down',
+  'ib-forming': 'Initial balance forming (opening range)',
+  'awaiting-prior': 'Waiting for one full session of prior value',
 };
