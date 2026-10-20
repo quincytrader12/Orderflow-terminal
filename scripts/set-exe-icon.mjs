@@ -4,7 +4,7 @@
 //
 //   node scripts/set-exe-icon.mjs [path/to/Novus Ordo.exe]
 import { readFileSync, writeFileSync } from 'node:fs';
-import ResEdit from 'resedit';
+import * as ResEdit from 'resedit';
 
 const exe = process.argv[2] ?? 'release/win-unpacked/Novus Ordo.exe';
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
