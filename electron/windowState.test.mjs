@@ -37,3 +37,15 @@ describe('initial window placement', () => {
     expect(initialWindow({ bounds: { x: 'a' } }, [fullHd]).maximized).toBe(true);
   });
 });
+
+describe('full screen', () => {
+  const fullHd = { x: 0, y: 0, width: 1920, height: 1040 };
+  it('starts full screen (taskbar hidden) by default and for state saved before it was the default', () => {
+    expect(initialWindow(undefined, [fullHd]).fullScreen).toBe(true);
+    expect(initialWindow({ bounds: { x: 0, y: 0, width: 1500, height: 900 }, maximized: true, fullScreen: false }, [fullHd]).fullScreen).toBe(true);
+  });
+  it('remembers leaving full screen once that is a choice', () => {
+    expect(initialWindow({ v: 2, bounds: { x: 0, y: 0, width: 1500, height: 900 }, maximized: true, fullScreen: false }, [fullHd]).fullScreen).toBe(false);
+    expect(initialWindow({ v: 2, bounds: { x: 0, y: 0, width: 1500, height: 900 }, maximized: true, fullScreen: true }, [fullHd]).fullScreen).toBe(true);
+  });
+});

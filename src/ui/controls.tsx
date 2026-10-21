@@ -72,6 +72,23 @@ export function Chip({ active, onClick, children, title, color }: { active?: boo
   );
 }
 
+/** Zoom out / in / fit-everything buttons for a chart toolbar. */
+export function ZoomControls({ onZoom, onFit }: { onZoom: (factor: number) => void; onFit: () => void }) {
+  return (
+    <span className="zoom-controls" role="group" aria-label="Zoom">
+      <button className="chip" onClick={() => onZoom(0.75)} title="Zoom out — see more bars (Ctrl + mouse wheel)">
+        −
+      </button>
+      <button className="chip" onClick={() => onZoom(1 / 0.75)} title="Zoom in (Ctrl + mouse wheel)">
+        +
+      </button>
+      <button className="chip" onClick={onFit} title="Fit: every loaded bar and its whole price range">
+        Fit
+      </button>
+    </span>
+  );
+}
+
 export function NumberInput({ value, onChange, step, min, width = 72, title, suffix }: { value: number; onChange: (v: number) => void; step?: number; min?: number; width?: number; title?: string; suffix?: string }) {
   const [text, setText] = useState(String(value));
   useEffect(() => setText(String(value)), [value]);

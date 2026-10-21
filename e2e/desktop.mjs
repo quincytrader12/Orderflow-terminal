@@ -75,6 +75,14 @@ try {
   const vp = await page.evaluate(() => ({ w: innerWidth, h: innerHeight, app: document.querySelector('.app').getBoundingClientRect() }));
   expect(Math.abs(vp.app.width - vp.w) < 2 && Math.abs(vp.app.height - vp.h) < 2, 'terminal fills the window');
 
+  step('full screen');
+  const fs0 = await page.evaluate(() => window.novus.app.isFullscreen());
+  await page.click('.topbar button[title*="(F11)"]');
+  await page.waitForTimeout(500);
+  const fs1 = await page.evaluate(() => window.novus.app.isFullscreen());
+  console.log(`  full screen at start: ${fs0}; after the button: ${fs1}${fs0 === fs1 ? ' (no window manager to honour it)' : ''}`);
+  if (fs0 !== fs1) await page.click('.topbar button[title*="(F11)"]');
+
   step('desktop bridge and database');
   const info = await page.evaluate(() => window.novus.app.info());
   expect(info.db.file.startsWith(userData), `database lives in user data (${info.db.file})`);
@@ -87,6 +95,19 @@ try {
 
   step('switch primary to simulator for live data');
   await page.selectOption('select[title="Primary venue"]', 'sim');
+
+  step('chart zoom: fit every bar, zoom out');
+  await page.waitForTimeout(4000);
+  const fp = page.locator('.flexlayout__tab:visible:has(.zoom-controls)').first();
+  const fpCanvas = fp.locator('canvas').first();
+  const before = await fpCanvas.screenshot();
+  await fp.locator('.zoom-controls button:text-is("Fit")').click();
+  await page.waitForTimeout(400);
+  await fp.locator('.zoom-controls button:text-is("−")').click();
+  await page.waitForTimeout(400);
+  expect(!(await fpCanvas.screenshot()).equals(before), 'zoom buttons redraw the chart');
+  await page.screenshot({ path: `${OUT}desktop-zoomed-out.png` });
+
   await page.waitForTimeout(5000);
   await page.screenshot({ path: `${OUT}desktop-chart-center.png` });
 

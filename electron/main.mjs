@@ -159,6 +159,10 @@ function createWindow() {
   if (process.env.VITE_DEV_SERVER_URL) void win.loadURL(process.env.VITE_DEV_SERVER_URL);
   else void win.loadFile(join(root, 'dist', 'index.html')).catch((e) => log('error', 'loadFile failed', e));
   win.on('close', () => saveWindowState(stateFile, w));
+  // tell the top bar so its full-screen button shows the right state
+  const sendFs = () => !w.isDestroyed() && w.webContents.send('app:fullscreen', w.isFullScreen());
+  win.on('enter-full-screen', sendFs);
+  win.on('leave-full-screen', sendFs);
   win.on('closed', () => {
     win = null;
     ccxtSvc?.closeAll();
@@ -244,6 +248,14 @@ function registerIpc() {
   }));
   handle('app:leaveSafeMode', () => leaveSafeMode());
   handle('app:locked', () => !unlocked);
+  // full screen hides the taskbar; F11 or the top-bar button toggles it
+  handle('app:fullscreen', (e, on) => {
+    const w = BrowserWindow.fromWebContents(e.sender);
+    if (!w) return false;
+    w.setFullScreen(typeof on === 'boolean' ? on : !w.isFullScreen());
+    return w.isFullScreen();
+  });
+  handle('app:isFullscreen', (e) => Boolean(BrowserWindow.fromWebContents(e.sender)?.isFullScreen()));
   handle('app:log', () => logFile());
   handle('app:unlock', async (_e, code) => {
     attempts.check();
@@ -460,7 +472,7 @@ app.whenReady().then(() => {
     Menu.buildFromTemplate([
       ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
       { role: 'editMenu' },
-      { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' }] },
+      { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen', accelerator: 'F11' }] },
       { role: 'windowMenu' },
       {
         label: 'Help',

@@ -84,6 +84,8 @@ export class AttemptGate {
 /** IPC channels that only carry public market data and stay open while locked. */
 export const PUBLIC_CHANNELS = new Set([
   'app:seal',
+  'app:fullscreen',
+  'app:isFullscreen',
   'app:log',
   'app:info',
   'app:unlock',

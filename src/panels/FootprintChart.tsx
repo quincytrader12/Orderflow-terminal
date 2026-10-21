@@ -7,7 +7,7 @@ import { bucket } from '../core/orderbook';
 import { INTERVALS, TIME_RANGES } from '../core/types';
 import { hub } from '../market/hub';
 import { Canvas, font, label, line, type DrawContext, type PointerState, mask } from '../ui/canvas';
-import { Check, Chip, NumberInput, Popover, Select, Spacer, Toolbar, useHubVersion, type PanelProps } from '../ui/controls';
+import { Check, Chip, NumberInput, Popover, Select, Spacer, Toolbar, useHubVersion, ZoomControls, type PanelProps } from '../ui/controls';
 import { rgba } from '../ui/theme';
 import { HeatmapRaster } from './shared/heatmapRender';
 import { useKlines } from './shared/useKlines';
@@ -79,6 +79,8 @@ interface View {
   offset: number;
   center: number;
   autoCenter: boolean;
+  /** fit every candle and its price range on the next frame */
+  fit?: boolean;
 }
 
 /**
@@ -97,6 +99,8 @@ export function cellFormat(maxLevel: number): (v: number) => string {
 }
 
 const AXIS_W = 74;
+const MIN_COL = 1.5;
+const MIN_ROW = 0.6;
 const TIME_H = 18;
 const RIGHT_PAD = 50;
 
@@ -143,6 +147,22 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
     const plotH = h - TIME_H - statsH - cvdH;
     if (plotH < 40) return;
 
+    if (v.fit && n) {
+      // zoom out to show every candle, and scale prices to their whole range
+      v.fit = false;
+      const vpLane = c.ovVp ? Math.min(110, plotW * 0.12) + 14 : RIGHT_PAD;
+      v.colW = Math.max(MIN_COL, Math.min(84, (plotW - vpLane) / n));
+      let hi = -Infinity;
+      let lo = Infinity;
+      for (const cd of candles) {
+        hi = Math.max(hi, cd.high);
+        lo = Math.min(lo, cd.low);
+      }
+      v.rowH = Math.max(MIN_ROW, Math.min(48, (plotH * 0.92) / ((hi - lo) / tick + 2)));
+      v.center = (hi + lo) / 2;
+      v.autoCenter = false;
+      v.offset = 0;
+    }
     if (!isFinite(v.center)) v.center = lastPrice;
     if (v.autoCenter) {
       const yLast = plotH / 2 - ((lastPrice - v.center) / tick) * v.rowH;
@@ -603,12 +623,20 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
     }
   };
 
+  /** Zoom bars and prices together (toolbar − / +, Ctrl + wheel). */
+  const zoom = (k: number) => {
+    const v = view.current;
+    v.colW = Math.max(MIN_COL, Math.min(320, v.colW * k));
+    v.rowH = Math.max(MIN_ROW, Math.min(48, v.rowH * k));
+  };
+
   const onWheel = (e: WheelEvent, p: PointerState) => {
     const v = view.current;
     const k = e.deltaY > 0 ? 0.9 : 1.1;
     const overAxis = p.x > p.w - AXIS_W;
-    if (e.shiftKey || e.altKey || overAxis) v.rowH = Math.max(3, Math.min(48, v.rowH * k));
-    else v.colW = Math.max(3, Math.min(320, v.colW * k));
+    if (e.ctrlKey || e.metaKey) zoom(k);
+    else if (e.shiftKey || e.altKey || overAxis) v.rowH = Math.max(MIN_ROW, Math.min(48, v.rowH * k));
+    else v.colW = Math.max(MIN_COL, Math.min(320, v.colW * k));
   };
 
   const onDrag = (dx: number, dy: number) => {
@@ -702,7 +730,8 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
           )}
         </Popover>
         <Spacer />
-        <span className="help-dot" title={'Mouse wheel: zoom bars\nShift + wheel (or wheel over the price axis): zoom prices\nDrag: pan · Double-click: reset view'}>
+        <ZoomControls onZoom={zoom} onFit={() => (view.current.fit = true)} />
+        <span className="help-dot" title={'Mouse wheel: zoom bars\nShift + wheel (or wheel over the price axis): zoom prices\nCtrl + wheel: zoom the whole chart\nDrag: pan · Double-click: reset view'}>
           ?
         </span>
         <Chip onClick={reset} title="Reset view (or double-click the chart)">⟲</Chip>

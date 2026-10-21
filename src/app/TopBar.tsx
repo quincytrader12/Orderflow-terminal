@@ -205,6 +205,30 @@ function AlgoKill() {
   );
 }
 
+/** Full screen (taskbar hidden) on/off; F11 does the same. */
+function FullscreenButton() {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    if (desktop) {
+      desktop.app.isFullscreen().then(setOn).catch(() => undefined);
+      return desktop.app.onFullscreen(setOn);
+    }
+    const sync = () => setOn(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', sync);
+    return () => document.removeEventListener('fullscreenchange', sync);
+  }, []);
+  const toggle = () => {
+    if (desktop) void desktop.app.fullscreen(!on).then(setOn);
+    else if (document.fullscreenElement) void document.exitFullscreen();
+    else void document.documentElement.requestFullscreen().catch(() => undefined);
+  };
+  return (
+    <button className={`chip ${on ? 'active' : ''}`} onClick={toggle} title={on ? 'Leave full screen (F11) — shows the taskbar' : 'Full screen (F11) — hides the taskbar'}>
+      {on ? '⤡' : '⛶'}
+    </button>
+  );
+}
+
 /** Shown while the desktop app renders without the GPU (safe mode). */
 function SafeModeChip() {
   const safe = useBoot((s) => s.safeMode);
@@ -286,6 +310,7 @@ export function TopBar({ onOpen, onFocusChart, onOpenPanel, alertCount, editing,
       <button className="chip seal" onClick={() => void sealTerminal()} title="Seal the terminal — back to the ledger-key lock screen (bots keep running)">
         ⛨ <span className="lbl">Seal</span>
       </button>
+      <FullscreenButton />
       <button className="chip" onClick={() => onOpen('settings')} title="Settings">
         ⚙
       </button>

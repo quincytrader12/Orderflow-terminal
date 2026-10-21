@@ -8,7 +8,7 @@ import type { TradeStore } from '../core/tradeStore';
 import { intervalMinutes } from '../exchanges/adapter';
 import { hub } from '../market/hub';
 import { axisTicks, Canvas, font, label, line, type DrawContext, type PointerState, mask } from '../ui/canvas';
-import { Check, Chip, Empty, NumberInput, Popover, Select, Spacer, Toolbar, useHubVersion, type PanelProps } from '../ui/controls';
+import { Check, Chip, Empty, NumberInput, Popover, Select, Spacer, Toolbar, useHubVersion, ZoomControls, type PanelProps } from '../ui/controls';
 import { rgba } from '../ui/theme';
 import { baseTick, drawTooltip } from './FootprintChart';
 import { useKlines } from './shared/useKlines';
@@ -71,11 +71,17 @@ export function withLiveBars(bars: Kline[], store: TradeStore, intervalMs: numbe
   return out;
 }
 
+/** Narrowest bar when zoomed out: below 1 px, bars overlap into a line chart. */
+const MIN_BAR = 0.6;
+
 export function HistoricalChart({ config: c, setConfig }: PanelProps<HistoricalConfig>) {
   useHubVersion();
   const feed = hub().primary;
   const k = useKlines(feed, c.mode === 'tpo' ? '30m' : c.interval, c.mode === 'tpo' ? Math.min(1000, 48 * (c.tpoSessions + 1)) : 1000, 60_000);
-  const view = useRef({ barW: 8, offset: 0 });
+  const view = useRef({ barW: 8, offset: 0, fit: false });
+  const zoom = (k: number) => {
+    view.current.barW = Math.max(MIN_BAR, Math.min(40, view.current.barW * k));
+  };
   const pointer = useRef<PointerState | null>(null);
 
   const draw = (d: DrawContext) => {
@@ -94,6 +100,12 @@ export function HistoricalChart({ config: c, setConfig }: PanelProps<HistoricalC
     const priceH = plotH - volH;
     const n = bars.length;
     const rightPad = 40;
+    if (v.fit) {
+      // every loaded bar; prices already scale to what is visible
+      v.fit = false;
+      v.barW = Math.max(MIN_BAR, Math.min(40, (plotW - rightPad) / n));
+      v.offset = 0;
+    }
     const slotX = (i: number) => plotW - rightPad - (n - i - v.offset) * v.barW;
     const first = Math.max(0, Math.floor(n - v.offset - (plotW - rightPad) / v.barW) - 1);
     const last = Math.min(n - 1, Math.ceil(n - v.offset + rightPad / v.barW));
@@ -368,6 +380,7 @@ export function HistoricalChart({ config: c, setConfig }: PanelProps<HistoricalC
         )}
         <Spacer />
         {k.loading && <span className="muted">loading…</span>}
+        {c.mode === 'candles' && <ZoomControls onZoom={zoom} onFit={() => (view.current.fit = true)} />}
       </Toolbar>
       {k.error && !k.bars.length ? (
         <Empty>
@@ -378,9 +391,7 @@ export function HistoricalChart({ config: c, setConfig }: PanelProps<HistoricalC
           draw={draw}
           fps={c.mode === 'tpo' ? 4 : 15}
           pointerRef={pointer}
-          onWheel={(e) => {
-            view.current.barW = Math.max(2, Math.min(40, view.current.barW * (e.deltaY > 0 ? 0.9 : 1.1)));
-          }}
+          onWheel={(e) => zoom(e.deltaY > 0 ? 0.9 : 1.1)}
           onDrag={(dx) => {
             view.current.offset = Math.max(-5, view.current.offset + dx / view.current.barW);
           }}
