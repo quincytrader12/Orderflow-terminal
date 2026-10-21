@@ -363,7 +363,7 @@ export interface NovusApi {
     save(rec: SecretInput): Promise<string>;
     remove(id: string): Promise<void>;
     copy(id: string, field: string): Promise<boolean>;
-    test(id: string): Promise<{ ok: boolean; exchange: string; assets: number }>;
+    test(id: string): Promise<{ ok: boolean; exchange: string; assets: number; futures: boolean | null; futuresError: string | null }>;
   };
   ccxt: {
     exchanges(): Promise<CcxtExchangeInfo[]>;

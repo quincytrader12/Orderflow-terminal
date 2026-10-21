@@ -3,6 +3,7 @@
 // use API keys from the vault. Runs in the Electron main process so there are
 // no CORS limits and keys never reach the renderer.
 import { clockSafe } from './clock.mjs';
+import { isKeyRejection, keyChecklist, publicIp } from './keyErrors.mjs';
 import { buildOrder, closeOrderFor, RateGate, sanitizeLimits, USD_QUOTES } from './trading.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -50,7 +51,12 @@ export async function listExchanges(cache) {
 /** CCXT credential field names come straight from the vault record. */
 function credentialsFrom(fields) {
   const out = {};
-  for (const k of ['apiKey', 'secret', 'password', 'uid', 'login', 'twofa', 'privateKey', 'walletAddress', 'token']) if (fields[k]) out[k] = fields[k];
+  // a space or line break copied along with a key makes the exchange reject it
+  // outright (Binance -2015); multi-line PEM keys keep their inner line breaks
+  for (const k of ['apiKey', 'secret', 'password', 'uid', 'login', 'twofa', 'privateKey', 'walletAddress', 'token']) {
+    const v = typeof fields[k] === 'string' ? fields[k].trim() : fields[k];
+    if (v) out[k] = v;
+  }
   return out;
 }
 
@@ -292,11 +298,46 @@ export class CcxtService {
 
   // ---------- private (API keys from the vault) ----------
 
+  /** A rejected key becomes a checklist (testnet, permissions, IP, copy errors). */
+  async explainKeyError(secretId, e, { futures = false } = {}) {
+    if (!isKeyRejection(e)) return e;
+    let sandbox = false;
+    let exchange = '';
+    try {
+      const s = this.vault.reveal(secretId);
+      sandbox = s.fields.sandbox === 'true';
+      exchange = s.exchange ?? '';
+    } catch {
+      /* key gone */
+    }
+    const name = this.privateCache.get(secretId)?.name ?? exchange;
+    return new Error(keyChecklist({ exchange: name, sandbox, futures, ip: await publicIp(), original: String(e?.message ?? e) }));
+  }
+
+  /**
+   * Check a key: its balance, and on Binance whether futures access works too
+   * (the most common reason for -2015 is a key without “Enable Futures”).
+   */
   async testKey(secretId) {
     const ex = this.privateExchange(secretId);
-    const bal = await ex.fetchBalance();
+    let bal;
+    try {
+      bal = await ex.fetchBalance();
+    } catch (e) {
+      throw await this.explainKeyError(secretId, e);
+    }
     const assets = Object.entries(bal.total ?? {}).filter(([, v]) => v).length;
-    return { ok: true, exchange: ex.name, assets };
+    const out = { ok: true, exchange: ex.name, assets, futures: null, futuresError: null };
+    if (ex.id === 'binance') {
+      try {
+        await ex.fetchBalance({ type: 'future' });
+        out.futures = true;
+      } catch (e) {
+        out.futures = false;
+        out.futuresError = isKeyRejection(e) ? 'not enabled on this key — tick “Enable Futures” in Binance API Management to trade or view futures' : String(e?.message ?? e);
+      }
+    }
+    return out;
   }
 
   async account(secretId, symbol) {
@@ -309,7 +350,7 @@ export class CcxtService {
         .filter((c) => bal.total[c])
         .map((c) => ({ currency: c, total: bal.total[c], free: bal.free?.[c] ?? null, used: bal.used?.[c] ?? null }));
     } catch (e) {
-      out.errors.balances = String(e?.message ?? e);
+      out.errors.balances = String((await this.explainKeyError(secretId, e))?.message ?? e);
     }
     if (ex.has.fetchPositions) {
       try {
@@ -318,7 +359,7 @@ export class CcxtService {
           .filter((p) => p.contracts || p.notional)
           .map((p) => ({ symbol: p.symbol, side: p.side, contracts: p.contracts, notional: p.notional, entryPrice: p.entryPrice, markPrice: p.markPrice, unrealizedPnl: p.unrealizedPnl, leverage: p.leverage, liquidationPrice: p.liquidationPrice }));
       } catch (e) {
-        out.errors.positions = String(e?.message ?? e);
+        out.errors.positions = isKeyRejection(e) ? `futures access refused — tick “Enable Futures” on this API key (or check its IP restriction). (${String(e?.message ?? e)})` : String(e?.message ?? e);
       }
     }
     if (ex.has.fetchOpenOrders) {
@@ -453,7 +494,13 @@ export class CcxtService {
     await ex.loadMarkets();
     const m = ex.markets[symbol];
     if (!m) throw new Error(`${symbol} is not listed on ${ex.name}`);
-    const bal = await ex.fetchBalance();
+    let bal;
+    try {
+      // Binance keeps spot and futures in separate wallets: ask for the one this market settles in
+      bal = await ex.fetchBalance(m.contract && String(ex.id).startsWith('binance') ? { type: m.linear === false ? 'delivery' : 'future' } : {});
+    } catch (e) {
+      throw await this.explainKeyError(secretId, e, { futures: m.contract });
+    }
     if (m.contract) return Number(bal.total?.[m.settle ?? m.quote] ?? 0);
     const { price } = await this.refPrice(ex, symbol);
     return Number(bal.total?.[m.quote] ?? 0) + Number(bal.total?.[m.base] ?? 0) * price;
@@ -559,7 +606,7 @@ export class CcxtService {
       };
     } catch (e) {
       row.message = String(e?.message ?? e);
-      throw e;
+      throw await this.explainKeyError(secretId, e, { futures: /:/.test(String(row.symbol ?? '')) });
     } finally {
       this.log(row);
     }
@@ -579,7 +626,7 @@ export class CcxtService {
       return true;
     } catch (e) {
       row.message = String(e?.message ?? e);
-      throw e;
+      throw await this.explainKeyError(secretId, e, { futures: /:/.test(String(row.symbol ?? '')) });
     } finally {
       this.log(row);
     }
@@ -610,7 +657,7 @@ export class CcxtService {
       return n;
     } catch (e) {
       row.message = String(e?.message ?? e);
-      throw e;
+      throw await this.explainKeyError(secretId, e, { futures: /:/.test(String(row.symbol ?? '')) });
     } finally {
       this.log(row);
     }
@@ -647,7 +694,7 @@ export class CcxtService {
       return { id: res?.id ?? null, side: o.side, amount: o.amount };
     } catch (e) {
       row.message = String(e?.message ?? e);
-      throw e;
+      throw await this.explainKeyError(secretId, e, { futures: /:/.test(String(row.symbol ?? '')) });
     } finally {
       this.log(row);
     }

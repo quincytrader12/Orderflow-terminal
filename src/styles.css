@@ -2582,3 +2582,10 @@ table.amt-train tr.best td {
   background: var(--accent);
   transition: width 0.3s ease;
 }
+
+/* key test results and checklists keep their line breaks */
+.vault-msg {
+  white-space: pre-line;
+  line-height: 1.5;
+  margin-top: 4px;
+}

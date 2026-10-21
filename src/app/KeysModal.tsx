@@ -248,7 +248,8 @@ export function KeysModal({ onClose, onOpenPanel }: { onClose: () => void; onOpe
     setMsg({ id: r.id, text: 'Testing…', ok: true });
     try {
       const t = await desktop.vault.test(r.id);
-      setMsg({ id: r.id, text: `Connected to ${t.exchange} — ${t.assets} assets with a balance.`, ok: true });
+      const fut = t.futures === true ? ' Futures access: OK.' : t.futures === false ? ` Futures: ${t.futuresError}.` : '';
+      setMsg({ id: r.id, text: `Connected to ${t.exchange} — ${t.assets} assets with a balance.${fut}`, ok: t.futures !== false });
     } catch (e) {
       const m = String((e as Error).message ?? e);
       setMsg({
@@ -505,7 +506,7 @@ export function KeysModal({ onClose, onOpenPanel }: { onClose: () => void; onOpe
                   </span>
                 ))}
             </div>
-            {msg?.id === r.id && <div className={msg.ok ? 'up' : 'down'}>{msg.text}</div>}
+            {msg?.id === r.id && <div className={`vault-msg ${msg.ok ? 'up' : 'down'}`}>{msg.text}</div>}
           </div>
         ))
       )}

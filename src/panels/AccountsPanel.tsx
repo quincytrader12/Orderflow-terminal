@@ -120,7 +120,11 @@ export function AccountsPanel({ config: c, setConfig }: PanelProps<AccountsConfi
         ) : !data ? (
           <Empty>Loading account…</Empty>
         ) : tabErr ? (
-          <Empty>{tabErr}</Empty>
+          <Empty>
+            <div className="vault-msg" style={{ textAlign: 'left', maxWidth: 560 }}>
+              {tabErr}
+            </div>
+          </Empty>
         ) : c.tab === 'balances' ? (
           <table className="grid">
             <thead>
