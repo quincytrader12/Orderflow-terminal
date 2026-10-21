@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { ALERT_TYPES, newRule } from '../alerts/engine';
 import { fmtTime } from '../core/format';
 import { useSettings, type AlertRule, type AlertType } from '../store/settings';
-import { Chip, Empty, NumberInput, Select, Spacer, Toolbar, type PanelProps } from '../ui/controls';
+import { hub } from '../market/hub';
+import { Chip, Empty, NumberInput, Select, Spacer, Toolbar, useHubVersion, type PanelProps } from '../ui/controls';
 
 export interface AlertsConfig {
   tab: 'rules' | 'log';
@@ -11,6 +12,11 @@ export interface AlertsConfig {
 export const ALERTS_DEFAULTS: AlertsConfig = { tab: 'rules' };
 
 function RuleRow({ r }: { r: AlertRule }) {
+  // name the markets the two scopes mean, so "which symbol?" is never a guess
+  useHubVersion();
+  const primary = hub().primary;
+  const primaryLabel = `${primary.adapter.short} ${primary.inst.symbol}`;
+  const baseLabel = primary.inst.base;
   const upsert = useSettings((s) => s.upsertAlert);
   const remove = useSettings((s) => s.removeAlert);
   const meta = ALERT_TYPES.find((a) => a.type === r.type)!;
@@ -40,8 +46,8 @@ function RuleRow({ r }: { r: AlertRule }) {
         <Select
           value={r.scope}
           options={[
-            { value: 'primary', label: 'Primary' },
-            { value: 'aggregate', label: 'All venues' },
+            { value: 'primary', label: `This chart · ${primaryLabel}` },
+            { value: 'aggregate', label: `${baseLabel} on all venues` },
           ]}
           onChange={(scope) => set({ scope })}
         />

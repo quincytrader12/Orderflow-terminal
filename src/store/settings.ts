@@ -154,8 +154,8 @@ interface Actions {
 export const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 
 export const DEFAULT_ALERTS: AlertRule[] = [
-  { id: 'a-large', type: 'large_trade', enabled: true, scope: 'aggregate', value: 1_000_000, windowSec: 0, cooldownSec: 10, sound: true, notify: false },
-  { id: 'a-liq', type: 'liquidation', enabled: true, scope: 'aggregate', value: 250_000, windowSec: 0, cooldownSec: 10, sound: true, notify: false },
+  { id: 'a-large', type: 'large_trade', enabled: true, scope: 'primary', value: 1_000_000, windowSec: 0, cooldownSec: 10, sound: true, notify: false },
+  { id: 'a-liq', type: 'liquidation', enabled: true, scope: 'primary', value: 250_000, windowSec: 0, cooldownSec: 10, sound: true, notify: false },
 ];
 
 const initial: Settings = {
@@ -233,11 +233,13 @@ export const useSettings = create<Settings & Actions>()(
     }),
     {
       name: 'oft-settings',
-      version: 2,
+      version: 3,
       // v1 had dark/light themes only
       migrate: (persisted, version) => {
         const p = (persisted ?? {}) as Record<string, unknown>;
         if (version < 2) p.theme = p.theme === 'light' ? 'white' : 'grey';
+        // v3: alerts follow the market on the chart, not every venue of the coin
+        if (version < 3 && Array.isArray(p.alerts)) p.alerts = (p.alerts as AlertRule[]).map((r) => ({ ...r, scope: 'primary' }));
         return p as unknown as Settings & Actions;
       },
       storage: createJSONStorage(() => safeStorage),

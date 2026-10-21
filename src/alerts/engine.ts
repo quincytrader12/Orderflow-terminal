@@ -30,7 +30,8 @@ export function newRule(type: AlertType): AlertRule {
     const p = hub().primary.lastPrice();
     value = isFinite(p) ? Number(p.toPrecision(5)) : 0;
   }
-  return { id: uid(), type, enabled: true, scope: type.startsWith('price') ? 'primary' : 'aggregate', value, windowSec: meta.defaultWindow, cooldownSec: 30, sound: true, notify: false };
+  // alerts follow the market on the chart unless the owner widens them
+  return { id: uid(), type, enabled: true, scope: 'primary', value, windowSec: meta.defaultWindow, cooldownSec: 30, sound: true, notify: false };
 }
 
 export interface Toast {
@@ -73,7 +74,7 @@ export function beep(freq = 880, ms = 140) {
 export class AlertEngine {
   private lastFired = new Map<string, number>();
   private prevPrice = new Map<string, number>();
-  private liqWindow: { time: number; usd: number }[] = [];
+  private liqWindow: { time: number; usd: number; feed: Feed }[] = [];
   private walls = new Map<string, Map<number, { usd: number; side: 'bid' | 'ask' }>>();
   private lastSlow = 0;
   private timer: ReturnType<typeof setInterval>;
@@ -121,15 +122,15 @@ export class AlertEngine {
   private onTrade(t: Trade, f: Feed) {
     for (const r of this.rules('large_trade')) {
       const usd = t.price * t.qty;
-      if (usd >= r.value && this.inScope(r, f)) this.fire(r, `${f.adapter.short} ${t.side.toUpperCase()} ${fmtUsd(usd)} @ ${fmtPrice(t.price)}`, t.side, t.price);
+      if (usd >= r.value && this.inScope(r, f)) this.fire(r, `${f.adapter.short} ${f.inst.symbol} ${t.side.toUpperCase()} ${fmtUsd(usd)} @ ${fmtPrice(t.price)}`, t.side, t.price);
     }
   }
 
   private onLiq(l: Liquidation, f: Feed) {
     const usd = l.price * l.qty;
-    this.liqWindow.push({ time: l.time, usd });
+    this.liqWindow.push({ time: l.time, usd, feed: f });
     for (const r of this.rules('liquidation')) {
-      if (usd >= r.value && this.inScope(r, f)) this.fire(r, `${f.adapter.short} ${l.position.toUpperCase()} liquidated ${fmtUsd(usd)} @ ${fmtPrice(l.price)}`, l.position === 'long' ? 'sell' : 'buy', l.price);
+      if (usd >= r.value && this.inScope(r, f)) this.fire(r, `${f.adapter.short} ${f.inst.symbol} ${l.position.toUpperCase()} liquidated ${fmtUsd(usd)} @ ${fmtPrice(l.price)}`, l.position === 'long' ? 'sell' : 'buy', l.price);
     }
   }
 
@@ -153,8 +154,9 @@ export class AlertEngine {
         }
         case 'liq_cascade': {
           const cutoff = now - r.windowSec * 1000;
-          const sum = this.liqWindow.filter((x) => x.time >= cutoff).reduce((a, x) => a + x.usd, 0);
-          if (sum >= r.value) this.fire(r, `${fmtUsd(sum)} liquidated in ${r.windowSec}s`, 'warn');
+          const sum = this.liqWindow.filter((x) => x.time >= cutoff && this.inScope(r, x.feed)).reduce((a, x) => a + x.usd, 0);
+          const where = r.scope === 'primary' ? `${primary.adapter.short} ${primary.inst.symbol}` : `${primary.inst.base} (all venues)`;
+          if (sum >= r.value) this.fire(r, `${where}: ${fmtUsd(sum)} liquidated in ${r.windowSec}s`, 'warn');
           break;
         }
       }
