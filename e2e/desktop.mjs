@@ -144,6 +144,12 @@ try {
   expect(!JSON.stringify(listed).includes(SECRET), 'secret not returned to the renderer');
   expect((await page.locator('.quick-next button:has-text("Open Accounts")').count()) === 1, 'offers the Accounts panel after saving');
   expect(/read-only/.test(await page.locator('.quick-tile[title^="Edit Main"]').innerText()), 'Binance tile shows the saved key');
+  expect((await page.locator('.vault-row .env-badge:text-is("LIVE")').count()) === 1, 'key shows it is saved as LIVE');
+  await page.click('.vault-row button:text-is("Test live")');
+  await page.waitForSelector('.vault-row .key-test:not(:has-text("Testing"))', { timeout: 30_000 });
+  const tested = await page.locator('.vault-row .key-test').innerText();
+  // no network to Binance from the test machine: the card must still explain the outcome
+  expect(/LIVE/.test(tested) && (/Connected to/.test(tested) || /test failed/.test(tested)), `live key test reports its outcome (${tested.split('\n')[0]})`);
   await page.screenshot({ path: `${OUT}desktop-keys.png` });
   await page.click('.modal header .x');
 

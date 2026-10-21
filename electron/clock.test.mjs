@@ -59,3 +59,11 @@ describe('clock-safe signing', () => {
     expect(Math.abs(ex.seconds() - (Math.floor(Date.now() / 1000) - 90))).toBeLessThanOrEqual(1);
   });
 });
+
+describe('clock errors vs request URLs', () => {
+  it('a network failure whose URL carries timestamp and recvWindow is not a clock error', () => {
+    const net = new Error('binance GET https://api.binance.com/sapi/v1/capital/config/getall?timestamp=1792575119246&recvWindow=10000&signature=abc fetch failed: getaddrinfo ENOTFOUND api.binance.com');
+    expect(isClockError(net)).toBe(false);
+    expect(isClockError(new Error('binance {"code":-1021,"msg":"Timestamp for this request is outside of the recvWindow."}'))).toBe(true);
+  });
+});

@@ -151,6 +151,22 @@ export interface OrderLogRow {
   message: string | null;
 }
 
+/** Result of testing an exchange key (read-only; no orders). */
+export interface KeyTest {
+  ok: boolean;
+  exchange: string;
+  /** where it was tested, and how the key is saved */
+  environment: 'live' | 'testnet';
+  saved: 'live' | 'testnet';
+  assets: number;
+  futures: boolean | null;
+  futuresError: string | null;
+  /** Binance live keys: what the key may do */
+  permissions: { reading: boolean; spotTrading: boolean; futures: boolean; withdrawals: boolean; ipRestricted: boolean } | null;
+  /** the public IP the exchange sees */
+  ip: string | null;
+}
+
 export interface AmtParams {
   profileMinutes: number;
   valueAreaPct: number;
@@ -363,7 +379,7 @@ export interface NovusApi {
     save(rec: SecretInput): Promise<string>;
     remove(id: string): Promise<void>;
     copy(id: string, field: string): Promise<boolean>;
-    test(id: string): Promise<{ ok: boolean; exchange: string; assets: number; futures: boolean | null; futuresError: string | null }>;
+    test(id: string, opts?: { env?: 'live' | 'testnet' }): Promise<KeyTest>;
   };
   ccxt: {
     exchanges(): Promise<CcxtExchangeInfo[]>;

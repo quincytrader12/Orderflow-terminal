@@ -64,9 +64,17 @@ describe('key test and stored-key hygiene', () => {
         this.options = {};
         seen.push(cfg);
       }
+      setSandboxMode(v) {
+        this.sandbox = v;
+      }
       async fetchBalance(params = {}) {
+        // this key only exists on the live exchange
+        if (this.sandbox) throw new Error(REJECT);
         if (params.type === 'future' && !futures) throw new Error(REJECT);
         return { total: { USDT: 54, BNB: 0.1 } };
+      }
+      async sapiGetAccountApiRestrictions() {
+        return { ipRestrict: true, enableReading: true, enableSpotAndMarginTrading: false, enableFutures: futures, enableWithdrawals: false };
       }
     }
     return { lib: { binance: FakeBinance, pro: {} }, seen };
@@ -88,5 +96,17 @@ describe('key test and stored-key hygiene', () => {
     const r = await noFut.testKey(id);
     expect(r.futures).toBe(false);
     expect(r.futuresError).toMatch(/Enable Futures/);
+  });
+
+  it('tests a key saved as testnet against the live exchange, without changing it', async () => {
+    const svc = new CcxtService(vault, { db, lib: lib({ futures: true }).lib });
+    const id = vault.save({ label: 'Main', kind: 'exchange', exchange: 'binance', fields: { apiKey: 'k', secret: 's', sandbox: 'true' } });
+    // as saved (testnet), Binance refuses it and the checklist says why
+    await expect(svc.testKey(id)).rejects.toThrow(/saved with “testnet \/ sandbox” ticked/);
+    const live = await svc.testKey(id, { env: 'live' });
+    expect(live).toMatchObject({ ok: true, environment: 'live', saved: 'testnet', assets: 2, futures: true });
+    expect(live.permissions).toEqual({ reading: true, spotTrading: false, futures: true, withdrawals: false, ipRestricted: true });
+    // the saved setting is untouched until the owner chooses
+    expect(vault.reveal(id).fields.sandbox).toBe('true');
   });
 });

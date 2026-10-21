@@ -97,11 +97,18 @@ export class CcxtService {
     const hit = this.privateCache.get(secretId);
     if (hit) return hit;
     const s = this.vault.reveal(secretId);
+    const ex = this.buildPrivate(s, s.fields.sandbox === 'true');
+    this.privateCache.set(secretId, ex);
+    return ex;
+  }
+
+  /** An authenticated client for a revealed key, on the live exchange or its testnet. */
+  buildPrivate(s, sandbox) {
     if (s.kind !== 'exchange' || !s.exchange) throw new Error('this key is not an exchange key');
     const Cls = this.lib[s.exchange];
     if (!Cls) throw new Error(`unknown exchange ${s.exchange}`);
     const ex = clockSafe(new Cls({ enableRateLimit: true, ...credentialsFrom(s.fields) }), (diff) => this.onClock?.(ex.name ?? s.exchange, diff));
-    if (s.fields.sandbox === 'true') {
+    if (sandbox) {
       // never fall back to the live exchange when a testnet key was asked for
       try {
         ex.setSandboxMode(true);
@@ -109,7 +116,6 @@ export class CcxtService {
         throw new Error(`${ex.name ?? s.exchange} has no testnet in CCXT — untick “testnet / sandbox” to use the live exchange`);
       }
     }
-    this.privateCache.set(secretId, ex);
     return ex;
   }
 
@@ -299,13 +305,13 @@ export class CcxtService {
   // ---------- private (API keys from the vault) ----------
 
   /** A rejected key becomes a checklist (testnet, permissions, IP, copy errors). */
-  async explainKeyError(secretId, e, { futures = false } = {}) {
+  async explainKeyError(secretId, e, { futures = false, sandbox: tested } = {}) {
     if (!isKeyRejection(e)) return e;
     let sandbox = false;
     let exchange = '';
     try {
       const s = this.vault.reveal(secretId);
-      sandbox = s.fields.sandbox === 'true';
+      sandbox = tested ?? s.fields.sandbox === 'true';
       exchange = s.exchange ?? '';
     } catch {
       /* key gone */
@@ -315,29 +321,58 @@ export class CcxtService {
   }
 
   /**
-   * Check a key: its balance, and on Binance whether futures access works too
-   * (the most common reason for -2015 is a key without “Enable Futures”).
+   * Check a key against the live exchange or its testnet (default: as the
+   * key is saved). Read-only: it never places an order. Reports the balance
+   * (zero is fine before a deposit), futures access, the key's permissions
+   * where the exchange publishes them (Binance), and the public IP the
+   * exchange sees, for the key's IP whitelist.
    */
-  async testKey(secretId) {
-    const ex = this.privateExchange(secretId);
-    let bal;
+  async testKey(secretId, { env } = {}) {
+    const s = this.vault.reveal(secretId);
+    const saved = s.fields.sandbox === 'true' ? 'testnet' : 'live';
+    const environment = env === 'live' || env === 'testnet' ? env : saved;
+    const sandbox = environment === 'testnet';
+    // the saved setting uses the cached client; the other environment a throwaway one
+    const ex = environment === saved ? this.privateExchange(secretId) : this.buildPrivate(s, sandbox);
+    const ipLookup = publicIp();
     try {
-      bal = await ex.fetchBalance();
-    } catch (e) {
-      throw await this.explainKeyError(secretId, e);
-    }
-    const assets = Object.entries(bal.total ?? {}).filter(([, v]) => v).length;
-    const out = { ok: true, exchange: ex.name, assets, futures: null, futuresError: null };
-    if (ex.id === 'binance') {
+      let bal;
       try {
-        await ex.fetchBalance({ type: 'future' });
-        out.futures = true;
+        bal = await ex.fetchBalance();
       } catch (e) {
-        out.futures = false;
-        out.futuresError = isKeyRejection(e) ? 'not enabled on this key — tick “Enable Futures” in Binance API Management to trade or view futures' : String(e?.message ?? e);
+        throw await this.explainKeyError(secretId, e, { sandbox });
       }
+      const assets = Object.entries(bal.total ?? {}).filter(([, v]) => v).length;
+      const out = { ok: true, exchange: ex.name, environment, saved, assets, futures: null, futuresError: null, permissions: null, ip: null };
+      if (ex.id === 'binance') {
+        try {
+          await ex.fetchBalance({ type: 'future' });
+          out.futures = true;
+        } catch (e) {
+          out.futures = false;
+          out.futuresError = isKeyRejection(e) ? 'not enabled on this key — tick “Enable Futures” in Binance API Management to trade or view futures' : String(e?.message ?? e);
+        }
+        // what the key may do, straight from Binance (live only: the testnet has no such endpoint)
+        if (!sandbox && typeof ex.sapiGetAccountApiRestrictions === 'function') {
+          try {
+            const r = await ex.sapiGetAccountApiRestrictions();
+            out.permissions = {
+              reading: Boolean(r.enableReading),
+              spotTrading: Boolean(r.enableSpotAndMarginTrading),
+              futures: Boolean(r.enableFutures),
+              withdrawals: Boolean(r.enableWithdrawals),
+              ipRestricted: Boolean(r.ipRestrict),
+            };
+          } catch {
+            /* optional */
+          }
+        }
+      }
+      out.ip = await ipLookup;
+      return out;
+    } finally {
+      if (ex !== this.privateCache.get(secretId)) void ex.close?.()?.catch?.(() => undefined);
     }
-    return out;
   }
 
   async account(secretId, symbol) {

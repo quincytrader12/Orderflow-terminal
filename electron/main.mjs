@@ -233,7 +233,8 @@ function registerIpc() {
       } catch (err) {
         // market-data requests retry on their own; log the rest
         if (!/sealed|ACCESS DENIED|LOCKED OUT/.test(String(err?.message)) && !/^net:|^ccxt:(ohlcv|ticker|tickers|markets)$/.test(ch)) log('warn', `${ch}: ${err?.message ?? err}`);
-        return { ok: false, error: String(err?.message ?? err) };
+        // signed request URLs in errors carry a signature: show the path only
+        return { ok: false, error: String(err?.message ?? err).replace(/(https?:\/\/[^\s?]+)\?\S+/g, '$1') };
       }
     });
 
@@ -323,7 +324,7 @@ function registerIpc() {
     setTimeout(() => clipboard.readText() === v && clipboard.clear(), 30_000);
     return true;
   });
-  handle('vault:test', (_e, id) => ccxtSvc.testKey(id));
+  handle('vault:test', (_e, id, opts) => ccxtSvc.testKey(id, opts));
 
   // ccxt
   let exchangesCache = null;

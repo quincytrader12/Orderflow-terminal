@@ -33,7 +33,7 @@ contextBridge.exposeInMainWorld('novus', {
     save: (rec) => call('vault:save', rec),
     remove: (id) => call('vault:remove', id),
     copy: (id, field) => call('vault:copy', id, field),
-    test: (id) => call('vault:test', id),
+    test: (id, opts) => call('vault:test', id, opts),
   },
   ccxt: {
     exchanges: () => call('ccxt:exchanges'),

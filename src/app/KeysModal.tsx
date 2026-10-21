@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { desktop, isDesktop, type CcxtExchangeInfo, type SecretKind, type SecretRecord } from '../desktop/bridge';
+import { useEffect, useState, type ReactNode } from 'react';
+import { desktop, isDesktop, type CcxtExchangeInfo, type KeyTest, type SecretKind, type SecretRecord } from '../desktop/bridge';
 import { vault } from '../desktop/vault';
 import { Modal } from './Modals';
 
@@ -167,6 +167,51 @@ function withExchange(draft: Draft, id: string, exchanges: CcxtExchangeInfo[], n
 /** Secrets that span several lines (PEM private keys) need a text area: an input drops the line breaks. */
 const multiline = (draft: Draft, field: string) => field === 'privateKey' || (field === 'secret' && draft.exchange.startsWith('coinbase'));
 
+function KeyTestCard({ state, onSaveAs }: { state: { env: 'live' | 'testnet'; busy: boolean; result?: KeyTest; error?: string }; onSaveAs: (env: 'live' | 'testnet') => void }) {
+  const where = state.env === 'live' ? 'LIVE' : 'TESTNET';
+  if (state.busy) return <div className="key-test muted">Testing against {where}… (read-only, no orders)</div>;
+  if (state.error)
+    return (
+      <div className="key-test bad">
+        <b>✗ {where} test failed</b>
+        <div className="vault-msg">{state.error}</div>
+      </div>
+    );
+  const t = state.result!;
+  const p = t.permissions;
+  const row = (ok: boolean | null, text: ReactNode) => (
+    <li className={ok === null ? 'muted' : ok ? 'up' : 'down'}>
+      {ok === null ? '·' : ok ? '✓' : '✗'} {text}
+    </li>
+  );
+  return (
+    <div className={`key-test ${t.futures === false || p?.withdrawals ? 'warn' : 'good'}`}>
+      <ul>
+        {row(true, <>Connected to {t.exchange} <b>{where}</b> — {t.assets} asset{t.assets === 1 ? '' : 's'} with a balance{t.assets === 0 && t.environment === 'live' ? ' (fine before your first deposit: the key itself works)' : ''}</>)}
+        {t.futures !== null && row(t.futures, t.futures ? 'Futures access works' : `Futures: ${t.futuresError}`)}
+        {p && (
+          <>
+            {row(p.reading, 'Reading enabled')}
+            {row(p.spotTrading ? true : null, p.spotTrading ? 'Spot & margin trading enabled' : 'Spot trading not enabled (only needed to trade spot)')}
+            {row(p.futures, p.futures ? 'Futures enabled' : 'Futures not enabled — needed for futures bots and positions')}
+            {row(!p.withdrawals, p.withdrawals ? <b>WITHDRAWALS ARE ENABLED on this key — turn them off in Binance API Management now</b> : 'Withdrawals disabled')}
+            {row(p.ipRestricted ? true : null, p.ipRestricted ? 'Restricted to trusted IPs' : 'Not IP-restricted')}
+          </>
+        )}
+        {t.ip && <li className="muted">· {t.exchange} sees this computer as <b className="mono">{t.ip}</b>{p?.ipRestricted ? ' — it is on the key’s trusted list (the test passed). Add each place you trade from (home, work).' : ' — add it to the key’s trusted IPs if you restrict by IP.'}</li>}
+      </ul>
+      {t.environment !== t.saved && (
+        <div className="confirm-actions">
+          <span>This key is saved as {t.saved.toUpperCase()} but works on {where}.</span>
+          <button className="btn" onClick={() => onSaveAs(t.environment)}>
+            Save this key as {where}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function KeysModal({ onClose, onOpenPanel }: { onClose: () => void; onOpenPanel?: (component: string) => void }) {
   const [items, setItems] = useState<SecretRecord[]>([]);
   const [exchanges, setExchanges] = useState<CcxtExchangeInfo[]>([]);
@@ -243,21 +288,32 @@ export function KeysModal({ onClose, onOpenPanel }: { onClose: () => void; onOpe
         .map(([name, stored]) => ({ name, value: '', stored })),
     });
 
-  const test = async (r: SecretRecord) => {
+  const [tests, setTests] = useState<Record<string, { env: 'live' | 'testnet'; busy: boolean; result?: KeyTest; error?: string }>>({});
+  const test = async (r: SecretRecord, env: 'live' | 'testnet') => {
     if (!desktop) return;
-    setMsg({ id: r.id, text: 'Testing…', ok: true });
+    setMsg(null);
+    setTests((t) => ({ ...t, [r.id]: { env, busy: true } }));
     try {
-      const t = await desktop.vault.test(r.id);
-      const fut = t.futures === true ? ' Futures access: OK.' : t.futures === false ? ` Futures: ${t.futuresError}.` : '';
-      setMsg({ id: r.id, text: `Connected to ${t.exchange} — ${t.assets} assets with a balance.${fut}`, ok: t.futures !== false });
+      const result = await desktop.vault.test(r.id, { env });
+      setTests((t) => ({ ...t, [r.id]: { env, busy: false, result } }));
     } catch (e) {
       const m = String((e as Error).message ?? e);
-      setMsg({
-        id: r.id,
-        text: /-1021|recvWindow|timestamp/i.test(m) ? `Your computer's clock is out of sync with ${r.exchange ?? 'the exchange'}. In Windows: Settings → Time & language → Date & time → turn on “Set time automatically” and click “Sync now”, then test again. (${m})` : m,
-        ok: false,
-      });
+      const net = /fetch failed|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|NetworkError|RequestTimeout|timed out/i.test(m);
+      const clock = /-1021|outside of the recvWindow/i.test(m);
+      const error = net
+        ? `Could not reach ${r.exchange ?? 'the exchange'} over the network — the key was not checked. Check the internet connection, and that no firewall, proxy or VPN blocks api.binance.com, then test again. (${m})`
+        : clock
+          ? `Your computer's clock is out of sync with ${r.exchange ?? 'the exchange'}. In Windows: Settings → Time & language → Date & time → turn on “Set time automatically” and click “Sync now”, then test again. (${m})`
+          : m;
+      setTests((t) => ({ ...t, [r.id]: { env, busy: false, error } }));
     }
+  };
+
+  /** Save the key as live or testnet (keeps every other field). */
+  const setEnv = async (r: SecretRecord, env: 'live' | 'testnet') => {
+    await vault.save({ id: r.id, kind: r.kind, label: r.label, exchange: r.exchange, fields: { sandbox: env === 'testnet' ? 'true' : null } });
+    setTests((t) => ({ ...t, [r.id]: { ...t[r.id], result: t[r.id]?.result && { ...t[r.id].result!, saved: env } } }));
+    await reload();
   };
 
   const copy = async (r: SecretRecord, field: string) => {
@@ -472,13 +528,22 @@ export function KeysModal({ onClose, onOpenPanel }: { onClose: () => void; onOpe
               <b>{r.label}</b>
               <span className="tag">{KIND_LABEL[r.kind]}</span>
               {r.exchange && <span className="tag">{r.exchange}</span>}
-              {r.meta.fields.sandbox === 'true' && <span className="tag">testnet</span>}
+              {r.kind === 'exchange' && (
+                <span className={`env-badge ${r.meta.fields.sandbox === 'true' ? 'test' : 'live'}`} title={r.meta.fields.sandbox === 'true' ? 'Saved as a testnet key — Edit and untick “testnet / sandbox” for a key from the real exchange' : 'Saved as a live key (the real exchange)'}>
+                  {r.meta.fields.sandbox === 'true' ? 'TESTNET' : 'LIVE'}
+                </span>
+              )}
               {r.kind === 'exchange' && <span className={`tag ${r.meta.fields.trading === 'enabled' ? 'tag-live' : ''}`}>{r.meta.fields.trading === 'enabled' ? 'trading on' : 'read-only'}</span>}
               <span style={{ flex: 1 }} />
               {r.kind === 'exchange' && isDesktop && (
-                <button className="chip" onClick={() => void test(r)}>
-                  Test
-                </button>
+                <>
+                  <button className="chip" disabled={tests[r.id]?.busy} onClick={() => void test(r, 'live')} title="Read-only check against the real exchange — no orders">
+                    Test live
+                  </button>
+                  <button className="chip" disabled={tests[r.id]?.busy} onClick={() => void test(r, 'testnet')} title="Read-only check against the exchange’s testnet">
+                    Test testnet
+                  </button>
+                </>
               )}
               <button className="chip" onClick={() => edit(r)}>
                 Edit
@@ -507,6 +572,7 @@ export function KeysModal({ onClose, onOpenPanel }: { onClose: () => void; onOpe
                 ))}
             </div>
             {msg?.id === r.id && <div className={`vault-msg ${msg.ok ? 'up' : 'down'}`}>{msg.text}</div>}
+            {tests[r.id] && <KeyTestCard state={tests[r.id]} onSaveAs={(env) => void setEnv(r, env)} />}
           </div>
         ))
       )}

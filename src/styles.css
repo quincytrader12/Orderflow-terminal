@@ -2589,3 +2589,31 @@ table.amt-train tr.best td {
   line-height: 1.5;
   margin-top: 4px;
 }
+
+/* exchange key test results */
+.key-test {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--glass-border);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.key-test ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.key-test.good {
+  border-color: color-mix(in srgb, var(--buy) 50%, transparent);
+}
+.key-test.warn {
+  border-color: color-mix(in srgb, var(--warn, #f0b90b) 60%, transparent);
+}
+.key-test.bad {
+  border-color: color-mix(in srgb, var(--sell) 60%, transparent);
+}
+.key-test .confirm-actions {
+  margin-top: 6px;
+  align-items: center;
+}

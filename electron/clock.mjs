@@ -7,7 +7,10 @@
 /** Errors that mean "your clock is off", across the exchanges CCXT maps. */
 export function isClockError(e) {
   const m = String(e?.message ?? e);
-  return /-1021|recvWindow|timestamp.{0,40}(ahead|behind|outside|expired|invalid)|invalid.{0,10}(timestamp|nonce)|10002|50102|InvalidNonce/i.test(m) || e?.constructor?.name === 'InvalidNonce';
+  // match the exchanges' error texts, not request URLs (which carry
+  // "timestamp=" and "recvWindow=" in every signed query)
+  const text = m.replace(/https?:\/\/\S+/g, '');
+  return /-1021|outside of the recvWindow|timestamp.{0,40}(ahead|behind|outside|expired)|invalid.{0,10}(timestamp|nonce)|"retCode":10002|"code":"50102"/i.test(text) || e?.constructor?.name === 'InvalidNonce';
 }
 
 /**
