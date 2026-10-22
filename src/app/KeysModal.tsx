@@ -69,7 +69,7 @@ export const QUICK: Quick[] = [
     exchange: 'binance',
     badge: 'B',
     url: 'https://www.binance.com/en/my/settings/api-management',
-    steps: ['Binance → Profile → API Management → Create API → System generated.', 'Keep “Enable Reading”. Tick “Enable Spot & Margin Trading” only if you will trade from Novus Ordo.', 'Restrict access to your IP address if you can. ' + NO_WITHDRAW, 'Paste the API key and the Secret key below.'],
+    steps: ['Your Binance account must be verified (KYC) — Binance only allows API trading on verified accounts.', 'Binance → Profile → API Management → Create API → System generated.', 'Keep “Enable Reading”. Tick “Enable Spot & Margin Trading” only if you will trade from Novus Ordo.', 'Restrict access to your IP address(es) if you can — add home and work. ' + NO_WITHDRAW, 'Paste the API key and the Secret key below, then use “Test live”.'],
   },
   {
     id: 'binanceusdm',
@@ -78,7 +78,7 @@ export const QUICK: Quick[] = [
     exchange: 'binanceusdm',
     badge: 'BF',
     url: 'https://www.binance.com/en/my/settings/api-management',
-    steps: ['Same page as Binance: API Management → Create API.', 'Keep “Enable Reading”; tick “Enable Futures” only if you will trade USDⓈ-M futures.', NO_WITHDRAW, 'Paste the API key and the Secret key below.'],
+    steps: ['Open a Futures account first: Binance app → Derivatives → USDⓈ-M Futures → Open now (answer the short quiz). Until then the key has no “Enable Futures” box.', 'Fund it: deposit, then Assets → Transfer USDT from Spot to USDⓈ-M Futures — futures orders only use the futures wallet.', 'API Management → Create API (or edit your key): keep “Enable Reading” and tick “Enable Futures”. ' + NO_WITHDRAW, 'Paste the API key and the Secret key below, then use “Test live”.'],
   },
   {
     id: 'coinbase',

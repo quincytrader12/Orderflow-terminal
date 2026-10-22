@@ -350,7 +350,9 @@ export class CcxtService {
           out.futures = true;
         } catch (e) {
           out.futures = false;
-          out.futuresError = isKeyRejection(e) ? 'not enabled on this key — tick “Enable Futures” in Binance API Management to trade or view futures' : String(e?.message ?? e);
+          out.futuresError = isKeyRejection(e)
+          ? 'not enabled on this key. Binance shows the “Enable Futures” box only after you open a Futures account (Derivatives → USDⓈ-M Futures → Open now); then tick it in API Management and transfer USDT from Spot to the Futures wallet'
+          : String(e?.message ?? e);
         }
         // what the key may do, straight from Binance (live only: the testnet has no such endpoint)
         if (!sandbox && typeof ex.sapiGetAccountApiRestrictions === 'function') {
