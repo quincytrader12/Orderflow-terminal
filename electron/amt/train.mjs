@@ -22,6 +22,23 @@ export const SEARCH = {
   targetCostX: [3, 4, 6],
 };
 
+/** The order-flow hybrid's search: how strong the aggression, imbalance and sweep must be, and trade geometry. */
+export const ORDERFLOW_SEARCH = {
+  absorbX: [1.5, 2, 3],
+  absorbDelta: [0.2, 0.3, 0.45],
+  flipDelta: [0.1, 0.2, 0.35],
+  imbalanceRatio: [2.5, 3, 4],
+  stackMin: [2, 3, 4],
+  sweepMinBps: [2, 3, 5],
+  sweepBurstX: [1.5, 2, 3],
+  stopBufferBins: [1, 2, 3],
+  ofTargetR: [1.5, 2, 3],
+  breakevenAtR: [0, 1, 1.5],
+};
+
+/** What to search for these settings. */
+export const searchFor = (base) => (base?.style === 'orderflow' ? ORDERFLOW_SEARCH : SEARCH);
+
 /** Deterministic pseudo-random numbers (Park–Miller). */
 function rng(seed) {
   let s = seed % 2147483647 || 1;
@@ -192,11 +209,12 @@ export async function train({ base, rows, cols, n = 40, split = 0.7, seed = 1, m
   const len = cols.t.length;
   if (len < 10_000) throw new Error(`only ${len} recorded trades — training needs a few hours of data (let the terminal record first)`);
   const splitT = cols.t[Math.floor(len * split)];
-  const cands = candidates(base, n, seed);
+  const space = searchFor(base);
+  const cands = candidates(base, n, seed, space);
   const results = await runAll(cands, cols, splitT, { workers, minTrades }, onProgress, makeWorker);
   const { leaders, best } = pick(results);
   const baseline = results[0];
-  const row = (r) => ({ params: Object.fromEntries(Object.keys(SEARCH).map((k) => [k, cands[r.i][k]])), train: r.train, test: r.test, base: r.i === 0 });
+  const row = (r) => ({ params: Object.fromEntries(Object.keys(space).map((k) => [k, cands[r.i][k]])), train: r.train, test: r.test, base: r.i === 0 });
   return {
     verdict: best ? 'verified' : 'no-edge',
     params: best ? cands[best.i] : null,

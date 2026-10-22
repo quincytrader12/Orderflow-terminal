@@ -6,7 +6,7 @@
 //
 // Bots never start on their own: after a restart every bot is off.
 import { randomUUID } from 'node:crypto';
-import { AmtEngine, DEFAULT_AMT, finishBacktest, GROWTH_PRESET, INTRADAY_PRESET, mergeConfig, paperFill, replay } from './engine.mjs';
+import { AmtEngine, DEFAULT_AMT, finishBacktest, GROWTH_PRESET, INTRADAY_PRESET, mergeConfig, ORDERFLOW_PRESET, paperFill, replay } from './engine.mjs';
 import { train } from './train.mjs';
 
 const KEY = 'amtBots';
@@ -48,7 +48,7 @@ export class BotManager {
   }
 
   presets() {
-    return { scalp: mergeConfig({}), intraday: mergeConfig(INTRADAY_PRESET), growth: mergeConfig(GROWTH_PRESET) };
+    return { scalp: mergeConfig({}), intraday: mergeConfig(INTRADAY_PRESET), growth: mergeConfig(GROWTH_PRESET), orderflow: mergeConfig(ORDERFLOW_PRESET) };
   }
 
   save(input) {
@@ -151,7 +151,7 @@ export class BotManager {
       stopping: false,
     };
     this.running.set(id, b);
-    this.ccxt.subscribe(b.sid, exchangeId, cfg.symbol, (m) => this.onMessage(id, m), { sandbox });
+    this.ccxt.subscribe(b.sid, exchangeId, cfg.symbol, (m) => this.onMessage(id, m), { sandbox, liquidations: params.style === 'orderflow' });
     b.timer = setInterval(() => {
       this.handle(id, b.engine.tick(this.now()));
       this.emit('status', this.snapshot(id));
@@ -176,6 +176,7 @@ export class BotManager {
       if (m.state === 'error') this.event(id, 'warn', `market data: ${m.error}`);
     } else if (m.kind === 'book') b.engine.onBook(m.bids, m.asks);
     else if (m.kind === 'trades') for (const t of m.trades) this.handle(id, b.engine.onTrade(t));
+    else if (m.kind === 'liquidations') b.engine.onLiquidations(m.items);
   }
 
   handle(id, intents) {

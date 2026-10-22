@@ -346,6 +346,22 @@ try {
   const bots = await page.evaluate(() => window.novus.amt.list());
   expect(bots.length === 1 && !bots[0].running, 'top-bar kill switch stopped the bot');
 
+  step('order-flow hybrid: absorption, imbalance continuation, sweep & reclaim');
+  await page.click('.amt .toolbar button:text-is("Settings")');
+  await page.click('.amt-settings .seg button:text-is("Order-flow hybrid")');
+  for (const name of ['Absorption reversal', 'Imbalance continuation', 'Sweep & reclaim']) await page.waitForSelector(`.amt-settings :text("${name}")`);
+  await page.click('.amt-settings summary:text-is("Advanced AMT parameters")');
+  expect((await page.locator('.amt-settings input[type="number"]').count()) >= 55, 'order-flow parameters editable (footprint, absorption, pools, book)');
+  await page.screenshot({ path: `${OUT}desktop-amt-orderflow-settings.png` });
+  await page.click('.amt-settings button:text-is("Save")');
+  const ofBot = (await page.evaluate(() => window.novus.amt.list()))[0];
+  expect(ofBot.params.style === 'orderflow' && ofBot.params.setups.absorption && ofBot.params.setups.sweep && ofBot.params.sizing === 'balance', 'order-flow bot saved');
+  await page.click('.amt .toolbar button:text-is("Monitor")');
+  await page.click('.amt .algo-switch');
+  await page.waitForSelector('.amt .algo-switch.on');
+  await page.click('.amt .algo-switch');
+  await page.waitForSelector('.amt .algo-switch:not(.on)');
+
   step('every panel has a close ×');
   const tabCount = await page.locator('.flexlayout__tab_button').count();
   const closers = await page.locator('.flexlayout__tab_button .flexlayout__tab_button_trailing').count();

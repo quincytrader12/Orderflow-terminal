@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { fmtNum, fmtPrice, fmtTime } from '../core/format';
 import { AMT_STATE_LABEL, onAmtEvent, useAmtBots, useAmtLive } from '../desktop/amt';
-import { desktop, DesktopOnlyError, type AmtBacktest, type AmtBot, type AmtBotInput, type AmtEvent, type AmtParams, type AmtSnapshot, type AmtTrainResult, type AmtTrainSegment, type CcxtExchangeInfo } from '../desktop/bridge';
+import { desktop, DesktopOnlyError, type AmtBacktest, type AmtBot, type AmtBotInput, type AmtEvent, type AmtOrderFlow, type AmtParams, type AmtSnapshot, type AmtTrainResult, type AmtTrainSegment, type CcxtExchangeInfo } from '../desktop/bridge';
 import { fetchJson } from '../exchanges/ws';
 import { yahooChart } from '../shared/yahoo';
 import { pickSymbol, unifiedCandidates } from '../desktop/trading';
@@ -87,7 +87,9 @@ type Style = AmtParams['style'];
 /** What the style chips show: the engine styles plus the small-account growth preset. */
 type Preset = Style | 'growth';
 const presetOf = (p: AmtParams): Preset => (p.sizing === 'balance' && p.style === 'scalp' ? 'growth' : p.style);
-const PRESET_NAME: Record<Preset, string> = { scalp: 'Scalp', intraday: 'Intraday', growth: 'Growth (small account)' };
+const PRESET_NAME: Record<Preset, string> = { scalp: 'Scalp', intraday: 'Intraday', growth: 'Growth (small account)', orderflow: 'Order-flow hybrid' };
+const ORDERFLOW_TEXT =
+  'Reads the tape, the footprint, the order book and the liquidity map like an order-flow trader, and runs three setups in one bot — the market decides which fires. Sizes from the balance like Growth (1.5 % risk, pause after 3 losses, hard stop at a 20 % drawdown). Book checks (order-flow imbalance, queue, walls, spoofs) apply live; backtests and training test the trade-based core.';
 const GROWTH_TEXT =
   'Compounds a small balance: risks a % of the current balance on A+ scalps only — stricter order-flow confirmation, 2R minimum, targets that clear fees 4×, breakeven at 1R, a pause after 3 losses in a row and a hard stop at a 20 % drawdown. Train it on recorded data before going live.';
 
@@ -103,12 +105,68 @@ const SETUPS: Record<Style, [keyof AmtParams['setups'], string, string][]> = {
     ['priorReject', 'Prior-value rejection', 'Probe beyond yesterday’s value fails → responsive trade back to prior POC'],
     ['reentry', '80% rule', 'Session opens outside prior value, re-enters and holds → trade to the far edge'],
   ],
+  orderflow: [
+    ['absorption', 'Absorption reversal', 'Heavy aggression into a wall / value edge / swing that does not move price, then delta flips → trade the reversal; exits if the wall is pulled'],
+    ['continuation', 'Imbalance continuation', 'Stacked footprint imbalances on initiative volume, retested and held with delta and OFI → join toward the next liquidity'],
+    ['sweep', 'Sweep & reclaim', 'A swing / prior extreme / round number is run on a tape or liquidation burst and reclaimed → fade the stop run'],
+  ],
 };
 
 const STYLE_TEXT: Record<Style, string> = {
   scalp: 'Seconds to minutes. Rolling value area, order-flow confirmation, many small trades.',
   intraday: 'Hours. Session structure (initial balance, prior-day value), wider stops, at most a few trades a session, trailing stop, flat before the session closes.',
+  orderflow: ORDERFLOW_TEXT,
 };
+
+const ORDERFLOW_FIELDS: [string, [NumKey, string, string][]][] = [
+  [
+    'Footprint & tape',
+    [
+      ['barSec', 'Footprint bar (s)', 'Bar length for stacked imbalances and swing pools'],
+      ['fpBinBps', 'Footprint row (bps)', 'Price row height of the footprint the bot reads'],
+      ['imbalanceRatio', 'Imbalance ratio', 'Diagonal ask vs bid (or bid vs ask) volume — 3 means 300 %'],
+      ['stackMin', 'Stacked rows', 'Consecutive imbalanced rows needed'],
+      ['contRetestSec', 'Retest window (s)', 'How long a stacked-imbalance zone waits for its retest'],
+      ['flipSec', 'Flip window (s)', 'Short delta window that must turn with the trade'],
+      ['flipDelta', 'Flip delta', '(buy−sell)/total in that window, 0–1'],
+    ],
+  ],
+  [
+    'Absorption',
+    [
+      ['absorbSec', 'Window (s)', 'Aggression measured over this window'],
+      ['absorbX', 'Aggression ×', 'Aggressive volume vs the normal 10-min rate'],
+      ['absorbDelta', 'Aggression delta', 'How one-sided the aggression must be, 0–1'],
+      ['absorbMaxBins', 'Max progress (bins)', 'New extreme allowed while being absorbed'],
+      ['absorbConfirmSec', 'Confirm within (s)', 'Time for delta to flip after absorption'],
+      ['levelBins', 'At a level within (bins)', 'How close to a wall / value edge / pool counts'],
+    ],
+  ],
+  [
+    'Liquidity pools & sweeps',
+    [
+      ['swingBars', 'Swing pivot (bars)', 'Bars either side of a swing high/low'],
+      ['poolHours', 'Keep pools (h)', ''],
+      ['roundBps', 'Round-number step (bps)', 'Rounded to 1/2/5 × 10ⁿ'],
+      ['sweepMinBps', 'Sweep at least (bps)', 'Beyond the level'],
+      ['sweepMaxBps', 'Sweep at most (bps)', 'Further than this is a breakout, not a stop run'],
+      ['sweepReclaimSec', 'Reclaim within (s)', ''],
+      ['sweepBurstX', 'Burst ×', 'Aggressive volume vs normal during the run (or liquidations)'],
+    ],
+  ],
+  [
+    'Order book & liquidity map',
+    [
+      ['ofiSec', 'OFI window (s)', 'Order-flow imbalance at the best bid/ask (Cont–Kukanov–Stoikov)'],
+      ['ofiMin', 'OFI needed', 'Net/gross OFI in the trade’s direction, 0–1'],
+      ['queueMin', 'Queue imbalance limit', 'Skip when the top 3 levels lean this hard against the trade'],
+      ['wallX', 'Wall size ×', 'A wall is this many times the median level'],
+      ['wallMinSec', 'Wall age (s)', 'Only walls that have stood this long count'],
+      ['wallBandBps', 'Wall band (bps)', 'Walls tracked within this of the mid'],
+      ['ofTargetR', 'Target (R)', 'When no POC / pool target is in reach'],
+    ],
+  ],
+];
 
 const INTRADAY_FIELDS: [NumKey, string, string][] = [
   ['ibMinutes', 'Initial balance (min)', 'Opening range length — 60 is the classic first hour'],
@@ -203,7 +261,7 @@ export function AmtScalper({ config: c, setConfig }: PanelProps<AmtConfig>) {
   return (
     <div className="panel amt">
       <Toolbar>
-        <Select value={c.botId} options={[{ value: '', label: bots.length ? 'Choose bot…' : 'No bots yet' }, ...bots.map((b) => ({ value: b.id, label: `${b.running ? '● ' : ''}${b.name}${presetOf(b.params) === 'growth' ? ' · growth' : b.params.style === 'intraday' ? ' · intraday' : ''}` }))]} onChange={(botId) => setConfig({ botId })} width={150} />
+        <Select value={c.botId} options={[{ value: '', label: bots.length ? 'Choose bot…' : 'No bots yet' }, ...bots.map((b) => ({ value: b.id, label: `${b.running ? '● ' : ''}${b.name}${presetOf(b.params) === 'growth' ? ' · growth' : b.params.style === 'intraday' ? ' · intraday' : b.params.style === 'orderflow' ? ' · order flow' : ''}` }))]} onChange={(botId) => setConfig({ botId })} width={150} />
         <button className="chip" onClick={() => void create()} title="New AMT bot">
           + New
         </button>
@@ -270,9 +328,9 @@ function Intro({ onCreate }: { onCreate: () => void }) {
         The bot builds a rolling volume profile (POC and the 70% value area), tracks whether price is in <b>balance</b> inside value, <b>probing</b> outside it, or has been <b>accepted</b> outside it, and
         waits for order flow — aggressor delta, volume intensity and the order book — to agree before it trades:
       </p>
-      {(['scalp', 'intraday'] as Style[]).map((st) => (
+      {(['scalp', 'intraday', 'orderflow'] as Style[]).map((st) => (
         <div key={st}>
-          <b>{st === 'scalp' ? 'Scalp' : 'Intraday'}</b> <span className="muted">— {STYLE_TEXT[st]}</span>
+          <b>{PRESET_NAME[st]}</b> <span className="muted">— {STYLE_TEXT[st]}</span>
           <ul>
             {SETUPS[st].map(([k, name, text]) => (
               <li key={k}>
@@ -441,7 +499,7 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
 
       <div className="section-title">Style</div>
       <div className="seg">
-        {(['scalp', 'intraday', 'growth'] as Preset[]).map((st) => (
+        {(['scalp', 'intraday', 'growth', 'orderflow'] as Preset[]).map((st) => (
           <button
             key={st}
             type="button"
@@ -451,7 +509,7 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
               // load the preset but keep the owner's cost settings, and their
               // fixed-$ risk unless the preset sizes from the balance
               const keep = { riskUsd: P.riskUsd, maxPositionUsd: P.maxPositionUsd, maxDailyLossUsd: P.maxDailyLossUsd, allowShort: P.allowShort, useBook: P.useBook, feeBps: P.feeBps, slippageBps: P.slippageBps };
-              setD({ ...d, params: { ...presets[st], ...keep, ...(st === 'growth' ? { maxPositionUsd: presets.growth.maxPositionUsd } : {}) } });
+              setD({ ...d, params: { ...presets[st], ...keep, ...(st === 'growth' || st === 'orderflow' ? { maxPositionUsd: presets[st].maxPositionUsd } : {}) } });
             }}
           >
             {PRESET_NAME[st]}
@@ -502,6 +560,19 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
             <div className="amt-grid">{INTRADAY_FIELDS.map(([k, l, h]) => num(k, l, h))}</div>
           </div>
         )}
+        {P.style === 'orderflow' && (
+          <>
+            {ORDERFLOW_FIELDS.map(([group, fields]) => (
+              <div key={group}>
+                <div className="section-title">{group}</div>
+                <div className="amt-grid">{fields.map(([k, l, h]) => num(k, l, h))}</div>
+              </div>
+            ))}
+            <Check checked={P.ofRegime} onChange={(ofRegime) => setP({ ofRegime })}>
+              Regime filter — no absorption fades against accepted value, continuation only on the initiative side of the POC
+            </Check>
+          </>
+        )}
         {ADVANCED_FIELDS.map(([group, fields]) => (
           <div key={group}>
             <div className="section-title">{group}</div>
@@ -528,6 +599,27 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
         </button>
       </div>
     </fieldset>
+  );
+}
+
+/** What the order-flow hybrid sees: book pressure, walls, and the setups it is tracking. */
+function OrderFlowStats({ of }: { of: AmtOrderFlow }) {
+  const side = (d: number) => (d > 0 ? 'long' : 'short');
+  const watching = [
+    of.absorb && `absorption ${side(of.absorb.dir)} at ${of.absorb.level}`,
+    of.zone && `${of.zone.dir > 0 ? 'buy' : 'sell'} imbalance zone ${fmtPrice(of.zone.lo)}–${fmtPrice(of.zone.hi)}${of.zone.touched ? ' (retesting)' : ''}`,
+    of.sweep && `sweep of ${of.sweep.kind} ${fmtPrice(of.sweep.level)} — waiting for the reclaim`,
+  ].filter(Boolean);
+  const wall = (w: AmtOrderFlow['walls'][number]) => `${fmtPrice(w.price)} ${w.side}${w.iceberg ? ' ❄' : ''} ${w.ageSec}s`;
+  return (
+    <>
+      <Stat label="OFI" value={of.ofi === null ? 'no book' : fmtNum(of.ofi, 2)} tone={of.ofi ?? 0} />
+      <Stat label="Queue imb." value={of.queue === null ? '—' : fmtNum(of.queue, 2)} tone={of.queue ?? 0} />
+      <Stat label="Walls" value={of.walls.length ? of.walls.slice(0, 2).map(wall).join(' · ') : '—'} />
+      <Stat label="Pulled (5 min)" value={String(of.pulls)} />
+      <Stat label="Swing pools" value={String(of.pools)} />
+      <Stat label="Watching" value={watching.length ? watching.join(' · ') : 'no setup forming'} />
+    </>
   );
 }
 
@@ -564,6 +656,7 @@ function Monitor({ bot, snap, running, events }: { bot: AmtBot; snap: AmtSnapsho
             <Stat label="Intensity" value={s.flow?.intensity ? `${fmtNum(s.flow.intensity, 1)}×` : '—'} />
             <Stat label="Book imb." value={s.book ? fmtNum(s.book.imbalance, 2) : '—'} tone={s.book?.imbalance ?? 0} />
             <Stat label="Prior value" value={s.prior ? `${fmtPrice(s.prior.val)}–${fmtPrice(s.prior.vah)}` : 'after 1 session'} />
+            {s.orderflow && <OrderFlowStats of={s.orderflow} />}
             {s.style === 'intraday' && s.session && (
               <>
                 <Stat label="Initial balance" value={s.session.ib ? `${fmtPrice(s.session.ib.low)}–${fmtPrice(s.session.ib.high)}${s.session.ib.done ? '' : ' (forming)'}` : 'next session'} />
@@ -894,7 +987,9 @@ function Train({ bot, locked, onApplied }: { bot: AmtBot; locked: boolean; onApp
                     <td rowSpan={2} className="mono amt-train-params" title={JSON.stringify(l.params)}>
                       {l.base ? 'current' : `#${i + 1}`}
                       <div className="muted">
-                        Δ{l.params.deltaThreshold} · int {l.params.intensityMin} · RR {l.params.minRR} · stop {l.params.stopBufferBins} · prof {l.params.profileMinutes}m · BE {l.params.breakevenAtR} · fee× {l.params.targetCostX}
+                        {bot.params.style === 'orderflow'
+                          ? `abs ${l.params.absorbX}×/Δ${l.params.absorbDelta} · flip ${l.params.flipDelta} · imb ${l.params.imbalanceRatio}:1×${l.params.stackMin} · sweep ${l.params.sweepMinBps}bps/${l.params.sweepBurstX}× · stop ${l.params.stopBufferBins} · ${l.params.ofTargetR}R · BE ${l.params.breakevenAtR}`
+                          : `Δ${l.params.deltaThreshold} · int ${l.params.intensityMin} · RR ${l.params.minRR} · stop ${l.params.stopBufferBins} · prof ${l.params.profileMinutes}m · BE ${l.params.breakevenAtR} · fee× ${l.params.targetCostX}`}
                       </div>
                     </td>
                     {seg('train', l.train)}

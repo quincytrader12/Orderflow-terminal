@@ -22,6 +22,13 @@
 //   priorAccept  accepted outside prior-day value → trend one value-area width
 //   priorReject  failed probe beyond prior-day value → back to prior POC
 //   reentry      80% rule, as above
+//
+// orderflow (seconds to minutes; see orderflow.mjs): the order-flow hybrid —
+//   absorption    aggression absorbed at a wall / value edge / swing → reversal
+//   continuation  stacked footprint imbalances retested and held → join
+//   sweep         liquidity pool swept on a burst, then reclaimed → fade
+
+import { OrderFlow } from './orderflow.mjs';
 
 const MIN = 60_000;
 
@@ -47,7 +54,7 @@ export const DEFAULT_AMT = {
   reentrySec: 300,
   // setups
   style: 'scalp',
-  setups: { fade: true, breakout: true, reentry: true, ibBreakout: true, priorAccept: true, priorReject: true },
+  setups: { fade: true, breakout: true, reentry: true, ibBreakout: true, priorAccept: true, priorReject: true, absorption: true, continuation: true, sweep: true },
   // intraday style (session structure)
   ibMinutes: 60,
   ibAcceptMin: 15,
@@ -59,6 +66,35 @@ export const DEFAULT_AMT = {
   maxTradesPerSession: 3,
   flatBeforeCloseMin: 15,
   trailAtR: 2,
+  // order-flow style (footprint, book, liquidity pools, tape)
+  barSec: 60,
+  fpBinBps: 1,
+  imbalanceRatio: 3,
+  stackMin: 3,
+  contRetestSec: 600,
+  absorbSec: 20,
+  absorbX: 2,
+  absorbDelta: 0.3,
+  absorbMaxBins: 1,
+  absorbConfirmSec: 30,
+  flipSec: 5,
+  flipDelta: 0.2,
+  levelBins: 3,
+  swingBars: 5,
+  poolHours: 12,
+  roundBps: 50,
+  sweepMinBps: 3,
+  sweepMaxBps: 25,
+  sweepReclaimSec: 90,
+  sweepBurstX: 2,
+  ofiSec: 10,
+  ofiMin: 0.1,
+  queueMin: 0.3,
+  wallX: 4,
+  wallMinSec: 30,
+  wallBandBps: 50,
+  ofTargetR: 2,
+  ofRegime: true,
   // trade management
   stopBufferBins: 2,
   minRR: 1.5,
@@ -136,6 +172,36 @@ export const GROWTH_PRESET = {
   maxHoldSec: 1800,
   cooldownSec: 300,
   maxTradesPerHour: 4,
+  maxSpreadBps: 3,
+};
+
+/**
+ * The order-flow hybrid with small-account growth sizing: absorption,
+ * imbalance continuation and sweep & reclaim in one bot, a % of the balance
+ * at risk, targets that clear fees 3×, breakeven at 1R, a pause after three
+ * losses in a row and a hard stop at a 20 % drawdown.
+ */
+export const ORDERFLOW_PRESET = {
+  style: 'orderflow',
+  sizing: 'balance',
+  accountUsd: 55,
+  riskPct: 1.5,
+  maxLeverage: 5,
+  dailyLossPct: 6,
+  maxDrawdownPct: 20,
+  lossStreak: 3,
+  pauseMin: 120,
+  warmupMinutes: 15,
+  setups: { fade: false, breakout: false, reentry: false, ibBreakout: false, priorAccept: false, priorReject: false, absorption: true, continuation: true, sweep: true },
+  deltaThreshold: 0.3,
+  intensityMin: 1.5,
+  stopBufferBins: 1,
+  minRR: 1.5,
+  targetCostX: 3,
+  breakevenAtR: 1,
+  maxHoldSec: 1200,
+  cooldownSec: 180,
+  maxTradesPerHour: 6,
   maxSpreadBps: 3,
 };
 
@@ -280,6 +346,8 @@ export class AmtEngine {
     this.bin = 0;
     this.profile = new RollingProfile(this.cfg.profileMinutes * MIN);
     this.flow = new FlowWindow(600);
+    /** order-flow hybrid state (footprint, book, pools), orderflow style only */
+    this.of = this.cfg.style === 'orderflow' ? new OrderFlow(this.cfg) : null;
     this.session = null;
     this.prior = null;
     this.va = null;
@@ -326,11 +394,20 @@ export class AmtEngine {
     this.profile.add(t, idx, q, buy);
     this.session.bins.set(idx, (this.session.bins.get(idx) ?? 0) + q);
     this.flow.add(t, p * q, buy);
+    this.of?.onTrade(t, p, q, buy);
     return this.step();
   }
 
   onBook(bids, asks) {
     this.book = { bids, asks };
+    // stamped with market time, so a skewed local clock cannot make it look stale
+    this.of?.onBook(bids, asks, this.now);
+  }
+
+  /** Forced orders {t, p, q, side}; side 'sell' = longs liquidated. */
+  onLiquidations(items) {
+    if (!this.of) return;
+    for (const l of items) if (l.p > 0 && l.q > 0) this.of.onLiquidation(Math.max(l.t ?? 0, this.now), l.p, l.p * l.q, l.side);
   }
 
   /** Clock tick without trades (time exits, state timers). */
@@ -438,6 +515,16 @@ export class AmtEngine {
     }
     if (t - this.t0 < c.warmupMinutes * MIN || !this.va) {
       this.state = 'warmup';
+      return out;
+    }
+    if (c.style === 'orderflow') {
+      // the auction state still runs: it is the regime filter for the hybrid
+      this.auction(p, t);
+      const plan = this.of.detect(this, p, t);
+      if (plan && !this.pos && !this.pending) {
+        const e = t - this.lastTradeT > Math.max(c.flowSec * 1000, 30_000) ? this.skip(plan.event, 'market data stale') : this.enter(plan.event, plan, p, t, c.useBook ? this.bookStats() : null);
+        if (e) out.push(e);
+      }
       return out;
     }
     const ev = this.reentryEvent(p, t) ?? (intraday ? this.sessionAuction(p, t) : this.auction(p, t));
@@ -647,6 +734,12 @@ export class AmtEngine {
       target = short ? this.prior.val : this.prior.vah;
       why = `opened ${short ? 'above' : 'below'} prior value and re-accepted it (80% rule)`;
     }
+    return this.enter(ev, { side, stop, target, setup, why }, p, t, book);
+  }
+
+  /** Common entry checks (risk gates, costs, R:R, size) → an entry intent. */
+  enter(ev, { side, stop, target, setup, why, wall = null }, p, t, book) {
+    const c = this.cfg;
     const gate = this.gate(side, book);
     if (gate) return this.skip(ev, gate);
     const dir = dirOf(side);
@@ -661,7 +754,7 @@ export class AmtEngine {
     const size = this.size(p, risk);
     if (size.skip) return this.skip(ev, size.skip);
     const qty = size.qty;
-    this.pending = { kind: 'entry', side, stop, target, setup, why, t };
+    this.pending = { kind: 'entry', side, stop, target, setup, why, wall, t };
     this.lastSignal = { t, event: ev, setup, side, price: p, stop, target, why };
     return { type: 'enter', side, qty, price: p, stop, target, setup, reason: why };
   }
@@ -726,7 +819,9 @@ export class AmtEngine {
       pos.trailed = true;
     }
     let reason = null;
-    if ((p - pos.stop) * dir <= 0) reason = pos.trailed ? 'trail' : pos.be ? 'breakeven' : 'stop';
+    // the wall the trade leaned on was pulled: the reason for the trade is gone
+    if (pos.wall && this.of && this.of.book.pulledSince(pos.wall, pos.t)) reason = 'wall pulled';
+    else if ((p - pos.stop) * dir <= 0) reason = pos.trailed ? 'trail' : pos.be ? 'breakeven' : 'stop';
     else if ((p - pos.target) * dir >= 0) reason = 'target';
     else if (t - pos.t >= c.maxHoldSec * 1000) reason = 'time';
     else if (c.style === 'intraday' && t >= this.session.end - c.flatBeforeCloseMin * MIN) reason = 'session close';
@@ -744,7 +839,7 @@ export class AmtEngine {
     this.pending = null;
     if (pd.kind === 'entry') {
       // stop/target keep their distance if the fill slipped
-      this.pos = { side: pd.side, entry: price, qty, stop: pd.stop, target: pd.target, setup: pd.setup, why: pd.why, t, fees: fee, risk: Math.abs(price - pd.stop), be: false };
+      this.pos = { side: pd.side, entry: price, qty, stop: pd.stop, target: pd.target, setup: pd.setup, why: pd.why, wall: pd.wall ?? null, t, fees: fee, risk: Math.abs(price - pd.stop), be: false };
       this.entryTimes.push(t);
       if (this.session) this.session.trades++;
       return;
@@ -858,6 +953,7 @@ export class AmtEngine {
       lastSkip: this.lastSkip,
       trades: this.trades.slice(-20),
       profile,
+      orderflow: this.of ? this.of.snapshot(this.now) : null,
     };
   }
 }

@@ -156,6 +156,54 @@ looks good on that stretch; the unseen part is what tells whether it was
 real. Even a verified result is evidence from a few days of one market, not a
 promise: paper-trade it before going live, and keep the drawdown stop on.
 
+## 5b. Order-flow hybrid — tape, footprint, book and liquidity map
+
+The **Order-flow hybrid** style trades the way order-flow traders read a
+market: who is aggressive on the tape, where the footprint shows one side
+overwhelming the other, where real resting liquidity sits in the book, and
+where stops collect. One bot runs three setups, and the market decides which
+one fires.
+
+| Setup | Reads | Entry | Stop | Target |
+|---|---|---|---|---|
+| **Absorption reversal** | tape aggression, a liquidity level (a standing **wall** in the book, VAL/VAH, prior value, swing or round-number pool) | aggressive volume ≥ 2× normal and ≥ 0.3 one-sided hits the level and makes ≤ 1 bin of progress, then the aggressors fade: delta over 5 s flips ≥ 0.2, price lifts a bin off the extreme, order-flow imbalance (OFI) turns | beyond the extreme (and the wall) + buffer; **exits at once if the wall is pulled** | POC when it is ≥ min R:R away, else 2R |
+| **Imbalance continuation** | footprint: ≥ 3 stacked diagonal imbalances (3:1) in a bar with initiative delta and ≥ 1.5× volume | price leaves the stack, comes back into it, holds; delta since the retest ≥ 0.2 with the move, OFI with it, no absorbing wall in the way | beyond the far side of the stack | the nearest untouched liquidity pool ≥ min R:R away, else 2R |
+| **Sweep & reclaim** | liquidity pools (swing highs/lows from footprint bars, prior session high/low, round numbers), tape bursts, **liquidations** | price runs a pool by ≥ 3 bps on a ≥ 2× burst or forced orders, then reclaims the level within 90 s with delta and OFI turning | beyond the sweep's extreme | POC or 2R |
+
+**Regime filter** (on by default): absorption is never faded while value is
+being accepted in the aggressors' direction, and continuation only joins
+moves on the initiative side of the POC. A sweep that runs further than
+25 bps is treated as a breakout and left alone.
+
+**The order book** (5 snapshots a second, 500 levels):
+
+- *Order-flow imbalance* at the best bid/ask, as defined by Cont, Kukanov &
+  Stoikov (2014), summed over 10 s as net ÷ gross (−1…+1).
+- *Queue imbalance* over the top three levels (Gould & Bonart 2016): a
+  trade is skipped when it leans hard against it.
+- *Walls*: levels ≥ 4× the median size within 50 bps. Each one's age is
+  tracked, the volume traded into it (more than it showed and still there →
+  iceberg ❄), and whether it disappeared **without trading** — a pull, the
+  spoofing signature. Only walls that have stood 30 s count; a wall that
+  halves as price approaches is ignored.
+
+Book checks apply whenever the bot has a book less than 5 s old. **Backtests
+and training replay recorded trades only**, so they test the trade-based core
+of each setup (tape, footprint, pools); the book and liquidation layers are
+judged in paper trading. Training searches the order-flow thresholds
+(aggression ×, absorption delta, flip delta, imbalance ratio, stacked rows,
+sweep distance and burst, stop buffer, R target, breakeven).
+
+The preset sizes from the balance like Growth: 1.5 % risk, 5× cap, breakeven
+at 1R, 20 min time stop, 3 min cool-down after a loss, ≤ 6 trades an hour,
+pause after 3 losses, stop for good at −20 %. Entries are market orders, so
+every target must clear 3× the round-trip taker cost.
+
+What the evidence says: order-flow and queue imbalance are well documented
+as short-horizon predictors; absorption, stacked imbalances and sweeps are
+practitioner patterns without published backtests. Treat every setup as a
+hypothesis — train it, paper-trade it, and only then go live.
+
 ## 6. Safety behaviour of live bots
 
 - **Exact sizing.** Live positions are tracked in exchange units (contracts) exactly as filled. Exits and the exchange stop close what was opened.

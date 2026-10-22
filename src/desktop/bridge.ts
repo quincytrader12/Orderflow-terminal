@@ -184,8 +184,8 @@ export interface AmtParams {
   acceptSec: number;
   rejectSec: number;
   reentrySec: number;
-  style: 'scalp' | 'intraday';
-  setups: { fade: boolean; breakout: boolean; reentry: boolean; ibBreakout: boolean; priorAccept: boolean; priorReject: boolean };
+  style: 'scalp' | 'intraday' | 'orderflow';
+  setups: { fade: boolean; breakout: boolean; reentry: boolean; ibBreakout: boolean; priorAccept: boolean; priorReject: boolean; absorption: boolean; continuation: boolean; sweep: boolean };
   ibMinutes: number;
   ibAcceptMin: number;
   priorAcceptMin: number;
@@ -196,6 +196,35 @@ export interface AmtParams {
   maxTradesPerSession: number;
   flatBeforeCloseMin: number;
   trailAtR: number;
+  // order-flow hybrid
+  barSec: number;
+  fpBinBps: number;
+  imbalanceRatio: number;
+  stackMin: number;
+  contRetestSec: number;
+  absorbSec: number;
+  absorbX: number;
+  absorbDelta: number;
+  absorbMaxBins: number;
+  absorbConfirmSec: number;
+  flipSec: number;
+  flipDelta: number;
+  levelBins: number;
+  swingBars: number;
+  poolHours: number;
+  roundBps: number;
+  sweepMinBps: number;
+  sweepMaxBps: number;
+  sweepReclaimSec: number;
+  sweepBurstX: number;
+  ofiSec: number;
+  ofiMin: number;
+  queueMin: number;
+  wallX: number;
+  wallMinSec: number;
+  wallBandBps: number;
+  ofTargetR: number;
+  ofRegime: boolean;
   stopBufferBins: number;
   minRR: number;
   maxHoldSec: number;
@@ -311,7 +340,7 @@ export interface AmtSnapshot {
   feed: string;
   feedError: string | null;
   startedAt: number;
-  style: 'scalp' | 'intraday';
+  style: AmtParams['style'];
   session: { start: number; end: number; open: number; high: number; low: number; ib: { high: number; low: number; done: boolean } | null; trades: number; value: { vah: number; val: number; poc: number } | null } | null;
   state: string;
   t: number;
@@ -334,6 +363,21 @@ export interface AmtSnapshot {
   trades: AmtTrade[];
   /** [price, volume, delta] around the last price */
   profile: [number, number, number][];
+  /** order-flow hybrid read-out (orderflow style only) */
+  orderflow: AmtOrderFlow | null;
+}
+
+export interface AmtOrderFlow {
+  /** order-flow imbalance −1…+1 (null without a fresh book) */
+  ofi: number | null;
+  queue: number | null;
+  walls: { side: 'bid' | 'ask'; price: number; q: number; ageSec: number; iceberg: boolean }[];
+  /** walls pulled before price reached them, last 5 min */
+  pulls: number;
+  zone: { dir: number; lo: number; hi: number; touched: boolean } | null;
+  sweep: { dir: number; level: number; kind: string } | null;
+  absorb: { dir: number; at: number; level: string } | null;
+  pools: number;
 }
 
 export interface AmtEvent {
@@ -406,7 +450,7 @@ export interface NovusApi {
   amt: {
     list(): Promise<AmtBot[]>;
     defaults(): Promise<AmtParams>;
-    presets(): Promise<Record<'scalp' | 'intraday' | 'growth', AmtParams>>;
+    presets(): Promise<Record<'scalp' | 'intraday' | 'growth' | 'orderflow', AmtParams>>;
     save(cfg: AmtBotInput): Promise<string>;
     remove(id: string): Promise<void>;
     start(id: string): Promise<boolean>;

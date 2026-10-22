@@ -91,7 +91,7 @@ describe('BotManager', () => {
     const m = new BotManager({ ccxt, db, emit: (ch, p) => sent.push([ch, p]), now: () => T0 });
     const id = m.save({ mode: 'paper', exchangeId: 'binance', symbol: 'BTC/USDT', params });
     await m.start(id);
-    expect(ccxt.subscribe).toHaveBeenCalledWith(`amt-${id}`, 'binance', 'BTC/USDT', expect.any(Function), { sandbox: false });
+    expect(ccxt.subscribe).toHaveBeenCalledWith(`amt-${id}`, 'binance', 'BTC/USDT', expect.any(Function), { sandbox: false, liquidations: false });
     expect(() => m.save({ id, mode: 'paper', exchangeId: 'binance', symbol: 'ETH/USDT' })).toThrow(/stop the bot/);
     feed(ccxt, `amt-${id}`, breakoutTape());
     const kinds = m.eventsFor(id).map((e) => e.kind);
@@ -109,12 +109,30 @@ describe('BotManager', () => {
     expect(m.list()[0].running).toBe(false);
   });
 
+  it('order-flow bots stream liquidations and book into the hybrid', async () => {
+    const ccxt = fakeCcxt();
+    const m = new BotManager({ ccxt, db, emit: () => undefined, now: () => T0 });
+    expect(m.presets().orderflow).toMatchObject({ style: 'orderflow', sizing: 'balance' });
+    const id = m.save({ mode: 'paper', exchangeId: 'binance', symbol: 'BTC/USDT:USDT', params: m.presets().orderflow });
+    await m.start(id);
+    expect(ccxt.subscribe.mock.calls[0][4]).toEqual({ sandbox: false, liquidations: true });
+    const s = ccxt.streams.get(`amt-${id}`);
+    s.emit({ kind: 'trades', trades: [{ t: T0, p: 100, q: 1, s: 'buy' }] });
+    s.emit({ kind: 'liquidations', items: [{ t: T0, p: 100, q: 2, side: 'sell' }] });
+    s.emit({ kind: 'book', bids: [[99.99, 1]], asks: [[100.01, 1]] });
+    const e = m.running.get(id).engine;
+    expect(e.of.tape.window(T0, 1).liqSell).toBe(200);
+    expect(e.of.book.mid).toBeCloseTo(100, 6);
+    expect(m.snapshot(id).orderflow).not.toBeNull();
+    await m.stop(id, { reason: 'test' });
+  });
+
   it('trades live through placeOrder with a protective exchange stop, inside the terminal cap', async () => {
     const ccxt = fakeCcxt();
     const m = new BotManager({ ccxt, db, emit: () => {}, now: () => T0 });
     const id = m.save({ mode: 'live', secretId: 'k1', symbol: 'BTC/USDT:USDT', params: { ...params, riskUsd: 1000, maxPositionUsd: 5000 } });
     await m.start(id);
-    expect(ccxt.subscribe.mock.calls[0][4]).toEqual({ sandbox: true });
+    expect(ccxt.subscribe.mock.calls[0][4]).toEqual({ sandbox: true, liquidations: false });
     const tape = breakoutTape();
     feed(ccxt, `amt-${id}`, tape);
     await vi.waitFor(() => expect(ccxt.orders.length).toBe(2));

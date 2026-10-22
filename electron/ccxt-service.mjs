@@ -194,6 +194,7 @@ export class CcxtService {
       }
       status('open');
       const loops = [this.tradeLoop(state, ex, symbol, emit, status), this.bookLoop(state, ex, symbol, emit), this.statsLoop(state, ex, symbol, emit)];
+      if (opts.liquidations && ex.markets[symbol].contract && ex.has.watchLiquidations) loops.push(this.liquidationLoop(state, ex, symbol, emit));
       await Promise.allSettled(loops);
     })();
   }
@@ -249,6 +250,22 @@ export class CcxtService {
         if (!ex.has.watchOrderBook) await sleep(1000);
       } catch {
         if (state.stop) return;
+        await sleep(3000);
+      }
+    }
+  }
+
+  /** Forced orders on this market (perpetuals): {t, p, q, side}, side 'sell' = longs liquidated. */
+  async liquidationLoop(state, ex, symbol, emit) {
+    let fails = 0;
+    while (!state.stop) {
+      try {
+        const list = await ex.watchLiquidations(symbol);
+        fails = 0;
+        const items = list.filter((l) => l.price > 0).map((l) => ({ t: l.timestamp ?? Date.now(), p: l.price, q: l.baseValue ?? l.contracts ?? 0, side: l.side === 'buy' ? 'buy' : 'sell' }));
+        if (items.length) emit({ kind: 'liquidations', items });
+      } catch {
+        if (state.stop || ++fails > 5) return; // not offered here: run without it
         await sleep(3000);
       }
     }
