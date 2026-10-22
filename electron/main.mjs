@@ -126,6 +126,10 @@ function createWindow() {
     }
   });
   const w = win;
+  // no developer tools while the terminal is sealed
+  w.webContents.on('devtools-opened', () => {
+    if (!unlocked) w.webContents.closeDevTools();
+  });
   const reveal = () => {
     if (!w.isDestroyed() && !w.isVisible()) {
       if (placed.maximized) w.maximize();
@@ -212,6 +216,24 @@ function retentionDays() {
 
 // sealed until the ledger key is entered; only public market data flows before that
 let unlocked = false;
+let sealedAt = null;
+
+/**
+ * Seal the terminal: keys, trading and bot control are refused until the
+ * ledger key is entered again; open windows go back to the lock screen and
+ * developer tools close. Bots and market data keep running.
+ */
+function seal(reason) {
+  if (!unlocked) return;
+  unlocked = false;
+  sealedAt = Date.now();
+  log('info', `terminal sealed: ${reason}`);
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (w.isDestroyed()) continue;
+    w.webContents.closeDevTools();
+    w.webContents.send('app:sealed', reason);
+  }
+}
 const attempts = new AttemptGate();
 const sha256Hex = (x) => createHash('sha256').update(x).digest('hex');
 /** The owner's own key (salted digest in the database), else the built-in one. */
@@ -271,8 +293,14 @@ function registerIpc() {
   });
   // lock again (renderer shows the lock screen); bots keep running in this process
   handle('app:seal', () => {
+    seal('locked from the terminal');
     unlocked = false;
     return true;
+  });
+  // what the lock screen may show while sealed: counts only, nothing private
+  handle('app:status', () => {
+    const running = bots ? [...bots.running.values()] : [];
+    return { locked: !unlocked, sealedAt, botsRunning: running.length, botsLive: running.filter((b) => b.cfg.mode === 'live').length };
   });
   handle('app:changeKey', async (_e, current, next) => {
     attempts.check();

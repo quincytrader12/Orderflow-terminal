@@ -8,7 +8,8 @@ import type { TradeStore } from '../core/tradeStore';
 import { intervalMinutes } from '../exchanges/adapter';
 import { hub } from '../market/hub';
 import { axisTicks, Canvas, font, label, line, type DrawContext, type PointerState, mask } from '../ui/canvas';
-import { Check, Chip, Empty, NumberInput, Popover, Select, Spacer, Toolbar, useHubVersion, ZoomControls, type PanelProps } from '../ui/controls';
+import { Check, Chip, Empty, LiveChip, NumberInput, Popover, Select, Spacer, Toolbar, useHubVersion, ZoomControls, type PanelProps } from '../ui/controls';
+import { hovered, newFollow, pause, shouldResume } from '../ui/follow';
 import { rgba } from '../ui/theme';
 import { baseTick, drawTooltip } from './FootprintChart';
 import { useKlines } from './shared/useKlines';
@@ -78,7 +79,7 @@ export function HistoricalChart({ config: c, setConfig }: PanelProps<HistoricalC
   useHubVersion();
   const feed = hub().primary;
   const k = useKlines(feed, c.mode === 'tpo' ? '30m' : c.interval, c.mode === 'tpo' ? Math.min(1000, 48 * (c.tpoSessions + 1)) : 1000, 60_000);
-  const view = useRef({ barW: 8, offset: 0, fit: false });
+  const view = useRef({ barW: 8, offset: 0, fit: false, follow: newFollow(), lastDraw: 0, hoverX: -1, hoverY: -1 });
   const zoom = (k: number) => {
     view.current.barW = Math.max(MIN_BAR, Math.min(40, view.current.barW * k));
   };
@@ -100,6 +101,18 @@ export function HistoricalChart({ config: c, setConfig }: PanelProps<HistoricalC
     const priceH = plotH - volH;
     const n = bars.length;
     const rightPad = 40;
+    // live follow: glide back to the newest bar once the owner leaves the chart alone
+    const nowMs = performance.now();
+    const dt = Math.min(250, v.lastDraw ? nowMs - v.lastDraw : 16);
+    v.lastDraw = nowMs;
+    const hp = pointer.current;
+    if (hp?.inside && (hp.x !== v.hoverX || hp.y !== v.hoverY)) {
+      hovered(v.follow, nowMs);
+      v.hoverX = hp.x;
+      v.hoverY = hp.y;
+    }
+    if (shouldResume(v.follow, nowMs)) v.follow.live = true;
+    if (v.follow.live && v.offset !== 0) v.offset = Math.abs(v.offset) < 0.01 ? 0 : v.offset * Math.exp(-dt / 140);
     if (v.fit) {
       // every loaded bar; prices already scale to what is visible
       v.fit = false;
@@ -380,7 +393,12 @@ export function HistoricalChart({ config: c, setConfig }: PanelProps<HistoricalC
         )}
         <Spacer />
         {k.loading && <span className="muted">loading…</span>}
-        {c.mode === 'candles' && <ZoomControls onZoom={zoom} onFit={() => (view.current.fit = true)} />}
+        {c.mode === 'candles' && (
+          <>
+            <LiveChip follow={view.current.follow} onLive={() => (view.current.follow.live = true)} />
+            <ZoomControls onZoom={zoom} onFit={() => (view.current.fit = true)} />
+          </>
+        )}
       </Toolbar>
       {k.error && !k.bars.length ? (
         <Empty>
@@ -393,10 +411,11 @@ export function HistoricalChart({ config: c, setConfig }: PanelProps<HistoricalC
           pointerRef={pointer}
           onWheel={(e) => zoom(e.deltaY > 0 ? 0.9 : 1.1)}
           onDrag={(dx) => {
+            pause(view.current.follow);
             view.current.offset = Math.max(-5, view.current.offset + dx / view.current.barW);
           }}
           onDoubleClick={() => {
-            view.current.offset = 0;
+            view.current.follow.live = true;
           }}
         />
       )}

@@ -10,6 +10,8 @@ async function call(channel, ...args) {
 
 const ccxtListeners = new Set();
 const fsListeners = new Set();
+const sealListeners = new Set();
+ipcRenderer.on('app:sealed', (_e, reason) => sealListeners.forEach((fn) => fn(reason)));
 ipcRenderer.on('app:fullscreen', (_e, on) => fsListeners.forEach((fn) => fn(on)));
 const amtListeners = { status: new Set(), event: new Set(), train: new Set() };
 for (const ch of ['status', 'event', 'train']) ipcRenderer.on(`amt:${ch}`, (_e, msg) => amtListeners[ch].forEach((fn) => fn(msg)));
@@ -26,7 +28,9 @@ contextBridge.exposeInMainWorld('novus', {
   app: { info: () => call('app:info'), openExternal: (url) => call('shell:open', url), locked: () => call('app:locked'), unlock: (code) => call('app:unlock', code), seal: () => call('app:seal'), changeKey: (current, next) => call('app:changeKey', current, next), leaveSafeMode: () => call('app:leaveSafeMode'),
     fullscreen: (on) => call('app:fullscreen', on),
     isFullscreen: () => call('app:isFullscreen'),
-    onFullscreen: (fn) => listen(fsListeners, fn) },
+    onFullscreen: (fn) => listen(fsListeners, fn),
+    status: () => call('app:status'),
+    onSealed: (fn) => listen(sealListeners, fn) },
   net: { fetchJson: (url, init) => call('net:fetchJson', url, init) },
   vault: {
     list: () => call('vault:list'),

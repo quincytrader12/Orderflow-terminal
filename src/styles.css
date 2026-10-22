@@ -2617,3 +2617,86 @@ table.amt-train tr.best td {
   margin-top: 6px;
   align-items: center;
 }
+
+/* live-follow chip on charts */
+.chip.live-chip {
+  font: 600 11px var(--mono, ui-monospace, monospace);
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.chip.live-chip.on {
+  color: var(--buy);
+  border-color: color-mix(in srgb, var(--buy) 45%, transparent);
+}
+
+/* ---------- lock screen: terminal still running ---------- */
+.running-bar {
+  width: 300px;
+  font: 500 11px/1.6 var(--mono, ui-monospace, monospace);
+  color: #9aa1aa;
+  letter-spacing: 0.04em;
+}
+.running-bar .rb-head {
+  color: #e9ecef;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.running-bar .rb-sealed {
+  color: #8b929c;
+  font-weight: 500;
+}
+.running-bar .rb-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3ddc97;
+  box-shadow: 0 0 10px #3ddc97;
+  animation: rb-pulse 1.6s ease-in-out infinite;
+}
+.running-bar .rb-track {
+  position: relative;
+  height: 3px;
+  margin: 8px 0 8px;
+  border-radius: 2px;
+  background: #16181b;
+  overflow: hidden;
+}
+.running-bar .rb-sweep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 38%;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), #f3f5f7 45%, #8b929c 70%, rgba(255, 255, 255, 0));
+  animation: rb-sweep 1.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+.running-bar .rb-ok {
+  color: #3ddc97;
+}
+.running-bar .rb-warn {
+  color: #f0b90b;
+}
+.running-bar .rb-idle {
+  color: #6d727a;
+}
+@keyframes rb-sweep {
+  from {
+    left: -40%;
+  }
+  to {
+    left: 100%;
+  }
+}
+@keyframes rb-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .running-bar .rb-sweep,
+  .running-bar .rb-dot {
+    animation: none;
+  }
+}

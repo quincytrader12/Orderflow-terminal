@@ -165,7 +165,7 @@ try {
   const submit = page.locator('.ticket .btn.submit');
   expect(await submit.isDisabled(), 'submit disabled until a market, key and size are ready');
   // click a DOM level → price lands in the ticket
-  const dom = page.locator('.flexlayout__tab:visible:has(button:text("centre")) canvas').first();
+  const dom = page.locator('.flexlayout__tab:visible:has(.live-chip):not(:has(.zoom-controls)) canvas').first();
   const box = await dom.boundingBox();
   await page.mouse.click(box.x + box.width * 0.25, box.y + box.height * 0.6);
   await page.waitForTimeout(300);
@@ -187,8 +187,10 @@ try {
   const log = await page.evaluate(() => window.novus.trade.log(10));
   expect(log.length >= 2 && log.every((r) => r.action === 'place') && log[log.length - 1].status === 'rejected', `${log.length} order attempts audited`);
   expect(!JSON.stringify(log).includes(SECRET), 'order log holds no secrets');
-  await page.waitForSelector('.ticket .log-row', { timeout: 15_000 });
-  expect((await page.locator('.ticket .log-row').count()) >= 2, 'ticket shows the order log');
+  // the ticket refreshes its log every 10 s; these orders were placed through the API directly
+  await page.waitForFunction(() => document.querySelectorAll('.ticket .log-row').length >= 2, null, { timeout: 15_000 }).catch(() => undefined);
+  const logRows = await page.locator('.ticket .log-row').count();
+  expect(logRows >= 2, `ticket shows the order log (${logRows} rows: ${(await page.locator('.ticket .log-row').allInnerTexts()).join(' | ').slice(0, 200)})`);
   await page.screenshot({ path: `${OUT}desktop-ticket-log.png` });
 
   step('database recording and panel');
@@ -378,16 +380,30 @@ try {
   await page.waitForSelector('.ledger-settings .up');
   expect(true, 'ledger key changed');
   await page.click('.modal header .x');
-  await page.click('button.chip.seal');
+  await page.evaluate(() => (window.__sameSession = true));
+  await page.click('.topbar button:has-text("Lock")');
   await page.waitForSelector('.lock-key input', { timeout: 30_000 });
   const resealed = await page.evaluate(() => window.novus.vault.list().then(() => 'open', (e) => e.message));
-  expect(/sealed/.test(resealed), 'seal re-locks the desktop process');
+  expect(/sealed/.test(resealed), 'Lock seals the desktop process');
+  await page.waitForSelector('.running-bar');
+  const bar = await page.locator('.running-bar').innerText();
+  expect(/TERMINAL RUNNING/.test(bar) && /Locked/.test(bar), `lock page shows the running bar (${bar.split('\n').join(' · ').slice(0, 140)})`);
+  expect((await page.locator('.topbar, .flexlayout__layout').count()) === 0, 'terminal panels are off screen while locked');
+  await page.screenshot({ path: `${OUT}desktop-locked.png` });
+  const devtools = await app.evaluate(async ({ BrowserWindow }) => {
+    const w = BrowserWindow.getAllWindows()[0];
+    w.webContents.openDevTools({ mode: 'detach' });
+    await new Promise((r) => setTimeout(r, 800));
+    return w.webContents.isDevToolsOpened();
+  });
+  expect(!devtools, 'developer tools refused while locked');
   await page.locator('.lock-key input').fill(TEST_KEY);
   await page.waitForSelector('.lock-key.denied');
   expect(true, 'old key denied after the change');
   await unlock(page, NEW_KEY);
   await page.waitForSelector('.topbar', { timeout: 30_000 });
   expect(true, 'new key opens the terminal');
+  expect(await page.evaluate(() => window.__sameSession === true), 'unlocking returns to the same running session (no reload)');
 
   expect((await page.locator('text=crashed').count()) === 0, 'no panel crashed');
 } catch (e) {

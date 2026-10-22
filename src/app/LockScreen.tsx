@@ -3,9 +3,10 @@ import emblem from '../assets/emblem.png';
 import { desktop } from '../desktop/bridge';
 import { AttemptGate, isLedgerRecord, LEDGER_LENGTH, ledgerMatches, makeLedger, normalizeKey, type LedgerRecord } from '../shared/ledger';
 import { runBoot, useBoot } from './boot';
+import { lockTerminal, SESSION_FLAG, useLock } from './lock';
+import { RunningBar } from './RunningBar';
 import { BootRing } from './BootRing';
 
-const SESSION_FLAG = 'novus-ledger-open';
 
 async function sha256Hex(s: string) {
   const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
@@ -40,15 +41,9 @@ export async function changeLedgerKey(current: string, next: string): Promise<vo
   localStorage.setItem(WEB_LEDGER, JSON.stringify(await makeLedger(next, sha256Hex, salt)));
 }
 
-/** Lock the terminal now and return to the lock screen. */
-export async function sealTerminal(): Promise<void> {
-  await desktop?.app.seal().catch(() => undefined);
-  try {
-    sessionStorage.removeItem(SESSION_FLAG);
-  } catch {
-    /* private mode */
-  }
-  location.reload();
+/** Lock the terminal now and return to the lock screen (see app/lock). */
+export function sealTerminal(reason?: string): Promise<void> {
+  return lockTerminal(reason);
 }
 
 async function unlock(code: string): Promise<void> {
@@ -86,6 +81,8 @@ function sessionId() {
 
 export function LockScreen({ onUnlocked, onGone }: { onUnlocked: () => void; onGone: () => void }) {
   const { steps, done, safeMode } = useBoot();
+  // locked again after use (not the first boot): show that the terminal is still running
+  const relocked = useLock((s) => s.lockedAt !== null);
   const [code, setCode] = useState('');
   const [msg, setMsg] = useState<{ kind: 'denied' | 'granted' | 'busy'; text: string } | null>(null);
   const [shake, setShake] = useState(0);
@@ -125,9 +122,7 @@ export function LockScreen({ onUnlocked, onGone }: { onUnlocked: () => void; onG
 
   return (
     <div className={`lock ${leaving ? 'leaving' : ''}`} onMouseDown={() => setTimeout(() => input.current?.focus(), 0)}>
-      <div className="lock-ring">
-        <BootRing />
-      </div>
+      <div className="lock-ring">{relocked ? <RunningBar /> : <BootRing />}</div>
       <div className="lock-corner tr">
         {clock.toISOString().slice(0, 19).replace('T', ' ')} UTC · NODE {sid}
       </div>

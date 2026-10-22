@@ -1,9 +1,10 @@
-import { Component, StrictMode, useEffect, useState, type ReactNode } from 'react';
+import { Component, StrictMode, useEffect, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './app/App';
 import { Embed } from './app/Embed';
 import { detectSafeMode } from './app/boot';
 import { alreadyUnlocked, LockScreen } from './app/LockScreen';
+import { followDesktopSeal, useLock } from './app/lock';
 import type { VenueId } from './core/types';
 import { ADAPTERS } from './exchanges';
 import { setSimLoad } from './exchanges/simulator';
@@ -43,15 +44,20 @@ const embed = params.get('embed');
  * the panels are already drawing when the overlay is gone.
  */
 function Gate({ children }: { children: ReactNode }) {
-  // show the lock screen at once; a window reload while already unlocked skips it
-  const [state, setState] = useState<'locked' | 'opening' | 'open'>('locked');
+  // show the lock screen at once; a window reload while already unlocked skips it.
+  // Locking again (top-bar Lock, Ctrl+L, idle, Windows lock) comes back here:
+  // the terminal unmounts while data and bots keep running underneath.
+  const state = useLock((s) => s.state);
+  const lockedAt = useLock((s) => s.lockedAt);
+  const setState = useLock((s) => s.set);
   useEffect(() => {
     void alreadyUnlocked().then((o) => o && setState('open'));
-  }, []);
+    return followDesktopSeal();
+  }, [setState]);
   return (
     <>
       {state !== 'locked' && children}
-      {state !== 'open' && <LockScreen onUnlocked={() => setState('opening')} onGone={() => setState('open')} />}
+      {state !== 'open' && <LockScreen key={lockedAt ?? 0} onUnlocked={() => setState('opening')} onGone={() => setState('open')} />}
     </>
   );
 }

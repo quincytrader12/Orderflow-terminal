@@ -372,7 +372,7 @@ export interface WalletRecord {
 
 export interface NovusApi {
   desktop: true;
-  app: { info(): Promise<{ version: string; platform: string; userData: string; db: DbInfo; vaultBackend: string; retentionDays: number; safeMode?: boolean }>; openExternal(url: string): Promise<void>; locked(): Promise<boolean>; unlock(code: string): Promise<boolean>; seal(): Promise<boolean>; changeKey(current: string, next: string): Promise<boolean>; leaveSafeMode(): Promise<void>; fullscreen(on?: boolean): Promise<boolean>; isFullscreen(): Promise<boolean>; onFullscreen(fn: (on: boolean) => void): () => void };
+  app: { info(): Promise<{ version: string; platform: string; userData: string; db: DbInfo; vaultBackend: string; retentionDays: number; safeMode?: boolean }>; openExternal(url: string): Promise<void>; locked(): Promise<boolean>; unlock(code: string): Promise<boolean>; seal(): Promise<boolean>; changeKey(current: string, next: string): Promise<boolean>; leaveSafeMode(): Promise<void>; fullscreen(on?: boolean): Promise<boolean>; isFullscreen(): Promise<boolean>; onFullscreen(fn: (on: boolean) => void): () => void; status(): Promise<{ locked: boolean; sealedAt: number | null; botsRunning: number; botsLive: number }>; onSealed(fn: (reason: string) => void): () => void };
   net: { fetchJson<T = any>(url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }): Promise<T> };
   vault: {
     list(): Promise<SecretRecord[]>;

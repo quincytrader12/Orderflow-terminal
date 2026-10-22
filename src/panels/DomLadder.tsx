@@ -6,7 +6,8 @@ import { TIME_RANGES } from '../core/types';
 import { useTicket } from '../desktop/trading';
 import { hub } from '../market/hub';
 import { Canvas, font, line, type DrawContext } from '../ui/canvas';
-import { Chip, Select, Spacer, Toolbar, type PanelProps } from '../ui/controls';
+import { Chip, LiveChip, Select, Spacer, Toolbar, type PanelProps } from '../ui/controls';
+import { newFollow, pause, shouldResume } from '../ui/follow';
 import { ink, rgba } from '../ui/theme';
 import { baseTick } from './FootprintChart';
 
@@ -24,7 +25,7 @@ const TICK_MULTS = [1, 2, 5, 10, 20, 50, 100];
 
 export function DomLadder({ config: c, setConfig }: PanelProps<DomConfig>) {
   const profile = useRef<RollingProfile | null>(null);
-  const view = useRef({ center: NaN, auto: true });
+  const view = useRef({ center: NaN, follow: newFollow() });
   // last drawn grid, so a click can be mapped back to a price
   const grid = useRef({ top: NaN, tick: NaN, rowH: 17, headerH: 20, priceX: [0, 0] as [number, number] });
 
@@ -64,8 +65,12 @@ export function DomLadder({ config: c, setConfig }: PanelProps<DomConfig>) {
     const rows = Math.floor((h - headerH) / rowH);
     const v = view.current;
     const anchor = bucket(isFinite(mid) ? mid : ref, tick, 'floor');
+    if (shouldResume(v.follow)) {
+      v.follow.live = true;
+      v.center = anchor;
+    }
     if (!isFinite(v.center)) v.center = anchor;
-    if (v.auto && Math.abs(anchor - v.center) / tick > rows * 0.3) v.center = anchor;
+    if (v.follow.live && Math.abs(anchor - v.center) / tick > rows * 0.3) v.center = anchor;
     const topPrice = bucket(v.center + Math.floor(rows / 2) * tick, tick, 'round');
 
     // columns
@@ -245,16 +250,13 @@ export function DomLadder({ config: c, setConfig }: PanelProps<DomConfig>) {
           Δ
         </Chip>
         <Spacer />
-        <Chip
-          active={view.current.auto}
-          onClick={() => {
-            view.current.auto = true;
+        <LiveChip
+          follow={view.current.follow}
+          onLive={() => {
+            view.current.follow.live = true;
             view.current.center = NaN;
           }}
-          title="Re-centre and auto-follow"
-        >
-          ⌖ centre
-        </Chip>
+        />
       </Toolbar>
       <Canvas
         draw={draw}
@@ -272,11 +274,11 @@ export function DomLadder({ config: c, setConfig }: PanelProps<DomConfig>) {
         onWheel={(e) => {
           const lp = hub().primary.lastPrice();
           const tick = baseTick(isFinite(lp) ? lp : 1) * c.tickMult;
-          view.current.auto = false;
+          pause(view.current.follow);
           view.current.center += (e.deltaY > 0 ? -3 : 3) * tick;
         }}
         onDoubleClick={() => {
-          view.current.auto = true;
+          view.current.follow.live = true;
           view.current.center = NaN;
         }}
       />

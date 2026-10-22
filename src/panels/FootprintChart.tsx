@@ -7,7 +7,8 @@ import { bucket } from '../core/orderbook';
 import { INTERVALS, TIME_RANGES } from '../core/types';
 import { hub } from '../market/hub';
 import { Canvas, font, label, line, type DrawContext, type PointerState, mask } from '../ui/canvas';
-import { Check, Chip, NumberInput, Popover, Select, Spacer, Toolbar, useHubVersion, ZoomControls, type PanelProps } from '../ui/controls';
+import { Check, Chip, LiveChip, NumberInput, Popover, Select, Spacer, Toolbar, useHubVersion, ZoomControls, type PanelProps } from '../ui/controls';
+import { hovered, newFollow, pause, shouldResume, type Follow } from '../ui/follow';
 import { rgba } from '../ui/theme';
 import { HeatmapRaster } from './shared/heatmapRender';
 import { useKlines } from './shared/useKlines';
@@ -78,9 +79,18 @@ interface View {
   /** candles scrolled back from the live edge */
   offset: number;
   center: number;
-  autoCenter: boolean;
+  /** follows the market until panned; returns to live by itself (see ui/follow) */
+  follow: Follow;
+  /** glide the live price back to mid-chart (resume, reset) */
+  recenter: boolean;
   /** fit every candle and its price range on the next frame */
   fit?: boolean;
+  lastDraw: number;
+  hoverX: number;
+  hoverY: number;
+  /** where the live price was drawn (px from the top of the plot) and the plot height, for checks */
+  yLast?: number;
+  plotH?: number;
 }
 
 /**
@@ -105,12 +115,16 @@ const TIME_H = 18;
 const RIGHT_PAD = 50;
 
 export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintConfig>) {
-  const view = useRef<View>({ colW: 84, rowH: 16, offset: 0, center: NaN, autoCenter: true });
+  const view = useRef<View>({ colW: 84, rowH: 16, offset: 0, center: NaN, follow: newFollow(), recenter: false, lastDraw: 0, hoverX: -1, hoverY: -1 });
   const builderRef = useRef<FootprintBuilder | null>(null);
   const raster = useMemo(() => new HeatmapRaster(), []);
   const heatCache = useRef({ at: 0, img: null as HTMLCanvasElement | null, norm: 1, normAt: 0, key: '' });
   const pointer = useRef<PointerState | null>(null);
   useHubVersion();
+  // read-only handle for the e2e checks of live follow
+  useEffect(() => {
+    (window as unknown as { __footprintView?: View }).__footprintView = view.current;
+  }, []);
   // tabs saved before the clean design move to its quieter overlay defaults once
   useEffect(() => {
     if (c.design !== 2) setConfig({ design: 2, ovBubbles: false, ovCvd: false });
@@ -160,14 +174,52 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
       }
       v.rowH = Math.max(MIN_ROW, Math.min(48, (plotH * 0.92) / ((hi - lo) / tick + 2)));
       v.center = (hi + lo) / 2;
-      v.autoCenter = false;
       v.offset = 0;
     }
     if (!isFinite(v.center)) v.center = lastPrice;
-    if (v.autoCenter) {
-      const yLast = plotH / 2 - ((lastPrice - v.center) / tick) * v.rowH;
-      if (yLast < plotH * 0.2 || yLast > plotH * 0.8) v.center = lastPrice;
+
+    // ---- live follow: keep the market in view, glide rather than jump ----
+    const nowMs = performance.now();
+    const dt = Math.min(250, v.lastDraw ? nowMs - v.lastDraw : 16);
+    v.lastDraw = nowMs;
+    const pt0 = pointer.current;
+    if (pt0?.inside && (pt0.x !== v.hoverX || pt0.y !== v.hoverY)) {
+      hovered(v.follow, nowMs);
+      v.hoverX = pt0.x;
+      v.hoverY = pt0.y;
     }
+    if (shouldResume(v.follow, nowMs)) {
+      v.follow.live = true;
+      v.recenter = true;
+    }
+    if (v.follow.live) {
+      const glide = 1 - Math.exp(-dt / 140);
+      // back to the live edge
+      v.offset = Math.abs(v.offset) < 0.01 ? 0 : v.offset * (1 - glide);
+      // keep the price (and the live candle) inside the middle of the chart
+      const rows = (p: number) => ((p - v.center) / tick) * v.rowH; // px above mid
+      const yLast = plotH / 2 - rows(lastPrice);
+      const cur = n ? candles[n - 1] : null;
+      let shift = 0; // px to move the view up (+) or down (−)
+      if (v.recenter) shift = plotH / 2 - yLast;
+      else if (yLast < plotH * 0.25) shift = plotH * 0.35 - yLast;
+      else if (yLast > plotH * 0.75) shift = plotH * 0.65 - yLast;
+      else if (cur && (y0(cur.high + tick) < plotH * 0.04 || y0(cur.low) > plotH * 0.96) && (cur.high - cur.low + tick) / tick * v.rowH < plotH * 0.85) {
+        // the live candle's wick is leaving the chart: bring its middle in
+        shift = plotH / 2 - y0((cur.high + cur.low) / 2);
+      }
+      if (shift !== 0) {
+        // moving the centre up moves the price down the screen (y grows)
+        const step = Math.abs(shift) < 1 ? shift : shift * glide;
+        v.center += (step / v.rowH) * tick;
+      }
+      if (v.recenter && Math.abs(shift) < 1) v.recenter = false;
+    }
+    function y0(p: number) {
+      return plotH / 2 - ((p - v.center) / tick) * v.rowH;
+    }
+    v.yLast = y0(lastPrice);
+    v.plotH = plotH;
     const y = (p: number) => plotH / 2 - ((p - v.center) / tick) * v.rowH;
     const priceAt = (yy: number) => v.center + ((plotH / 2 - yy) / v.rowH) * tick;
     // the visible-range profile gets its own lane on the right, clear of the live candle
@@ -641,9 +693,10 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
 
   const onDrag = (dx: number, dy: number) => {
     const v = view.current;
+    pause(v.follow);
+    v.recenter = false;
     v.offset = Math.max(-2, v.offset + dx / v.colW);
     if (Math.abs(dy) > 0) {
-      v.autoCenter = false;
       const H = hub();
       const lp = H.primary.lastPrice();
       const tick = baseTick(isFinite(lp) ? lp : 1) * c.tickMult;
@@ -652,7 +705,10 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
   };
 
   const reset = () => {
-    view.current = { ...view.current, offset: 0, center: NaN, autoCenter: true };
+    const v = view.current;
+    v.offset = 0;
+    v.follow.live = true;
+    v.recenter = true;
   };
 
   return (
@@ -730,6 +786,7 @@ export function FootprintChart({ config: c, setConfig }: PanelProps<FootprintCon
           )}
         </Popover>
         <Spacer />
+        <LiveChip follow={view.current.follow} onLive={reset} />
         <ZoomControls onZoom={zoom} onFit={() => (view.current.fit = true)} />
         <span className="help-dot" title={'Mouse wheel: zoom bars\nShift + wheel (or wheel over the price axis): zoom prices\nCtrl + wheel: zoom the whole chart\nDrag: pan · Double-click: reset view'}>
           ?

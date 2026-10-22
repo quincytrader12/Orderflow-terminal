@@ -12,7 +12,7 @@ The app opens on a black lock screen showing the Novus Ordo emblem, "Welcome to 
 - The desktop process enforces the lock on its own side: API keys, trading, bots, wallets, reports and Telegram stay sealed until it verifies the key. Only public market data and trade recording run before that.
 - Five wrong attempts lock input for 30 s, doubling after each further miss.
 - **Settings → Ledger key** changes the key. It needs the current key, and a new 8-digit key that isn't all one digit or a straight run. The new key is stored as a digest with a fresh random salt, and the built-in key stops working.
-- **⛨ Seal** in the top bar returns to the lock screen immediately. AMT bots keep running while the terminal is sealed.
+- **🔒 Lock** in the top bar takes you straight back to the ENTER LEDGER KEY page — only when you click it. The terminal's panels close (nothing of your accounts stays on screen) and the desktop process seals itself, refusing keys, trading and bot control until the key is entered again; developer tools are blocked while locked. Market data and AMT bots keep running underneath, and the top-left of the lock page shows a live **TERMINAL RUNNING** bar: how long it has been locked, the market feed and how many bots are running. Unlocking is instant.
 - The tests never use the owner's key: each run seeds a throwaway key, so CI needs no secret.
 
 ## Desktop app (Windows .exe)

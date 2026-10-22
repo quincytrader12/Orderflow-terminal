@@ -2,6 +2,7 @@ import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import type { VenueId } from '../core/types';
 import { ADAPTERS } from '../exchanges';
 import { hub } from '../market/hub';
+import { resumeIn, type Follow } from './follow';
 import { VENUE_COLORS } from './theme';
 
 export interface PanelProps<C> {
@@ -68,6 +69,17 @@ export function Chip({ active, onClick, children, title, color }: { active?: boo
   return (
     <button className={`chip ${active ? 'active' : ''}`} onClick={onClick} title={title} style={color && active ? { borderColor: color, color } : undefined}>
       {children}
+    </button>
+  );
+}
+
+/** LIVE while a chart follows the market; PAUSED (with the seconds until it returns) after a pan. Click to go live now. */
+export function LiveChip({ follow, onLive }: { follow: Follow; onLive: () => void }) {
+  useTicker(250);
+  const secs = resumeIn(follow);
+  return (
+    <button className={`chip live-chip ${follow.live ? 'on' : ''}`} onClick={onLive} title={follow.live ? 'Following the market' : 'Paused while you look around — returns to live by itself, or click to go live now'}>
+      {follow.live ? '● LIVE' : `⏸ ${secs}s`}
     </button>
   );
 }

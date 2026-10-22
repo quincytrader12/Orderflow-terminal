@@ -307,8 +307,8 @@ export function TopBar({ onOpen, onFocusChart, onOpenPanel, alertCount, editing,
       </button>
       <ThemeSwatches />
       <FilterSelect />
-      <button className="chip seal" onClick={() => void sealTerminal()} title="Seal the terminal — back to the ledger-key lock screen (bots keep running)">
-        ⛨ <span className="lbl">Seal</span>
+      <button className="chip seal primary-chip" onClick={() => void sealTerminal()} title="Lock the terminal — back to the ENTER LEDGER KEY page. Market data and bots keep running.">
+        🔒 <span className="lbl keep">Lock</span>
       </button>
       <FullscreenButton />
       <button className="chip" onClick={() => onOpen('settings')} title="Settings">
