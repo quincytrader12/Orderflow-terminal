@@ -7,6 +7,7 @@ import { hub, type Feed } from '../market/hub';
 import { useSettings } from '../store/settings';
 import { Select, useHubVersion, useTicker } from '../ui/controls';
 import { VENUE_COLORS } from '../ui/theme';
+import { BotIcon, ConnectIcon, LockIcon } from '../ui/ChromeIcons';
 import { FilterSelect, ThemeSwatches } from '../ui/ThemeControls';
 import { desktop, type CcxtExchangeInfo } from '../desktop/bridge';
 import { useAmtLive } from '../desktop/amt';
@@ -287,11 +288,11 @@ export function TopBar({ onOpen, onFocusChart, onOpenPanel, alertCount, editing,
       <div style={{ flex: 1 }} />
       <SafeModeChip />
       <AlgoKill />
-      <button className="chip primary-chip" onClick={() => onOpenPanel('amt')} title="AMT trading bots: scalp and intraday, paper or live, backtests">
-        🤖 <span className="lbl keep">Bots</span>
+      <button className="chip primary-chip chrome-chip" onClick={() => onOpenPanel('amt')} title="AMT trading bots: scalp and intraday, paper or live, backtests">
+        <BotIcon /> <span className="lbl keep">Bots</span>
       </button>
-      <button className="chip primary-chip" onClick={() => onOpen('keys')} title="Connections: exchange API keys (Binance, Coinbase…), Telegram bot, Solana RPC">
-        🔌 <span className="lbl keep">Connect</span>
+      <button className="chip primary-chip chrome-chip" onClick={() => onOpen('keys')} title="Connections: exchange API keys (Binance, Coinbase…), Telegram bot, Solana RPC">
+        <ConnectIcon /> <span className="lbl keep">Connect</span>
       </button>
       <button className="chip" onClick={() => onOpen('add')} title="Add a panel">
         + <span className="lbl">Panel</span>
@@ -307,8 +308,8 @@ export function TopBar({ onOpen, onFocusChart, onOpenPanel, alertCount, editing,
       </button>
       <ThemeSwatches />
       <FilterSelect />
-      <button className="chip seal primary-chip" onClick={() => void sealTerminal()} title="Lock the terminal — back to the ENTER LEDGER KEY page. Market data and bots keep running.">
-        🔒 <span className="lbl keep">Lock</span>
+      <button className="chip seal primary-chip chrome-chip" onClick={() => void sealTerminal()} title="Lock the terminal — back to the ENTER LEDGER KEY page. Market data and bots keep running.">
+        <LockIcon /> <span className="lbl keep">Lock</span>
       </button>
       <FullscreenButton />
       <button className="chip" onClick={() => onOpen('settings')} title="Settings">
