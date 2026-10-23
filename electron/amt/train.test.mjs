@@ -1,7 +1,7 @@
 import { Worker } from 'node:worker_threads';
 import { describe, expect, it } from 'vitest';
-import { GROWTH_PRESET, mergeConfig, ORDERFLOW_PRESET } from './engine.mjs';
-import { candidates, ORDERFLOW_SEARCH, pick, SEARCH, searchFor, segmentMetrics, train } from './train.mjs';
+import { ADAPTIVE_PRESET, GROWTH_PRESET, mergeConfig, ORDERFLOW_PRESET } from './engine.mjs';
+import { ADAPTIVE_SEARCH, candidates, ORDERFLOW_SEARCH, pick, SEARCH, searchFor, segmentMetrics, train } from './train.mjs';
 
 /** Deterministic pseudo-random numbers. */
 function rng(seed) {
@@ -105,6 +105,7 @@ describe('order-flow training', () => {
   it('searches the order-flow thresholds for order-flow bots', () => {
     expect(searchFor(mergeConfig(ORDERFLOW_PRESET))).toBe(ORDERFLOW_SEARCH);
     expect(searchFor(mergeConfig(GROWTH_PRESET))).toBe(SEARCH);
+    expect(searchFor(mergeConfig(ADAPTIVE_PRESET))).toBe(ADAPTIVE_SEARCH);
     const c = candidates(mergeConfig(ORDERFLOW_PRESET), 10, 2, ORDERFLOW_SEARCH);
     expect(c).toHaveLength(10);
     for (const x of c.slice(1)) {

@@ -27,7 +27,13 @@
 //   absorption    aggression absorbed at a wall / value edge / swing → reversal
 //   continuation  stacked footprint imbalances retested and held → join
 //   sweep         liquidity pool swept on a burst, then reclaimed → fade
+//
+// adaptive (seconds to minutes; see brain.mjs): every scalp and order-flow
+// trigger above, judged by a confluence score; stops beyond the noise;
+// trades managed on momentum (cut, stall, trail, bank, run); and it learns
+// from what price did after each exit.
 
+import { Brain } from './brain.mjs';
 import { OrderFlow } from './orderflow.mjs';
 
 const MIN = 60_000;
@@ -95,6 +101,19 @@ export const DEFAULT_AMT = {
   wallBandBps: 50,
   ofTargetR: 2,
   ofRegime: true,
+  // adaptive style (the judgement layer)
+  minScore: 1.5,
+  stopNoiseX: 1,
+  stopCostX: 3,
+  maxStopNoise: 4,
+  stallSec: 120,
+  exitMomentum: 0.5,
+  extendMomentum: 0.4,
+  trailNoiseX: 1,
+  watchSec: 180,
+  benchMin: 30,
+  erChop: 0.25,
+  erTrend: 0.5,
   // trade management
   stopBufferBins: 2,
   minRR: 1.5,
@@ -202,6 +221,37 @@ export const ORDERFLOW_PRESET = {
   maxHoldSec: 1200,
   cooldownSec: 180,
   maxTradesPerHour: 6,
+  maxSpreadBps: 3,
+};
+
+/**
+ * The adaptive scalper: every trigger in the terminal, judged before entry,
+ * managed on momentum while in the trade, learning from its exits. Sizes
+ * from the balance like Growth. The fixed breakeven is off: the judgement
+ * layer trails by the noise instead.
+ */
+export const ADAPTIVE_PRESET = {
+  style: 'adaptive',
+  sizing: 'balance',
+  accountUsd: 55,
+  riskPct: 1.5,
+  maxLeverage: 5,
+  dailyLossPct: 6,
+  maxDrawdownPct: 20,
+  lossStreak: 4,
+  pauseMin: 60,
+  warmupMinutes: 20,
+  setups: { fade: true, breakout: true, reentry: true, ibBreakout: false, priorAccept: false, priorReject: false, absorption: true, continuation: true, sweep: true },
+  deltaThreshold: 0.3,
+  intensityMin: 1.5,
+  stopBufferBins: 1,
+  minRR: 1.5,
+  targetCostX: 3,
+  breakevenAtR: 0,
+  trailAtR: 1,
+  maxHoldSec: 900,
+  cooldownSec: 60,
+  maxTradesPerHour: 8,
   maxSpreadBps: 3,
 };
 
@@ -347,7 +397,9 @@ export class AmtEngine {
     this.profile = new RollingProfile(this.cfg.profileMinutes * MIN);
     this.flow = new FlowWindow(600);
     /** order-flow hybrid state (footprint, book, pools), orderflow style only */
-    this.of = this.cfg.style === 'orderflow' ? new OrderFlow(this.cfg) : null;
+    this.of = this.cfg.style === 'orderflow' || this.cfg.style === 'adaptive' ? new OrderFlow(this.cfg) : null;
+    /** judgement layer, adaptive style only */
+    this.brain = this.cfg.style === 'adaptive' ? new Brain(this.cfg) : null;
     this.session = null;
     this.prior = null;
     this.va = null;
@@ -509,6 +561,7 @@ export class AmtEngine {
       this.sessionVaAt = t;
     }
     const out = [];
+    this.brain?.afterExits(p, t);
     if (this.pos && !this.pending) {
       const x = this.manage(p, t);
       if (x) out.push(x);
@@ -517,12 +570,14 @@ export class AmtEngine {
       this.state = 'warmup';
       return out;
     }
-    if (c.style === 'orderflow') {
-      // the auction state still runs: it is the regime filter for the hybrid
-      this.auction(p, t);
+    if (c.style === 'orderflow' || c.style === 'adaptive') {
+      // the auction state still runs: it is the regime filter for the hybrid,
+      // and the adaptive style also trades its scalp events
+      const ev = c.style === 'adaptive' ? (this.reentryEvent(p, t) ?? this.auction(p, t)) : (this.auction(p, t), null);
       const plan = this.of.detect(this, p, t);
-      if (plan && !this.pos && !this.pending) {
-        const e = t - this.lastTradeT > Math.max(c.flowSec * 1000, 30_000) ? this.skip(plan.event, 'market data stale') : this.enter(plan.event, plan, p, t, c.useBook ? this.bookStats() : null);
+      if ((ev || plan) && !this.pos && !this.pending) {
+        const stale = t - this.lastTradeT > Math.max(c.flowSec * 1000, 30_000);
+        const e = stale ? this.skip(ev ?? plan.event, 'market data stale') : ev ? this.setup(ev, p, t) : this.enter(plan.event, plan, p, t, c.useBook ? this.bookStats() : null);
         if (e) out.push(e);
       }
       return out;
@@ -734,14 +789,22 @@ export class AmtEngine {
       target = short ? this.prior.val : this.prior.vah;
       why = `opened ${short ? 'above' : 'below'} prior value and re-accepted it (80% rule)`;
     }
-    return this.enter(ev, { side, stop, target, setup, why }, p, t, book);
+    return this.enter(ev, { side, stop, target, setup, why, targetKind: 'structure' }, p, t, book);
   }
 
   /** Common entry checks (risk gates, costs, R:R, size) → an entry intent. */
-  enter(ev, { side, stop, target, setup, why, wall = null }, p, t, book) {
+  enter(ev, plan, p, t, book) {
     const c = this.cfg;
+    let { side, stop, target, setup, why } = plan;
+    const wall = plan.wall ?? null;
     const gate = this.gate(side, book);
     if (gate) return this.skip(ev, gate);
+    if (this.brain) {
+      // the judgement layer: evidence score, stop beyond the noise, target that still pays
+      const v = this.brain.review(this, plan, p, t, book);
+      if (v.skip) return this.skip(ev, v.skip);
+      ({ stop, target, why } = v);
+    }
     const dir = dirOf(side);
     const risk = (p - stop) * dir;
     const reward = (target - p) * dir;
@@ -804,7 +867,7 @@ export class AmtEngine {
     const c = this.cfg;
     const pos = this.pos;
     const dir = dirOf(pos.side);
-    if (c.breakevenAtR > 0 && !pos.be && (p - pos.entry) * dir >= c.breakevenAtR * pos.risk) {
+    if (!this.brain && c.breakevenAtR > 0 && !pos.be && (p - pos.entry) * dir >= c.breakevenAtR * pos.risk) {
       // move the stop to entry plus round-trip costs — only once price is beyond that level
       const be = pos.entry * (1 + (dir * 2 * (c.feeBps + c.slippageBps)) / 1e4);
       if ((p - be) * dir > 0 && (be - pos.stop) * dir > 0) {
@@ -819,8 +882,12 @@ export class AmtEngine {
       pos.trailed = true;
     }
     let reason = null;
+    // the judgement layer reads momentum: cut, stall, trail, bank, or run past the target
+    if (this.brain) reason = this.brain.manage(this, pos, p, t);
     // the wall the trade leaned on was pulled: the reason for the trade is gone
-    if (pos.wall && this.of && this.of.book.pulledSince(pos.wall, pos.t)) reason = 'wall pulled';
+    if (reason) {
+      /* decided above */
+    } else if (pos.wall && this.of && this.of.book.pulledSince(pos.wall, pos.t)) reason = 'wall pulled';
     else if ((p - pos.stop) * dir <= 0) reason = pos.trailed ? 'trail' : pos.be ? 'breakeven' : 'stop';
     else if ((p - pos.target) * dir >= 0) reason = 'target';
     else if (t - pos.t >= c.maxHoldSec * 1000) reason = 'time';
@@ -839,7 +906,7 @@ export class AmtEngine {
     this.pending = null;
     if (pd.kind === 'entry') {
       // stop/target keep their distance if the fill slipped
-      this.pos = { side: pd.side, entry: price, qty, stop: pd.stop, target: pd.target, setup: pd.setup, why: pd.why, wall: pd.wall ?? null, t, fees: fee, risk: Math.abs(price - pd.stop), be: false };
+      this.pos = { side: pd.side, entry: price, qty, stop: pd.stop, target: pd.target, stop0: pd.stop, target0: pd.target, setup: pd.setup, why: pd.why, wall: pd.wall ?? null, t, fees: fee, risk: Math.abs(price - pd.stop), be: false };
       this.entryTimes.push(t);
       if (this.session) this.session.trades++;
       return;
@@ -849,9 +916,10 @@ export class AmtEngine {
     const dir = dirOf(pos.side);
     const fees = pos.fees + fee;
     const pnl = (price - pos.entry) * pos.qty * dir - fees;
-    const trade = { side: pos.side, setup: pos.setup, entry: pos.entry, exit: price, qty: pos.qty, pnl, fees, opened: pos.t, closed: t, reason: pd.reason, why: pos.why };
+    const trade = { side: pos.side, setup: pos.setup, entry: pos.entry, exit: price, qty: pos.qty, pnl, fees, opened: pos.t, closed: t, reason: pd.reason, why: pos.why, risk: pos.risk, stop0: pos.stop0, target0: pos.target0 };
     this.pos = null;
     this.record(trade);
+    this.brain?.closed(trade);
   }
 
   /** The executor could not fill the pending intent. */
@@ -954,6 +1022,7 @@ export class AmtEngine {
       trades: this.trades.slice(-20),
       profile,
       orderflow: this.of ? this.of.snapshot(this.now) : null,
+      brain: this.brain ? this.brain.snapshot(this, this.now, this.pos) : null,
     };
   }
 }

@@ -362,6 +362,23 @@ try {
   await page.click('.amt .algo-switch');
   await page.waitForSelector('.amt .algo-switch:not(.on)');
 
+  step('adaptive scalper: judgement settings, reasoning read-out');
+  await page.click('.amt .toolbar button:text-is("Settings")');
+  await page.click('.amt-settings .seg button:text-is("Adaptive scalper")');
+  for (const name of ['Responsive fade', 'Absorption reversal', 'Sweep & reclaim']) await page.waitForSelector(`.amt-settings :text("${name}")`);
+  if (!(await page.locator('.amt-settings details[open]').count())) await page.click('.amt-settings summary:text-is("Advanced AMT parameters")');
+  await page.waitForSelector('.amt-settings .section-title:text-is("Judgement")');
+  await page.click('.amt-settings button:text-is("Save")');
+  const adBot = (await page.evaluate(() => window.novus.amt.list()))[0];
+  expect(adBot.params.style === 'adaptive' && adBot.params.setups.fade && adBot.params.setups.sweep && adBot.params.breakevenAtR === 0, 'adaptive bot saved');
+  await page.click('.amt .toolbar button:text-is("Monitor")');
+  await page.click('.amt .algo-switch');
+  await page.waitForSelector('.amt .algo-switch.on');
+  await page.waitForSelector('.amt-cards :text("Stop width")', { timeout: 10_000 });
+  await page.screenshot({ path: `${OUT}desktop-amt-adaptive.png` });
+  await page.click('.amt .algo-switch');
+  await page.waitForSelector('.amt .algo-switch:not(.on)');
+
   step('every panel has a close ×');
   const tabCount = await page.locator('.flexlayout__tab_button').count();
   const closers = await page.locator('.flexlayout__tab_button .flexlayout__tab_button_trailing').count();

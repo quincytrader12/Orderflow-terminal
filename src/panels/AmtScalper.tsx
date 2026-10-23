@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { fmtNum, fmtPrice, fmtTime } from '../core/format';
 import { AMT_STATE_LABEL, onAmtEvent, useAmtBots, useAmtLive } from '../desktop/amt';
-import { desktop, DesktopOnlyError, type AmtBacktest, type AmtBot, type AmtBotInput, type AmtEvent, type AmtOrderFlow, type AmtParams, type AmtSnapshot, type AmtTrainResult, type AmtTrainSegment, type CcxtExchangeInfo } from '../desktop/bridge';
+import { desktop, DesktopOnlyError, type AmtBacktest, type AmtBot, type AmtBotInput, type AmtEvent, type AmtBrain, type AmtOrderFlow, type AmtParams, type AmtSnapshot, type AmtTrainResult, type AmtTrainSegment, type CcxtExchangeInfo } from '../desktop/bridge';
 import { fetchJson } from '../exchanges/ws';
 import { yahooChart } from '../shared/yahoo';
 import { pickSymbol, unifiedCandidates } from '../desktop/trading';
@@ -87,7 +87,9 @@ type Style = AmtParams['style'];
 /** What the style chips show: the engine styles plus the small-account growth preset. */
 type Preset = Style | 'growth';
 const presetOf = (p: AmtParams): Preset => (p.sizing === 'balance' && p.style === 'scalp' ? 'growth' : p.style);
-const PRESET_NAME: Record<Preset, string> = { scalp: 'Scalp', intraday: 'Intraday', growth: 'Growth (small account)', orderflow: 'Order-flow hybrid' };
+const PRESET_NAME: Record<Preset, string> = { scalp: 'Scalp', intraday: 'Intraday', growth: 'Growth (small account)', orderflow: 'Order-flow hybrid', adaptive: 'Adaptive scalper' };
+const ADAPTIVE_TEXT =
+  'The terminal’s most complete bot: every scalp and order-flow trigger, judged by a confluence score before it trades. Stops go beyond the one-minute noise (smaller size, same money at risk). In a trade it reads momentum every second — cuts trades the flow turns against, leaves ones that stall, trails winners without snapping to breakeven, and lets them run past the target while momentum lasts. After each exit it watches price and learns: wider stops after noise stop-outs, more patience after early exits that would have worked, a bench for setups that keep losing. It explains every decision in the activity log. Sizes from the balance like Growth.';
 const ORDERFLOW_TEXT =
   'Reads the tape, the footprint, the order book and the liquidity map like an order-flow trader, and runs three setups in one bot — the market decides which fires. Sizes from the balance like Growth (1.5 % risk, pause after 3 losses, hard stop at a 20 % drawdown). Book checks (order-flow imbalance, queue, walls, spoofs) apply live; backtests and training test the trade-based core.';
 const GROWTH_TEXT =
@@ -105,6 +107,14 @@ const SETUPS: Record<Style, [keyof AmtParams['setups'], string, string][]> = {
     ['priorReject', 'Prior-value rejection', 'Probe beyond yesterday’s value fails → responsive trade back to prior POC'],
     ['reentry', '80% rule', 'Session opens outside prior value, re-enters and holds → trade to the far edge'],
   ],
+  adaptive: [
+    ['fade', 'Responsive fade', 'Rejected probe of VAH/VAL → back to POC'],
+    ['breakout', 'Initiative breakout', 'Accepted outside value with strong delta → the extension'],
+    ['reentry', '80% rule', 'Re-accepted prior value → the far edge'],
+    ['absorption', 'Absorption reversal', 'Aggression absorbed at a wall / value edge / pool, then delta flips'],
+    ['continuation', 'Imbalance continuation', 'Stacked footprint imbalances retested and held'],
+    ['sweep', 'Sweep & reclaim', 'A liquidity pool run on a burst and reclaimed'],
+  ],
   orderflow: [
     ['absorption', 'Absorption reversal', 'Heavy aggression into a wall / value edge / swing that does not move price, then delta flips → trade the reversal; exits if the wall is pulled'],
     ['continuation', 'Imbalance continuation', 'Stacked footprint imbalances on initiative volume, retested and held with delta and OFI → join toward the next liquidity'],
@@ -116,7 +126,24 @@ const STYLE_TEXT: Record<Style, string> = {
   scalp: 'Seconds to minutes. Rolling value area, order-flow confirmation, many small trades.',
   intraday: 'Hours. Session structure (initial balance, prior-day value), wider stops, at most a few trades a session, trailing stop, flat before the session closes.',
   orderflow: ORDERFLOW_TEXT,
+  adaptive: ADAPTIVE_TEXT,
 };
+
+const ADAPTIVE_FIELDS: [NumKey, string, string][] = [
+  ['minScore', 'Evidence needed (score)', 'Delta, volume, OFI, queue, regime, location and recent form add up; below this no trade'],
+  ['stopNoiseX', 'Stop beyond noise ×', 'Starting stop width in one-minute ranges (the bot widens it after noise stop-outs)'],
+  ['stopCostX', 'Stop vs fees ×', 'The stop is at least this many times the round-trip fees + slippage'],
+  ['maxStopNoise', 'Max stop (× noise)', 'Pass on trades whose stop would be wider than this'],
+  ['stallSec', 'Stall time (s)', 'Out if a trade has not made +0.5R by then and momentum is flat'],
+  ['exitMomentum', 'Cut at momentum', 'A losing trade is cut when momentum stays below −this for 5 s'],
+  ['extendMomentum', 'Run past target at', 'At the target, momentum above this lets the trade run'],
+  ['trailAtR', 'Trail from (R)', 'Start trailing once the trade has been this far in profit'],
+  ['trailNoiseX', 'Trail distance (× noise)', 'Trailing stop distance behind the best price'],
+  ['watchSec', 'Watch after exit (s)', 'How long it follows price after an exit to learn from it'],
+  ['benchMin', 'Bench a losing setup (min)', 'A setup that lost 2.5R over its last 4 trades sits out this long'],
+  ['erChop', 'Rotation below (efficiency)', 'Kaufman efficiency ratio of the last 15 minutes: below this the market is rotating'],
+  ['erTrend', 'Trend above (efficiency)', 'Above this it is trending'],
+];
 
 const ORDERFLOW_FIELDS: [string, [NumKey, string, string][]][] = [
   [
@@ -261,7 +288,7 @@ export function AmtScalper({ config: c, setConfig }: PanelProps<AmtConfig>) {
   return (
     <div className="panel amt">
       <Toolbar>
-        <Select value={c.botId} options={[{ value: '', label: bots.length ? 'Choose bot…' : 'No bots yet' }, ...bots.map((b) => ({ value: b.id, label: `${b.running ? '● ' : ''}${b.name}${presetOf(b.params) === 'growth' ? ' · growth' : b.params.style === 'intraday' ? ' · intraday' : b.params.style === 'orderflow' ? ' · order flow' : ''}` }))]} onChange={(botId) => setConfig({ botId })} width={150} />
+        <Select value={c.botId} options={[{ value: '', label: bots.length ? 'Choose bot…' : 'No bots yet' }, ...bots.map((b) => ({ value: b.id, label: `${b.running ? '● ' : ''}${b.name}${presetOf(b.params) === 'growth' ? ' · growth' : b.params.style === 'intraday' ? ' · intraday' : b.params.style === 'orderflow' ? ' · order flow' : b.params.style === 'adaptive' ? ' · adaptive' : ''}` }))]} onChange={(botId) => setConfig({ botId })} width={150} />
         <button className="chip" onClick={() => void create()} title="New AMT bot">
           + New
         </button>
@@ -328,7 +355,7 @@ function Intro({ onCreate }: { onCreate: () => void }) {
         The bot builds a rolling volume profile (POC and the 70% value area), tracks whether price is in <b>balance</b> inside value, <b>probing</b> outside it, or has been <b>accepted</b> outside it, and
         waits for order flow — aggressor delta, volume intensity and the order book — to agree before it trades:
       </p>
-      {(['scalp', 'intraday', 'orderflow'] as Style[]).map((st) => (
+      {(['adaptive', 'scalp', 'intraday', 'orderflow'] as Style[]).map((st) => (
         <div key={st}>
           <b>{PRESET_NAME[st]}</b> <span className="muted">— {STYLE_TEXT[st]}</span>
           <ul>
@@ -499,7 +526,7 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
 
       <div className="section-title">Style</div>
       <div className="seg">
-        {(['scalp', 'intraday', 'growth', 'orderflow'] as Preset[]).map((st) => (
+        {(['adaptive', 'scalp', 'intraday', 'growth', 'orderflow'] as Preset[]).map((st) => (
           <button
             key={st}
             type="button"
@@ -509,7 +536,7 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
               // load the preset but keep the owner's cost settings, and their
               // fixed-$ risk unless the preset sizes from the balance
               const keep = { riskUsd: P.riskUsd, maxPositionUsd: P.maxPositionUsd, maxDailyLossUsd: P.maxDailyLossUsd, allowShort: P.allowShort, useBook: P.useBook, feeBps: P.feeBps, slippageBps: P.slippageBps };
-              setD({ ...d, params: { ...presets[st], ...keep, ...(st === 'growth' || st === 'orderflow' ? { maxPositionUsd: presets[st].maxPositionUsd } : {}) } });
+              setD({ ...d, params: { ...presets[st], ...keep, ...(st === 'growth' || st === 'orderflow' || st === 'adaptive' ? { maxPositionUsd: presets[st].maxPositionUsd } : {}) } });
             }}
           >
             {PRESET_NAME[st]}
@@ -560,7 +587,13 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
             <div className="amt-grid">{INTRADAY_FIELDS.map(([k, l, h]) => num(k, l, h))}</div>
           </div>
         )}
-        {P.style === 'orderflow' && (
+        {P.style === 'adaptive' && (
+          <div>
+            <div className="section-title">Judgement</div>
+            <div className="amt-grid">{ADAPTIVE_FIELDS.map(([k, l, h]) => num(k, l, h))}</div>
+          </div>
+        )}
+        {(P.style === 'orderflow' || P.style === 'adaptive') && (
           <>
             {ORDERFLOW_FIELDS.map(([group, fields]) => (
               <div key={group}>
@@ -599,6 +632,21 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
         </button>
       </div>
     </fieldset>
+  );
+}
+
+/** The adaptive scalper's state of mind: noise, regime, how it has adapted, momentum in the trade. */
+function BrainStats({ br, p }: { br: AmtBrain; p: number }) {
+  const regime = br.regime && br.regime.kind !== 'unknown' ? `${br.regime.kind === 'trend' ? `trend ${br.regime.dir > 0 ? 'up' : 'down'}` : br.regime.kind} (${fmtNum(br.regime.er ?? 0, 2)})` : 'reading…';
+  return (
+    <>
+      <Stat label="Market" value={regime} />
+      <Stat label="1-min noise" value={br.noise === null ? '—' : `${fmtNum((br.noise / p) * 1e4, 1)} bps`} />
+      <Stat label="Stop width" value={`${fmtNum(br.noiseX, 2)}× noise`} />
+      <Stat label="Patience" value={`${fmtNum(br.patience, 2)}×`} />
+      {br.momentum !== null && <Stat label="Momentum" value={fmtNum(br.momentum, 2)} tone={br.momentum} />}
+      {br.benched.length > 0 && <Stat label="Benched" value={br.benched.map((b) => `${b.setup} ${b.minutes}m`).join(' · ')} />}
+    </>
   );
 }
 
@@ -656,6 +704,7 @@ function Monitor({ bot, snap, running, events }: { bot: AmtBot; snap: AmtSnapsho
             <Stat label="Intensity" value={s.flow?.intensity ? `${fmtNum(s.flow.intensity, 1)}×` : '—'} />
             <Stat label="Book imb." value={s.book ? fmtNum(s.book.imbalance, 2) : '—'} tone={s.book?.imbalance ?? 0} />
             <Stat label="Prior value" value={s.prior ? `${fmtPrice(s.prior.val)}–${fmtPrice(s.prior.vah)}` : 'after 1 session'} />
+            {s.brain && <BrainStats br={s.brain} p={s.last} />}
             {s.orderflow && <OrderFlowStats of={s.orderflow} />}
             {s.style === 'intraday' && s.session && (
               <>
@@ -678,6 +727,19 @@ function Monitor({ bot, snap, running, events }: { bot: AmtBot; snap: AmtSnapsho
             </div>
           ) : (
             <div className="muted amt-hint">{s.pending ? `Order ${s.pending} in flight…` : s.lastSkip ? `Last setup skipped (${s.lastSkip.event}): ${s.lastSkip.reason}` : 'Flat — waiting for a setup.'}</div>
+          )}
+          {s.brain && s.brain.thoughts.length > 0 && (
+            <div className="amt-thoughts">
+              <div className="section-title">Reasoning</div>
+              {[...s.brain.thoughts]
+                .reverse()
+                .slice(0, 6)
+                .map((th, i) => (
+                  <div key={i} className="amt-thought">
+                    <span className="muted mono">{fmtTime(th.t)}</span> {th.text}
+                  </div>
+                ))}
+            </div>
           )}
           {stats && (
             <div className="amt-cards">
@@ -987,7 +1049,11 @@ function Train({ bot, locked, onApplied }: { bot: AmtBot; locked: boolean; onApp
                     <td rowSpan={2} className="mono amt-train-params" title={JSON.stringify(l.params)}>
                       {l.base ? 'current' : `#${i + 1}`}
                       <div className="muted">
-                        {bot.params.style === 'orderflow'
+                        {bot.params.style === 'adaptive'
+                          ? Object.entries(l.params)
+                              .map(([k, v]) => `${k} ${v}`)
+                              .join(' · ')
+                          : bot.params.style === 'orderflow'
                           ? `abs ${l.params.absorbX}×/Δ${l.params.absorbDelta} · flip ${l.params.flipDelta} · imb ${l.params.imbalanceRatio}:1×${l.params.stackMin} · sweep ${l.params.sweepMinBps}bps/${l.params.sweepBurstX}× · stop ${l.params.stopBufferBins} · ${l.params.ofTargetR}R · BE ${l.params.breakevenAtR}`
                           : `Δ${l.params.deltaThreshold} · int ${l.params.intensityMin} · RR ${l.params.minRR} · stop ${l.params.stopBufferBins} · prof ${l.params.profileMinutes}m · BE ${l.params.breakevenAtR} · fee× ${l.params.targetCostX}`}
                       </div>

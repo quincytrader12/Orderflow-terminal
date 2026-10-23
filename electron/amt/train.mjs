@@ -36,8 +36,21 @@ export const ORDERFLOW_SEARCH = {
   breakevenAtR: [0, 1, 1.5],
 };
 
+/** The adaptive scalper's search: how much agreement it needs, stop width, patience and trailing. */
+export const ADAPTIVE_SEARCH = {
+  minScore: [1, 1.5, 2, 2.5],
+  stopNoiseX: [0.75, 1, 1.5],
+  stallSec: [60, 120, 240],
+  exitMomentum: [0.35, 0.5, 0.7],
+  trailNoiseX: [0.75, 1, 1.5],
+  deltaThreshold: [0.2, 0.3, 0.4],
+  absorbX: [1.5, 2, 3],
+  sweepBurstX: [1.5, 2, 3],
+  minRR: [1.2, 1.5, 2],
+};
+
 /** What to search for these settings. */
-export const searchFor = (base) => (base?.style === 'orderflow' ? ORDERFLOW_SEARCH : SEARCH);
+export const searchFor = (base) => (base?.style === 'adaptive' ? ADAPTIVE_SEARCH : base?.style === 'orderflow' ? ORDERFLOW_SEARCH : SEARCH);
 
 /** Deterministic pseudo-random numbers (Park–Miller). */
 function rng(seed) {

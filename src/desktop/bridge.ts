@@ -184,7 +184,7 @@ export interface AmtParams {
   acceptSec: number;
   rejectSec: number;
   reentrySec: number;
-  style: 'scalp' | 'intraday' | 'orderflow';
+  style: 'scalp' | 'intraday' | 'orderflow' | 'adaptive';
   setups: { fade: boolean; breakout: boolean; reentry: boolean; ibBreakout: boolean; priorAccept: boolean; priorReject: boolean; absorption: boolean; continuation: boolean; sweep: boolean };
   ibMinutes: number;
   ibAcceptMin: number;
@@ -225,6 +225,19 @@ export interface AmtParams {
   wallBandBps: number;
   ofTargetR: number;
   ofRegime: boolean;
+  // adaptive scalper (judgement layer)
+  minScore: number;
+  stopNoiseX: number;
+  stopCostX: number;
+  maxStopNoise: number;
+  stallSec: number;
+  exitMomentum: number;
+  extendMomentum: number;
+  trailNoiseX: number;
+  watchSec: number;
+  benchMin: number;
+  erChop: number;
+  erTrend: number;
   stopBufferBins: number;
   minRR: number;
   maxHoldSec: number;
@@ -365,6 +378,22 @@ export interface AmtSnapshot {
   profile: [number, number, number][];
   /** order-flow hybrid read-out (orderflow style only) */
   orderflow: AmtOrderFlow | null;
+  /** the adaptive scalper's state of mind (adaptive style only) */
+  brain: AmtBrain | null;
+}
+
+export interface AmtBrain {
+  /** typical one-minute range (price units) */
+  noise: number | null;
+  /** stop width in noise units — widens after noise stop-outs */
+  noiseX: number;
+  /** multiplies the stall time and the momentum needed to cut */
+  patience: number;
+  regime: { kind: 'rotation' | 'trend' | 'mixed' | 'unknown'; er: number | null; dir: number } | null;
+  /** momentum −1…+1 in the open position's direction */
+  momentum: number | null;
+  benched: { setup: string; minutes: number; why: string }[];
+  thoughts: { t: number; text: string }[];
 }
 
 export interface AmtOrderFlow {
@@ -383,7 +412,7 @@ export interface AmtOrderFlow {
 export interface AmtEvent {
   id: string;
   t: number;
-  kind: 'started' | 'stopped' | 'entry' | 'exit' | 'skip' | 'info' | 'warn' | 'error';
+  kind: 'started' | 'stopped' | 'entry' | 'exit' | 'skip' | 'info' | 'warn' | 'error' | 'think';
   text: string;
 }
 
@@ -450,7 +479,7 @@ export interface NovusApi {
   amt: {
     list(): Promise<AmtBot[]>;
     defaults(): Promise<AmtParams>;
-    presets(): Promise<Record<'scalp' | 'intraday' | 'growth' | 'orderflow', AmtParams>>;
+    presets(): Promise<Record<'scalp' | 'intraday' | 'growth' | 'orderflow' | 'adaptive', AmtParams>>;
     save(cfg: AmtBotInput): Promise<string>;
     remove(id: string): Promise<void>;
     start(id: string): Promise<boolean>;

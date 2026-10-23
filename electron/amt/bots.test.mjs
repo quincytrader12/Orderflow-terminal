@@ -127,6 +127,21 @@ describe('BotManager', () => {
     await m.stop(id, { reason: 'test' });
   });
 
+  it('adaptive bots log their reasoning as think events', async () => {
+    const ccxt = fakeCcxt();
+    const m = new BotManager({ ccxt, db, emit: () => undefined, now: () => T0 });
+    expect(m.presets().adaptive).toMatchObject({ style: 'adaptive', sizing: 'balance', breakevenAtR: 0 });
+    const id = m.save({ mode: 'paper', exchangeId: 'binance', symbol: 'BTC/USDT:USDT', params: m.presets().adaptive });
+    await m.start(id);
+    expect(ccxt.subscribe.mock.calls[0][4]).toEqual({ sandbox: false, liquidations: true });
+    const e = m.running.get(id).engine;
+    e.brain.think(T0, 'widening stops: test thought');
+    ccxt.streams.get(`amt-${id}`).emit({ kind: 'trades', trades: [{ t: T0, p: 100, q: 1, s: 'buy' }] });
+    expect(m.eventsFor(id).filter((x) => x.kind === 'think').map((x) => x.text)).toEqual(['widening stops: test thought']);
+    expect(m.snapshot(id).brain).toMatchObject({ noiseX: 1, patience: 1 });
+    await m.stop(id, { reason: 'test' });
+  });
+
   it('trades live through placeOrder with a protective exchange stop, inside the terminal cap', async () => {
     const ccxt = fakeCcxt();
     const m = new BotManager({ ccxt, db, emit: () => {}, now: () => T0 });

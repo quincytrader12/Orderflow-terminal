@@ -204,6 +204,55 @@ as short-horizon predictors; absorption, stacked imbalances and sweeps are
 practitioner patterns without published backtests. Treat every setup as a
 hypothesis — train it, paper-trade it, and only then go live.
 
+## 5c. Adaptive scalper — the bot that reasons
+
+The **Adaptive scalper** is the terminal's most complete bot. It takes every
+trigger the other styles know — responsive fade, initiative breakout, the 80 %
+rule, absorption, imbalance continuation, sweep & reclaim — and puts a layer of
+judgement around them. Every decision is written to the activity log in plain
+words, and the Monitor shows its current reasoning, the market regime, the
+one-minute noise, its stop width and patience, and live momentum in a trade.
+
+**Before a trade — is the evidence there?** Each trigger is scored: delta (the
+last 5 s for reversals, 20 s otherwise), volume, order-flow and queue
+imbalance (live book), the regime (Kaufman efficiency ratio over 15 minutes:
+rotating markets favour fades, trending markets favour going with the trend),
+location against the POC, and the setup's recent results. Below the
+`minScore` bar it passes and says why.
+
+**Where the stop goes.** Beyond the structure *and* beyond the noise: at least
+`stopNoiseX` × the median one-minute range, and at least `stopCostX` × the
+round-trip fees. The size shrinks to keep the same money at risk. If that stop
+would be more than `maxStopNoise` × the noise, or the structure target is then
+under the minimum R:R, it passes — "market too quiet for the fees" is a real
+answer on a small account.
+
+**In the trade — every second.** Momentum (10 s delta, order-flow imbalance,
+15 s price velocity, in the trade's direction) decides:
+
+| Situation | What it does |
+|---|---|
+| losing, momentum ≤ −`exitMomentum` *and* price moving against it for 5 s | cuts it before the stop ("flow turned") — selling into a long that will not move price is absorption, so it holds |
+| no +0.5R within `stallSec` and flat momentum | gets out ("stalled") — scalps that need minutes rarely work |
+| in profit from `trailAtR` | trails the stop `trailNoiseX` × the noise behind the best price, only once that locks in ≥ +0.25R after fees — never a reflex breakeven a wick takes out |
+| ≥ +1R and momentum turns against | banks it ("momentum faded") |
+| at the target with momentum ≥ `extendMomentum` | lets it run one more R at a time, trailing tighter |
+
+**After the trade — learning.** It follows price for `watchSec` after each
+stop-out and early exit:
+
+- a stop-out that came back to the entry was noise; two of the last five →
+  stops widen by 0.25× the noise (up to 2.5×); a real loss eases them back
+- an early exit that went on to the target was impatience; two of the last
+  five → 25 % more patience (up to 2×); one that went on to the stop was a save
+- a setup that lost 2.5R over its last four trades is benched for `benchMin`
+
+The preset sizes from the balance like Growth (1.5 % risk, 5× cap, pause
+after 4 losses, stop for good at −20 %), with the fixed breakeven off.
+Training searches the evidence bar, stop width, stall time, cut momentum,
+trail distance and the main trigger thresholds; the adaptations above also
+run during backtests and training, starting from the trained values.
+
 ## 6. Safety behaviour of live bots
 
 - **Exact sizing.** Live positions are tracked in exchange units (contracts) exactly as filled. Exits and the exchange stop close what was opened.

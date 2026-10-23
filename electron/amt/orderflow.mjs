@@ -479,13 +479,13 @@ export class OrderFlow {
     return null;
   }
 
-  /** Target: the POC when it is far enough, else a fixed multiple of the risk. */
+  /** Target: the structure level (POC, pool) when it is far enough, else a fixed multiple of the risk. */
   targetFor(ctx, dir, entry, stop, pick) {
     const c = this.cfg;
     const risk = Math.abs(entry - stop);
     const min = entry + dir * c.minRR * risk;
-    if (pick !== undefined && (pick - min) * dir >= 0 && Math.abs(pick - entry) <= 6 * risk) return pick;
-    return entry + dir * c.ofTargetR * risk;
+    if (pick !== undefined && (pick - min) * dir >= 0 && Math.abs(pick - entry) <= 6 * risk) return { price: pick, kind: 'structure' };
+    return { price: entry + dir * c.ofTargetR * risk, kind: 'r' };
   }
 
   // ---------- 1. sweep & reclaim ----------
@@ -519,7 +519,7 @@ export class OrderFlow {
       this.sweep = null;
       const stop = s.extreme + s.dir * ctx.buf;
       const poc = e.va?.poc;
-      const target = this.targetFor(ctx, dir, p, stop, poc);
+      const { price: target, kind: targetKind } = this.targetFor(ctx, dir, p, stop, poc);
       const liq = s.liq;
       return {
         event: dir > 0 ? 'sweep-long' : 'sweep-short',
@@ -527,6 +527,7 @@ export class OrderFlow {
         side: dir > 0 ? 'buy' : 'sell',
         stop,
         target,
+        targetKind,
         why: `swept the ${s.level.kind} ${px(s.level.price)} by ${fx(run, 1)} bps on a ${fx(s.burst, 1)}× tape burst${liq > 0 ? ` with $${Math.round(liq).toLocaleString('en-US')} liquidations` : ''}, reclaimed — ${dir > 0 ? 'sellers' : 'buyers'} trapped (Δ ${fx(flip.delta)})`,
       };
     }
@@ -578,13 +579,14 @@ export class OrderFlow {
       if (this.bookAgrees(ctx, a.dir)) return null;
       this.absorb = null;
       const stop = (a.dir > 0 ? Math.min(a.extreme, a.wall?.price ?? Infinity) : Math.max(a.extreme, a.wall?.price ?? -Infinity)) - a.dir * ctx.buf;
-      const target = this.targetFor(ctx, a.dir, p, stop, e.va?.poc);
+      const { price: target, kind: targetKind } = this.targetFor(ctx, a.dir, p, stop, e.va?.poc);
       return {
         event: a.dir > 0 ? 'absorb-long' : 'absorb-short',
         setup: 'absorption',
         side: a.dir > 0 ? 'buy' : 'sell',
         stop,
         target,
+        targetKind,
         wall: a.wall ? { side: a.wall.side, price: a.wall.price } : null,
         why: `${a.dir > 0 ? 'sellers' : 'buyers'} absorbed at ${a.level} (${fx(a.x, 1)}× volume, Δ ${fx(a.delta)}, price held) — ${a.dir > 0 ? 'buyers' : 'sellers'} took over (Δ ${fx(flip.delta)})`,
       };
@@ -683,13 +685,14 @@ export class OrderFlow {
       if (lv.side !== (dir > 0 ? 'high' : 'low') || d < c.minRR * risk) continue;
       if (pool === undefined || d < (pool - p) * dir) pool = lv.price;
     }
-    const target = this.targetFor(ctx, dir, p, stop, pool);
+    const { price: target, kind: targetKind } = this.targetFor(ctx, dir, p, stop, pool);
     return {
       event: dir > 0 ? 'cont-long' : 'cont-short',
       setup: 'continuation',
       side: dir > 0 ? 'buy' : 'sell',
       stop,
       target,
+      targetKind,
       why: `${z.n} stacked ${dir > 0 ? 'buy' : 'sell'} imbalances (${c.imbalanceRatio}:1) on ${fx(z.intensity, 1)}× volume, retested and held — ${dir > 0 ? 'buyers' : 'sellers'} defending (Δ ${fx(flip.delta)})`,
     };
   }
