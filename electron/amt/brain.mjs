@@ -45,14 +45,16 @@ const bps = (d, p) => `${f1((d / p) * 1e4)} bps`;
 
 /** Responsive setups fade the edge; initiative setups go with the move. */
 export const RESPONSIVE = new Set(['fade', 'reentry', 'absorption', 'sweep']);
-export const INITIATIVE = new Set(['breakout', 'continuation']);
+export const INITIATIVE = new Set(['breakout', 'continuation', 'ibBreakout', 'priorAccept']);
 
-const EARLY = new Set(['flow turned', 'stalled']);
+const EARLY = new Set(['flow turned', 'stalled', 'losing steam']);
 
 /** Round-trip cost in bps: maker entry + taker exit with maker orders, taker both ways otherwise. */
 export const roundTripBps = (c) => (c.orderMode === 'maker' ? c.makerFeeBps + c.feeBps + c.slippageBps : 2 * (c.feeBps + c.slippageBps));
 /** seconds of adverse momentum before a losing trade is cut */
 const CUT_SEC = 5;
+/** seconds of fading momentum before a trade that was working is taken off */
+const STEAM_SEC = 3;
 /** the trailing stop only engages once it locks in this much (R, after fees) */
 const LOCK_R = 0.25;
 
@@ -143,6 +145,8 @@ export class Brain {
     const benched = this.bench.get(setup);
     if (benched && t < benched.until) return { skip: `${setup} benched for ${Math.ceil((benched.until - t) / MIN)} more min — ${benched.why}` };
     const { noise, regime } = this.readMarket(e, t);
+    // the evidence score is the adaptive style's own; every managed bot gets the stop placement below
+    const scored = c.style === 'adaptive';
 
     // evidence for and against
     const ev = [];
@@ -171,8 +175,8 @@ export class Brain {
       const avg = form.reduce((a, h) => a + h.R, 0) / form.length;
       add(avg > 0.2 ? 0.5 : avg < -0.3 ? -0.5 : 0, `${setup} lately ${sgn(avg)}R/trade`);
     }
-    const evidence = `score ${f1(score)}: ${ev.join(', ')}`;
-    if (score < c.minScore) return { skip: `not enough agreement (${evidence}; need ${c.minScore})` };
+    const evidence = scored ? ` · score ${f1(score)}: ${ev.join(', ')}` : '';
+    if (scored && score < c.minScore) return { skip: `not enough agreement (${evidence.slice(3)}; need ${c.minScore})` };
 
     // stop: beyond the structure, the noise and the fees
     const costs = (roundTripBps(c) * p) / 1e4;
@@ -195,10 +199,11 @@ export class Brain {
     let target = plan.target;
     const rr = ((target - p) * dir) / risk;
     if (rr < c.minRR) {
-      if (plan.targetKind !== 'r' && plan.targetKind !== undefined) return { skip: `only ${f2(rr)}R to the ${px(target)} target once the stop is outside the noise — not worth it` };
+      // a level price has to get through (POC, value edge) is a reason to pass; a projection is not
+      if (plan.targetKind === 'structure') return { skip: `only ${f2(rr)}R to the ${px(target)} target once the stop is outside the noise — not worth it` };
       target = p + dir * c.ofTargetR * risk;
     }
-    return { stop, target, why: `${plan.why} · ${evidence}${note}`, score };
+    return { stop, target, why: `${plan.why}${evidence}${note}`, score };
   }
 
   // ---------- in the trade ----------
@@ -237,12 +242,21 @@ export class Brain {
       this.think(t, `${pos.setup}: flow turned against the trade (momentum ${sgn(m)} for ${CUT_SEC} s) at ${sgn(r)}R — cutting it before the stop`);
       return 'flow turned';
     }
-    // 2. no follow-through
+    // 2. it was working and is losing steam: take the small win (or scratch it) instead of riding it back to the stop
+    if (pos.peakR >= c.steamAtR && r < 1 && r > -0.15 && m <= -c.steamMomentum / this.patience) pos.fading = (pos.fading ?? 0) + 1;
+    else pos.fading = 0;
+    if (pos.fading >= STEAM_SEC) {
+      const costR = (pos.entry * roundTripBps(c)) / 1e4 / pos.risk;
+      const what = r > costR ? `taking ${sgn(r)}R` : `scratching it near breakeven (${sgn(r)}R)`;
+      this.think(t, `${pos.setup}: was up ${sgn(pos.peakR)}R, now losing steam (momentum ${sgn(m)} for ${STEAM_SEC} s) — ${what} instead of riding it back to the stop`);
+      return 'losing steam';
+    }
+    // 3. no follow-through
     if (held >= c.stallSec * this.patience && pos.peakR < 0.5 && m < 0.15) {
       this.think(t, `${pos.setup}: no follow-through in ${Math.round(held)} s (best ${sgn(pos.peakR)}R, momentum ${sgn(m)}) — a scalp that stalls usually fails, out at ${sgn(r)}R`);
       return 'stalled';
     }
-    // 3. in profit: trail by the noise, bank it when momentum fades
+    // 4. in profit: trail by the noise, bank it when momentum fades
     if (pos.peakR >= c.trailAtR) {
       this.trail(pos, p, noise, dir, t, c.trailNoiseX);
       if (r >= 1 && m <= -0.2) {

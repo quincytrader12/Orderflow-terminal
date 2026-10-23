@@ -100,7 +100,7 @@ const ADAPTIVE_TEXT =
 const ORDERFLOW_TEXT =
   'Reads the tape, the footprint, the order book and the liquidity map like an order-flow trader, and runs three setups in one bot — the market decides which fires. Sizes from the balance like Growth (1.5 % risk, pause after 3 losses, hard stop at a 20 % drawdown). Book checks (order-flow imbalance, queue, walls, spoofs) apply live; backtests and training test the trade-based core.';
 const GROWTH_TEXT =
-  'Compounds a small balance: risks a % of the current balance on A+ scalps only — stricter order-flow confirmation, 2R minimum, targets that clear fees 4×, breakeven at 1R, a pause after 3 losses in a row and a hard stop at a 20 % drawdown. Train it on recorded data before going live.';
+  'Compounds a small balance: risks a % of the current balance on A+ scalps only — stricter order-flow confirmation, 2R minimum, targets that clear fees 4×, the trade manager instead of a fixed breakeven, a pause after 3 losses in a row and a hard stop at a 20 % drawdown. Train it on recorded data before going live.';
 
 const SETUPS: Record<Style, [keyof AmtParams['setups'], string, string][]> = {
   scalp: [
@@ -138,18 +138,26 @@ const STYLE_TEXT: Record<Style, string> = {
 
 const ADAPTIVE_FIELDS: [NumKey, string, string][] = [
   ['minScore', 'Evidence needed (score)', 'Delta, volume, OFI, queue, regime, location and recent form add up; below this no trade'],
+  ['erChop', 'Rotation below (efficiency)', 'Kaufman efficiency ratio of the last 15 minutes: below this the market is rotating'],
+  ['erTrend', 'Trend above (efficiency)', 'Above this it is trending'],
+];
+
+const MANAGER_TEXT =
+  'Reads every open trade each second — delta, order-flow imbalance and price speed in the trade’s direction. A losing trade the flow and price have both turned against is cut early; a trade that was working and loses steam is taken off with a small win or near breakeven; one that stalls is closed; a winner trails a noise-width behind the best price (no reflex breakeven that a wick takes out) and runs past its target while momentum lasts. Stops go beyond the one-minute noise with a smaller size, and after each exit it watches price and adjusts. Every decision is explained in the activity log.';
+
+const MANAGER_FIELDS: [NumKey, string, string][] = [
   ['stopNoiseX', 'Stop beyond noise ×', 'Starting stop width in one-minute ranges (the bot widens it after noise stop-outs)'],
   ['stopCostX', 'Stop vs fees ×', 'The stop is at least this many times the round-trip fees + slippage'],
   ['maxStopNoise', 'Max stop (× noise)', 'Pass on trades whose stop would be wider than this'],
   ['stallSec', 'Stall time (s)', 'Out if a trade has not made +0.5R by then and momentum is flat'],
-  ['exitMomentum', 'Cut at momentum', 'A losing trade is cut when momentum stays below −this for 5 s'],
+  ['exitMomentum', 'Cut a loser at momentum', 'A losing trade is cut when momentum stays below −this (and price moves against it) for 5 s'],
   ['extendMomentum', 'Run past target at', 'At the target, momentum above this lets the trade run'],
   ['trailAtR', 'Trail from (R)', 'Start trailing once the trade has been this far in profit'],
   ['trailNoiseX', 'Trail distance (× noise)', 'Trailing stop distance behind the best price'],
   ['watchSec', 'Watch after exit (s)', 'How long it follows price after an exit to learn from it'],
   ['benchMin', 'Bench a losing setup (min)', 'A setup that lost 2.5R over its last 4 trades sits out this long'],
-  ['erChop', 'Rotation below (efficiency)', 'Kaufman efficiency ratio of the last 15 minutes: below this the market is rotating'],
-  ['erTrend', 'Trend above (efficiency)', 'Above this it is trending'],
+  ['steamAtR', 'Losing steam after (R)', 'A trade that has been this far in profit is taken off when momentum fades'],
+  ['steamMomentum', 'Losing steam at momentum', 'Momentum below −this for 3 s counts as losing steam'],
 ];
 
 const ORDERFLOW_FIELDS: [string, [NumKey, string, string][]][] = [
@@ -579,6 +587,16 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
       ) : (
         <div className="amt-grid">{RISK_FIELDS.map(([k, l, h]) => num(k, l, h))}</div>
       )}
+      {P.style !== 'intraday' && (
+        <>
+          <div className="section-title">Trade manager</div>
+          <Check checked={P.manageTrades || P.style === 'adaptive'} onChange={(manageTrades) => P.style !== 'adaptive' && setP({ manageTrades })}>
+            <b>Manage trades on momentum</b>
+            {P.style === 'adaptive' && <span className="muted"> (always on for this style)</span>}
+          </Check>
+          <div className="muted amt-hint">{P.manageTrades || P.style === 'adaptive' ? MANAGER_TEXT : 'Off: fixed stop, breakeven at the set R, target and time stop only.'}</div>
+        </>
+      )}
       <div className="section-title">Execution</div>
       <div className="seg">
         {(['maker', 'market'] as const).map((m) => (
@@ -589,10 +607,17 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
       </div>
       <div className="muted amt-hint">
         {P.orderMode === 'maker'
-          ? 'Entries rest as post-only limits on the bot’s own side of the book and pay the maker fee. If price leaves without filling it, the bot takes it at market only while the trade still meets every rule from there (R:R, fees, size) — otherwise it lets it go rather than chase. Target, stall and time exits are offered as limits for a few seconds first; stops and every protective exit always go at market.'
+          ? 'Fades, absorption, sweeps and 80%-rule entries rest as post-only limits on the bot’s own side of the book and pay the maker fee. If price leaves without filling it, the bot takes it at market only while the trade still meets every rule from there (R:R, fees, size) — otherwise it lets it go rather than chase. Target, stall and time exits are offered as limits for a few seconds first; stops and every protective exit always go at market.'
           : 'Every order goes at market and pays the taker fee: always filled, at a higher cost.'}
       </div>
-      {P.orderMode === 'maker' && <div className="amt-grid">{MAKER_FIELDS.map(([k, l, h]) => num(k, l, h))}</div>}
+      {P.orderMode === 'maker' && (
+        <>
+          <div className="amt-grid">{MAKER_FIELDS.map(([k, l, h]) => num(k, l, h))}</div>
+          <Check checked={P.makerInitiative} onChange={(makerInitiative) => setP({ makerInitiative })}>
+            Limits on breakout entries too <span className="muted">— off: breakouts and continuations go at market, because price rarely comes back to fill them and missing those runners costs more than the fee saved</span>
+          </Check>
+        </>
+      )}
       <Check checked={P.allowShort} onChange={(allowShort) => setP({ allowShort })}>
         Allow shorts (ignored on spot markets)
       </Check>
@@ -612,6 +637,12 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
           <div>
             <div className="section-title">Judgement</div>
             <div className="amt-grid">{ADAPTIVE_FIELDS.map(([k, l, h]) => num(k, l, h))}</div>
+          </div>
+        )}
+        {P.style !== 'intraday' && (P.manageTrades || P.style === 'adaptive') && (
+          <div>
+            <div className="section-title">Trade manager</div>
+            <div className="amt-grid">{MANAGER_FIELDS.map(([k, l, h]) => num(k, l, h))}</div>
           </div>
         )}
         {(P.style === 'orderflow' || P.style === 'adaptive') && (

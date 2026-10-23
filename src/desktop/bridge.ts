@@ -225,6 +225,10 @@ export interface AmtParams {
   wallBandBps: number;
   ofTargetR: number;
   ofRegime: boolean;
+  /** trade manager (every style but intraday; always on for adaptive) */
+  manageTrades: boolean;
+  steamAtR: number;
+  steamMomentum: number;
   // adaptive scalper (judgement layer)
   minScore: number;
   stopNoiseX: number;
@@ -267,6 +271,8 @@ export interface AmtParams {
   makerWaitSec: number;
   makerChaseR: number;
   exitMakerSec: number;
+  /** also rest limits on breakout-type entries (by default they go at market) */
+  makerInitiative: boolean;
 }
 
 /** Growth, drawdown and score for one part of a training run. */

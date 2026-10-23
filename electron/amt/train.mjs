@@ -49,8 +49,21 @@ export const ADAPTIVE_SEARCH = {
   minRR: [1.2, 1.5, 2],
 };
 
+/** With the trade manager on, the fixed breakeven is unused: search how it cuts and how far its stops sit instead. */
+export const MANAGER_SEARCH = {
+  stopNoiseX: [0.75, 1, 1.5],
+  stallSec: [60, 120, 240],
+  exitMomentum: [0.35, 0.5, 0.7],
+};
+
 /** What to search for these settings. */
-export const searchFor = (base) => (base?.style === 'adaptive' ? ADAPTIVE_SEARCH : base?.style === 'orderflow' ? ORDERFLOW_SEARCH : SEARCH);
+export function searchFor(base) {
+  if (base?.style === 'adaptive') return ADAPTIVE_SEARCH;
+  const space = base?.style === 'orderflow' ? ORDERFLOW_SEARCH : SEARCH;
+  if (!base?.manageTrades || base.style === 'intraday') return space;
+  const { breakevenAtR, ...rest } = space;
+  return { ...rest, ...MANAGER_SEARCH };
+}
 
 /** Deterministic pseudo-random numbers (Park–Miller). */
 function rng(seed) {

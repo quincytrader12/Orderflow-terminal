@@ -33,7 +33,7 @@
 // trades managed on momentum (cut, stall, trail, bank, run); and it learns
 // from what price did after each exit.
 
-import { Brain, roundTripBps } from './brain.mjs';
+import { Brain, INITIATIVE, roundTripBps } from './brain.mjs';
 import { OrderFlow } from './orderflow.mjs';
 
 const MIN = 60_000;
@@ -101,6 +101,12 @@ export const DEFAULT_AMT = {
   wallBandBps: 50,
   ofTargetR: 2,
   ofRegime: true,
+  // trade manager (every style but intraday; always on for adaptive): stops
+  // beyond the noise, cut losers early, take a fading winner, exit stalls,
+  // trail without a reflex breakeven, learn from the exits
+  manageTrades: false,
+  steamAtR: 0.5,
+  steamMomentum: 0.25,
   // adaptive style (the judgement layer)
   minScore: 1.5,
   stopNoiseX: 1,
@@ -157,11 +163,16 @@ export const DEFAULT_AMT = {
   // pays 1.5R at market, and missing the trades that leave at once is how
   // limit entries hurt quality (filled on the losers, missed on the runners)
   makerChaseR: 0.15,
+  // breakouts rarely come back to a resting bid: by default they enter at market
+  makerInitiative: false,
   exitMakerSec: 6,
 };
 
 /** Exits that are not protecting capital may wait a few seconds for a maker fill. */
 const PATIENT_EXITS = new Set(['target', 'stalled', 'time']);
+
+/** The Scalp chip: the defaults, with the trade manager and limit-first execution. */
+export const SCALP_PRESET = { style: 'scalp', manageTrades: true, orderMode: 'maker' };
 
 /** Starting values when a bot is switched to the intraday style. */
 export const INTRADAY_PRESET = {
@@ -206,6 +217,7 @@ export const GROWTH_PRESET = {
   maxTradesPerHour: 4,
   maxSpreadBps: 3,
   orderMode: 'maker',
+  manageTrades: true,
 };
 
 /**
@@ -237,6 +249,7 @@ export const ORDERFLOW_PRESET = {
   maxTradesPerHour: 6,
   maxSpreadBps: 3,
   orderMode: 'maker',
+  manageTrades: true,
 };
 
 /**
@@ -269,6 +282,7 @@ export const ADAPTIVE_PRESET = {
   maxTradesPerHour: 8,
   maxSpreadBps: 3,
   orderMode: 'maker',
+  manageTrades: true,
 };
 
 export function mergeConfig(cfg = {}) {
@@ -413,9 +427,12 @@ export class AmtEngine {
     this.profile = new RollingProfile(this.cfg.profileMinutes * MIN);
     this.flow = new FlowWindow(600);
     /** order-flow hybrid state (footprint, book, pools), orderflow style only */
-    this.of = this.cfg.style === 'orderflow' || this.cfg.style === 'adaptive' ? new OrderFlow(this.cfg) : null;
-    /** judgement layer, adaptive style only */
-    this.brain = this.cfg.style === 'adaptive' ? new Brain(this.cfg) : null;
+    const st = this.cfg.style;
+    /** trade manager: adaptive always; every other style but intraday when switched on */
+    const managed = st === 'adaptive' || (this.cfg.manageTrades && st !== 'intraday');
+    // the manager reads the tape and footprint bars, so managed bots keep them too
+    this.of = st === 'orderflow' || st === 'adaptive' || managed ? new OrderFlow(this.cfg) : null;
+    this.brain = managed ? new Brain(this.cfg) : null;
     this.session = null;
     this.prior = null;
     this.va = null;
@@ -812,7 +829,8 @@ export class AmtEngine {
       target = short ? this.prior.val : this.prior.vah;
       why = `opened ${short ? 'above' : 'below'} prior value and re-accepted it (80% rule)`;
     }
-    return this.enter(ev, { side, stop, target, setup, why, targetKind: 'structure' }, p, t, book);
+    // breakout targets are projections (a measured move), the others are levels price has to reach
+    return this.enter(ev, { side, stop, target, setup, why, targetKind: INITIATIVE.has(setup) ? 'projection' : 'structure' }, p, t, book);
   }
 
   /** Common entry checks (risk gates, costs, R:R, size) → an entry intent. */
@@ -823,7 +841,7 @@ export class AmtEngine {
     const gate = this.gate(side, book);
     if (gate) return this.skip(ev, gate);
     if (this.brain) {
-      // the judgement layer: evidence score, stop beyond the noise, target that still pays
+      // the trade manager: stop beyond the noise, target that still pays (adaptive: plus the evidence score)
       const v = this.brain.review(this, plan, p, t, book);
       if (v.skip) return this.skip(ev, v.skip);
       ({ stop, target, why } = v);
@@ -841,8 +859,9 @@ export class AmtEngine {
     if (size.skip) return this.skip(ev, size.skip);
     const qty = size.qty;
     this.lastSignal = { t, event: ev, setup, side, price: p, stop, target, why };
-    if (c.orderMode === 'maker') {
+    if (c.orderMode === 'maker' && (c.makerInitiative || !INITIATIVE.has(setup))) {
       // join the queue on our own side of the book: post-only, maker fee
+      // (responsive trades — fades, absorption, sweeps — usually trade back to it)
       const limit = this.makerPrice(side, p);
       this.pending = { kind: 'entry', order: 'limit', limit, qty, until: t + c.makerWaitSec * 1000, side, stop, target, setup, why, wall, t };
       return { type: 'enter', order: 'limit', side, qty, price: limit, stop, target, setup, reason: why };

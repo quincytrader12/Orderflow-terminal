@@ -302,8 +302,10 @@ try {
   await page.locator('.amt-balance input').fill('27');
   const preview = await page.locator('.amt-preview').innerText();
   expect(/\$27\.00/.test(preview) && /fees/.test(preview), `sizing preview explains a $27 trade (${preview.slice(0, 80)}…)`);
+  expect((await page.locator('.amt-settings :text("Manage trades on momentum")').count()) === 1, 'trade manager offered on the growth bot');
   await page.click('.amt-settings button:text-is("Save")');
   const growthBot = (await page.evaluate(() => window.novus.amt.list()))[0];
+  expect(growthBot.params.manageTrades === true, 'growth bot saved with the trade manager on');
   expect(growthBot.params.sizing === 'balance' && growthBot.params.accountUsd === 27 && growthBot.params.riskPct === 2, 'growth preset saved with balance sizing');
   const seeded = await page.evaluate(() => {
     // repeating auctions: balance, a failed probe above value, then rotation or a rally

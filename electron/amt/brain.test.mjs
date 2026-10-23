@@ -88,6 +88,24 @@ describe('adaptive scalper — entries', () => {
   });
 });
 
+describe('trade manager on every style but intraday', () => {
+  it('runs on scalp, growth and order-flow bots; intraday keeps its own management', () => {
+    for (const style of ['scalp', 'orderflow']) expect(new AmtEngine({ style, manageTrades: true }).brain).not.toBeNull();
+    expect(new AmtEngine({ style: 'scalp' }).brain).toBeNull();
+    expect(new AmtEngine({ style: 'intraday', manageTrades: true }).brain).toBeNull();
+  });
+
+  it('places the stop beyond the noise for every managed style, but scores evidence only on the adaptive one', () => {
+    const e = warm({ style: 'scalp' });
+    const plan = { side: 'buy', setup: 'fade', stop: 100.17, target: 100.9, why: 'VAL probe rejected', targetKind: 'structure' };
+    const v = e.brain.review(e, plan, 100.2, e.now, null);
+    expect(v.skip).toBeUndefined();
+    expect(v.stop).toBeLessThan(100.17);
+    expect(v.why).toMatch(/^VAL probe rejected · stop moved from 100.17/);
+    expect(v.why).not.toMatch(/score/);
+  });
+});
+
 describe('adaptive scalper — in the trade', () => {
   it('cuts a trade when the flow turns against it, well before the stop', () => {
     const e = warm();
@@ -137,17 +155,30 @@ describe('adaptive scalper — in the trade', () => {
     expect((tr.exit - tr.entry) / (tr.entry - tr.stop0)).toBeGreaterThan(1); // beyond the original 1R target
   });
 
-  it('does not snap the stop to breakeven at 1R, where a normal wick would take it', () => {
+  it('does not snap the stop to breakeven at 1R: a slow two-sided drift back keeps the trade', () => {
     const e = warm();
     const t1 = T0 + 10 * MIN;
     const risk = e.brain.readMarket(e, e.now).noise; // a stop one noise-width wide
     long(e, 100.2, 100.2 - risk, 101);
-    // +1.1R, a pause, then a normal wick back toward the entry
     run(e, path(t1, 10, 100.2, Number((100.2 + 1.1 * risk).toFixed(2)), 'buy', 0.3));
-    run(e, balance(t1 + 10_000, 10, Number((100.2 + 1.05 * risk).toFixed(2)), 0.01, rng(4)));
-    run(e, path(t1 + 20_000, 6, Number((100.2 + risk).toFixed(2)), 100.23, 'sell', 0.1));
+    // drifts back over a minute with both sides trading
+    const back = path(t1 + 10_000, 60, Number((100.2 + 1.05 * risk).toFixed(2)), 100.24, 'buy', 0.1).map((x, i) => ({ ...x, s: i % 2 ? 'sell' : 'buy' }));
+    run(e, back);
     expect(e.pos).not.toBeNull();
     expect(e.pos.stop).toBeCloseTo(100.2 - risk, 6);
+  });
+
+  it('takes a trade off near breakeven when it was working and loses steam on selling', () => {
+    const e = warm();
+    const t1 = T0 + 10 * MIN;
+    const risk = e.brain.readMarket(e, e.now).noise;
+    long(e, 100.2, 100.2 - risk, 101);
+    run(e, path(t1, 10, 100.2, Number((100.2 + 0.9 * risk).toFixed(2)), 'buy', 0.3));
+    run(e, path(t1 + 10_000, 8, Number((100.2 + 0.85 * risk).toFixed(2)), 100.19, 'sell', 0.6));
+    const tr = e.trades.at(-1);
+    expect(tr.reason).toBe('losing steam');
+    expect((tr.exit - tr.entry) / risk).toBeGreaterThan(-0.15);
+    expect(e.brain.thoughts.at(-1).text).toMatch(/was up \+0\.\d+R, now losing steam .* instead of riding it back to the stop/);
   });
 
   it('trails a trade that is well in profit, locking part of it in', () => {

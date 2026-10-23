@@ -126,6 +126,19 @@ describe('maker (limit) execution', () => {
     expect(tr.fees).toBeCloseTo(((lim.price + ex.price) * lim.qty * 2) / 1e4, 9);
   });
 
+  it('breakout-type entries go at market unless limits are asked for on them too', () => {
+    const e = new AmtEngine(cfg());
+    e.last = 100;
+    e.now = T0;
+    const plan = { side: 'buy', stop: 99.5, target: 101.5, setup: 'breakout', why: 'x' };
+    expect(e.enter('accept-up', plan, 100, T0, null)).toMatchObject({ type: 'enter', price: 100 });
+    expect(e.pending.order).toBeUndefined();
+    const f = new AmtEngine(cfg({ makerInitiative: true }));
+    expect(f.enter('accept-up', plan, 100, T0, null)).toMatchObject({ type: 'enter', order: 'limit' });
+    const g = new AmtEngine(cfg());
+    expect(g.enter('reject-up', { ...plan, setup: 'fade' }, 100, T0, null)).toMatchObject({ order: 'limit' });
+  });
+
   it('backtests and training run with maker execution end to end', () => {
     const rand = rng(11);
     const trades = [];

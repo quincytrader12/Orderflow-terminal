@@ -125,7 +125,7 @@ The **Growth (small account)** preset is built around that:
 | Position cap | 5 × the balance (`maxLeverage`); futures are set to **isolated margin** at that leverage, so a position can never lose more than its own margin |
 | Exchange minimum | read from the market; an order is rounded up to it only if that still fits the cap and risks at most 2× the plan, otherwise the setup is skipped and the reason logged |
 | Trade quality | A+ only: delta ≥ 0.35, volume intensity ≥ 2×, book imbalance ≥ 0.15, spread ≤ 3 bps, reward ≥ 2R, target ≥ 4× round-trip costs (`targetCostX`) |
-| Management | breakeven at 1R, 30 min time stop, 5 min cool-down after a loss, at most 4 trades an hour |
+| Management | the trade manager (§5c½) instead of a fixed breakeven, 30 min time stop, 5 min cool-down after a loss, at most 4 trades an hour |
 | Guards | pause 2 h after 3 losses in a row (`lossStreak`); stop for the day at −6 % (`dailyLossPct`); **stop for good at −20 % from the peak balance** (`maxDrawdownPct`) |
 
 Paper trading and backtests start from `accountUsd`; a live bot reads the real
@@ -253,6 +253,32 @@ Training searches the evidence bar, stop width, stall time, cut momentum,
 trail distance and the main trigger thresholds; the adaptations above also
 run during backtests and training, starting from the trained values.
 
+## 5c½. The trade manager — every style except intraday
+
+The in-trade judgement described above is not only the adaptive scalper's: it
+runs on **Scalp, Growth and Order-flow bots** too (Settings → Trade manager,
+on by default, and switched on automatically for bots saved before it
+existed). Intraday keeps its own session-based management — it is meant to
+hold for hours.
+
+Every second it reads momentum in the trade's direction (10 s delta,
+order-flow imbalance with a live book, 15 s price speed) and acts:
+
+| The trade… | It… |
+|---|---|
+| is losing, and flow *and* price have turned against it for 5 s | cuts it early, at a fraction of the stop ("flow turned") |
+| was working (≥ +`steamAtR`, 0.5R) and is losing steam — momentum below −`steamMomentum` for 3 s | takes the small win, or scratches it near breakeven, instead of riding it back to the stop ("losing steam") |
+| has made no progress within the stall time | closes it ("stalled") |
+| is well in profit | trails a noise-width behind the best price — never a reflex breakeven a wick takes out — and banks it when momentum fades |
+| reaches its target with momentum behind it | lets it run, one more R at a time |
+
+Stops are placed beyond the structure *and* the one-minute noise, with a
+smaller size so the money at risk is the same; after each exit it watches
+price and widens stops after noise stop-outs, gives trades more room after
+early exits that would have worked, and benches a setup that keeps losing.
+The fixed breakeven setting is ignored while the manager is on. Only the
+adaptive style also scores the evidence before entering.
+
 ## 5d. Execution — limit orders to cut costs
 
 **Execution → Limit first (maker fee)** is on in the Growth, Order-flow and
@@ -265,7 +291,12 @@ since the bot's filters count costs, it also accepts tighter, better trades.
 How it keeps quality:
 
 - **Entry**: a post-only limit on the bot's own side of the book (the best bid
-  for a long). It can never cross the spread, so it never pays taker.
+  for a long). It can never cross the spread, so it never pays taker. This is
+  used for **responsive** entries — fades, absorption, sweeps, the 80 % rule —
+  where price usually trades back to the bid. **Initiative** entries
+  (breakouts, continuation) go at market by default, the way order-flow
+  traders do it: price rarely comes back for them, and missing a runner costs
+  more than the fee saved ("Limits on breakout entries too" changes that).
 - **Missed fills are the real risk** of limit entries: you get filled on the
   trades that come back to you and miss the ones that leave at once. So the
   bot does not wait long (`makerWaitSec`, 10 s) and reacts early (`makerChaseR`,

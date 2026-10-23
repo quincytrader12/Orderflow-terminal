@@ -103,8 +103,14 @@ describe('training', () => {
 
 describe('order-flow training', () => {
   it('searches the order-flow thresholds for order-flow bots', () => {
-    expect(searchFor(mergeConfig(ORDERFLOW_PRESET))).toBe(ORDERFLOW_SEARCH);
-    expect(searchFor(mergeConfig(GROWTH_PRESET))).toBe(SEARCH);
+    expect(searchFor(mergeConfig({ ...ORDERFLOW_PRESET, manageTrades: false }))).toBe(ORDERFLOW_SEARCH);
+    // with the trade manager the fixed breakeven is unused; its own knobs are searched instead
+    const managed = searchFor(mergeConfig(ORDERFLOW_PRESET));
+    expect(managed.breakevenAtR).toBeUndefined();
+    expect(managed.stallSec).toEqual([60, 120, 240]);
+    expect(managed.absorbX).toEqual(ORDERFLOW_SEARCH.absorbX);
+    expect(searchFor(mergeConfig({ ...GROWTH_PRESET, manageTrades: false }))).toBe(SEARCH);
+    expect(searchFor(mergeConfig({ style: 'intraday', manageTrades: true }))).toBe(SEARCH);
     expect(searchFor(mergeConfig(ADAPTIVE_PRESET))).toBe(ADAPTIVE_SEARCH);
     const c = candidates(mergeConfig(ORDERFLOW_PRESET), 10, 2, ORDERFLOW_SEARCH);
     expect(c).toHaveLength(10);

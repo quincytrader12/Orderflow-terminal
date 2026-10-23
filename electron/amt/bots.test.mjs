@@ -24,7 +24,8 @@ function breakoutTape() {
   return out;
 }
 
-const params = { warmupMinutes: 30, useBook: false, feeBps: 2, slippageBps: 0, setups: { fade: false, breakout: true, reentry: false } };
+// order-mechanics tests run the fixed rules; the trade manager has its own tests
+const params = { warmupMinutes: 30, useBook: false, feeBps: 2, slippageBps: 0, setups: { fade: false, breakout: true, reentry: false }, manageTrades: false };
 
 function fakeCcxt() {
   const streams = new Map();
@@ -109,6 +110,28 @@ describe('BotManager', () => {
     expect(m.list()[0].running).toBe(false);
   });
 
+  it('switches the trade manager on for bots saved before it existed, except intraday', async () => {
+    const ccxt = fakeCcxt();
+    const m = new BotManager({ ccxt, db, emit: () => undefined, now: () => T0 });
+    // as saved by an older version: no manageTrades key at all
+    db.set('amtBots', [
+      { id: 'g', name: 'old growth', mode: 'paper', exchangeId: 'binance', symbol: 'ETH/USDT:USDT', params: { style: 'scalp', sizing: 'balance', breakevenAtR: 1 } },
+      { id: 'i', name: 'old intraday', mode: 'paper', exchangeId: 'binance', symbol: 'ETH/USDT:USDT', params: { style: 'intraday' } },
+      { id: 'o', name: 'opted out', mode: 'paper', exchangeId: 'binance', symbol: 'ETH/USDT:USDT', params: { style: 'scalp', manageTrades: false } },
+    ]);
+    const byId = Object.fromEntries(m.list().map((b) => [b.id, b]));
+    expect(byId.g.params.manageTrades).toBe(true);
+    expect(byId.o.params.manageTrades).toBe(false);
+    await m.start('g');
+    await m.start('i');
+    await m.start('o');
+    expect(m.running.get('g').engine.brain).not.toBeNull();
+    expect(m.running.get('i').engine.brain).toBeNull();
+    expect(m.running.get('o').engine.brain).toBeNull();
+    for (const k of ['scalp', 'growth', 'orderflow', 'adaptive']) expect(m.presets()[k].manageTrades).toBe(true);
+    await m.stopAll();
+  });
+
   it('order-flow bots stream liquidations and book into the hybrid', async () => {
     const ccxt = fakeCcxt();
     const m = new BotManager({ ccxt, db, emit: () => undefined, now: () => T0 });
@@ -171,7 +194,8 @@ describe('BotManager', () => {
   });
 
   describe('maker (limit) execution, live', () => {
-    const makerParams = { ...params, riskUsd: 1000, maxPositionUsd: 5000, orderMode: 'maker', makerWaitSec: 30 };
+    // the breakout tape: limits on initiative entries too, to exercise the live limit path
+    const makerParams = { ...params, riskUsd: 1000, maxPositionUsd: 5000, orderMode: 'maker', makerWaitSec: 30, makerInitiative: true };
     /** Feed trade by trade until the bot rests its entry limit; returns the rest of the tape. */
     const flush = async () => {
       for (let k = 0; k < 8; k++) await Promise.resolve();

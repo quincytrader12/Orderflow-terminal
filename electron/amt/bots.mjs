@@ -6,10 +6,17 @@
 //
 // Bots never start on their own: after a restart every bot is off.
 import { randomUUID } from 'node:crypto';
-import { ADAPTIVE_PRESET, AmtEngine, DEFAULT_AMT, finishBacktest, GROWTH_PRESET, INTRADAY_PRESET, mergeConfig, ORDERFLOW_PRESET, paperFill, replay } from './engine.mjs';
+import { ADAPTIVE_PRESET, AmtEngine, DEFAULT_AMT, finishBacktest, GROWTH_PRESET, INTRADAY_PRESET, mergeConfig, ORDERFLOW_PRESET, paperFill, replay, SCALP_PRESET } from './engine.mjs';
 import { train } from './train.mjs';
 
 const KEY = 'amtBots';
+
+/**
+ * Settings saved before the trade manager existed get it switched on: every
+ * style but intraday (which ignores it). A bot whose owner switched it off
+ * keeps it off.
+ */
+export const botParams = (p) => mergeConfig(p && p.manageTrades === undefined ? { ...p, manageTrades: true } : p);
 /** A post-only order the exchange refused because it would have taken liquidity. */
 const POST_ONLY_REJECT = /post.?only|-5022|GTX|would (immediately )?(match|trigger|take)|as maker|maker only/i;
 const MAX_EVENTS = 200;
@@ -42,7 +49,7 @@ export class BotManager {
     return this.configs().map((c) => {
       const b = this.running.get(c.id);
       // configs saved by older versions get any new parameters filled in
-      return { ...c, params: mergeConfig(c.params), running: Boolean(b), feed: b?.feed ?? null };
+      return { ...c, params: botParams(c.params), running: Boolean(b), feed: b?.feed ?? null };
     });
   }
 
@@ -51,7 +58,7 @@ export class BotManager {
   }
 
   presets() {
-    return { scalp: mergeConfig({}), intraday: mergeConfig(INTRADAY_PRESET), growth: mergeConfig(GROWTH_PRESET), orderflow: mergeConfig(ORDERFLOW_PRESET), adaptive: mergeConfig(ADAPTIVE_PRESET) };
+    return { scalp: mergeConfig(SCALP_PRESET), intraday: mergeConfig(INTRADAY_PRESET), growth: mergeConfig(GROWTH_PRESET), orderflow: mergeConfig(ORDERFLOW_PRESET), adaptive: mergeConfig(ADAPTIVE_PRESET) };
   }
 
   save(input) {
@@ -71,7 +78,7 @@ export class BotManager {
       symbol,
       secretId: input.secretId ?? null,
       exchangeStop: input.exchangeStop !== false,
-      params: mergeConfig(input.params),
+      params: botParams(input.params),
       updated: this.now(),
     };
     const all = this.configs().filter((c) => c.id !== id);
@@ -112,7 +119,7 @@ export class BotManager {
     if (this.running.has(id)) return true;
     const cfg = this.configs().find((c) => c.id === id);
     if (!cfg) throw new Error('bot not found');
-    const params = mergeConfig(cfg.params);
+    const params = botParams(cfg.params);
     let exchangeId = cfg.exchangeId;
     let sandbox = false;
     let live = null;
