@@ -1005,9 +1005,20 @@ function Train({ bot, locked, onApplied }: { bot: AmtBot; locked: boolean; onApp
         <div className="input-with-chips">
           <Select value={pick} options={instruments.map((i) => ({ value: `${i.venue}|${i.symbol}`, label: `${i.venue} ${i.symbol} · ${fmtNum(i.n, 0)} trades` }))} onChange={setPick} />
           <Select value={days} options={[1, 2, 3, 5, 7].map((d) => ({ value: d, label: `last ${d} day${d > 1 ? 's' : ''}` }))} onChange={setDays} />
-          <button className="btn" disabled={busy || locked || !pick} onClick={() => void run()} title={locked ? 'Switch the bot off first' : ''}>
+          <button className="btn" disabled={busy || !pick} onClick={() => void run()}>
             {busy ? `Training… ${Math.round(progress * 100)}%` : 'Train'}
           </button>
+        </div>
+      )}
+      {sel && sel.n < 10_000 && (
+        <div className="down amt-hint">
+          Only {fmtNum(sel.n, 0)} trades recorded for {sel.venue} {sel.symbol} — training needs at least 10,000 in the chosen period. Keep it on the main chart with “Record trades” on for longer, or pick a busier market.
+        </div>
+      )}
+      {locked && !busy && <div className="muted amt-hint">The bot is running: you can train now; switch it off only to apply a result.</div>}
+      {busy && (
+        <div className="muted amt-hint">
+          Replaying {bot.params.style === 'scalp' || bot.params.style === 'intraday' ? '' : 'every trigger of '}the recorded trades 40 times — this can take a few minutes on several days of data. The bot is not changed until you press Apply.
         </div>
       )}
       {sel && sel.last - sel.first < 12 * 3_600_000 && <div className="muted amt-hint">Only {fmtNum((sel.last - sel.first) / 3_600_000, 1)} h recorded for this market — results from less than a day of data are weak evidence.</div>}
@@ -1034,9 +1045,12 @@ function Train({ bot, locked, onApplied }: { bot: AmtBot; locked: boolean; onApp
                 {applied ? (
                   <span className="up">Applied to {bot.name}.</span>
                 ) : (
-                  <button className="btn buy" disabled={locked} onClick={() => void apply()}>
-                    Apply to this bot
-                  </button>
+                  <>
+                    {locked && <span className="muted">Switch the bot off to apply — its settings cannot change while it trades.</span>}
+                    <button className="btn buy" disabled={locked} onClick={() => void apply()}>
+                      Apply to this bot
+                    </button>
+                  </>
                 )}
               </div>
             </div>

@@ -11,7 +11,18 @@ parentPort.on('message', async (m) => {
     return;
   }
   try {
-    const result = await evaluate(m.params, cols, m.splitT, { fill: paperFill, minTrades: m.minTrades });
+    let last = 0;
+    const result = await evaluate(m.params, cols, m.splitT, {
+      fill: paperFill,
+      minTrades: m.minTrades,
+      // progress inside a candidate, a few times per run
+      onProgress: (f) => {
+        if (f - last >= 0.1 || f === 1) {
+          last = f;
+          parentPort.postMessage({ tick: f });
+        }
+      },
+    });
     parentPort.postMessage({ result });
   } catch (e) {
     parentPort.postMessage({ error: String(e?.message ?? e) });

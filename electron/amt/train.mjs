@@ -128,7 +128,7 @@ export function segmentMetrics(trades, startBalance, minTrades) {
 }
 
 /** Replay one candidate over all the data and score the two segments. */
-export async function evaluate(params, cols, splitT, { fill, minTrades = 8, yieldEvery = 0 } = {}) {
+export async function evaluate(params, cols, splitT, { fill, minTrades = 8, yieldEvery = 0, onProgress } = {}) {
   const e = new AmtEngine(params);
   // the engine keeps only its last 500 trades for display: collect them all
   const all = [];
@@ -138,9 +138,11 @@ export async function evaluate(params, cols, splitT, { fill, minTrades = 8, yiel
     record(t);
   };
   const n = cols.t.length;
-  const step = yieldEvery || n;
+  // chunks so progress can be reported (and, on the main thread, the app stays responsive)
+  const step = yieldEvery || 100_000;
   for (let i = 0; i < n; i += step) {
     replayColumns(e, cols, i, Math.min(n, i + step), fill);
+    onProgress?.(Math.min(n, i + step) / n);
     if (yieldEvery) await new Promise((r) => setImmediate(r));
   }
   if (e.pos) {
@@ -167,7 +169,13 @@ export function pick(results, top = 5) {
 async function runAll(cands, cols, splitT, opts, onProgress, makeWorker) {
   const results = new Array(cands.length);
   let done = 0;
-  const report = () => onProgress?.(++done / cands.length);
+  // finished candidates plus the part of each one still running, so the bar moves steadily
+  const partial = new Map();
+  const report = () => {
+    let p = 0;
+    for (const v of partial.values()) p += v;
+    onProgress?.(Math.min(1, (done + p) / cands.length));
+  };
   const size = Math.max(1, Math.min(opts.workers ?? Math.min(4, cpus().length - 1), cands.length));
   let pool = [];
   if (makeWorker && size > 1) {
@@ -179,35 +187,54 @@ async function runAll(cands, cols, splitT, opts, onProgress, makeWorker) {
   }
   if (pool.length) {
     let next = 0;
-    const work = (w) =>
+    const work = (w, slot) =>
       new Promise((resolve, reject) => {
+        let i = -1;
         const go = () => {
+          partial.set(slot, 0);
           if (next >= cands.length) return resolve();
-          const i = next++;
-          w.once('message', (m) => {
-            if (m.error) return reject(new Error(m.error));
-            results[i] = m.result;
-            report();
-            go();
-          });
+          i = next++;
           w.postMessage({ type: 'eval', params: cands[i], splitT, minTrades: opts.minTrades });
         };
+        w.on('message', (m) => {
+          if (m.tick !== undefined) {
+            partial.set(slot, m.tick);
+            return report();
+          }
+          if (m.error) return reject(new Error(m.error));
+          results[i] = m.result;
+          done++;
+          partial.set(slot, 0);
+          report();
+          go();
+        });
         w.once('error', reject);
         w.postMessage({ type: 'data', cols });
         go();
       });
     try {
-      await Promise.all(pool.map(work));
+      await Promise.all(pool.map((w, slot) => work(w, slot)));
       return results;
     } catch {
       // a worker failed (e.g. could not load): finish in this thread
+      partial.clear();
     } finally {
       for (const w of pool) void w.terminate();
     }
   }
   for (let i = 0; i < cands.length; i++) {
     if (results[i]) continue;
-    results[i] = await evaluate(cands[i], cols, splitT, { fill: paperFill, minTrades: opts.minTrades, yieldEvery: 50_000 });
+    results[i] = await evaluate(cands[i], cols, splitT, {
+      fill: paperFill,
+      minTrades: opts.minTrades,
+      yieldEvery: 50_000,
+      onProgress: (f) => {
+        partial.set('main', f);
+        report();
+      },
+    });
+    partial.delete('main');
+    done++;
     report();
   }
   return results;

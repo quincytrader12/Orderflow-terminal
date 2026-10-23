@@ -378,6 +378,12 @@ try {
   await page.waitForSelector('.amt .algo-switch.on');
   await page.waitForSelector('.amt-cards :text("Stop width")', { timeout: 10_000 });
   await page.screenshot({ path: `${OUT}desktop-amt-adaptive.png` });
+  // training is allowed while the bot runs (only applying a result needs it off)
+  await page.click('.amt .toolbar button:text-is("Train")');
+  await page.waitForSelector('.amt-backtest button:text-is("Train")');
+  expect(await page.locator('.amt-backtest button:text-is("Train")').isEnabled(), 'Train button usable while the bot is running');
+  expect((await page.locator('.amt-backtest :text("you can train now")').count()) === 1, 'running bot: explains that only Apply needs it off');
+  await page.click('.amt .toolbar button:text-is("Monitor")');
   await page.click('.amt .algo-switch');
   await page.waitForSelector('.amt .algo-switch:not(.on)');
 
