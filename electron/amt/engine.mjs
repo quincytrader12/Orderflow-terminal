@@ -33,7 +33,7 @@
 // trades managed on momentum (cut, stall, trail, bank, run); and it learns
 // from what price did after each exit.
 
-import { Brain } from './brain.mjs';
+import { Brain, roundTripBps } from './brain.mjs';
 import { OrderFlow } from './orderflow.mjs';
 
 const MIN = 60_000;
@@ -148,7 +148,20 @@ export const DEFAULT_AMT = {
   // paper/backtest fill model
   feeBps: 5,
   slippageBps: 1,
+  // execution: 'maker' rests post-only limit orders (maker fee) and only
+  // falls back to market when the trade is still worth it at market
+  orderMode: 'market',
+  makerFeeBps: 2,
+  makerWaitSec: 10,
+  // chase early: once price has run ~0.2R from the limit a 2R trade no longer
+  // pays 1.5R at market, and missing the trades that leave at once is how
+  // limit entries hurt quality (filled on the losers, missed on the runners)
+  makerChaseR: 0.15,
+  exitMakerSec: 6,
 };
+
+/** Exits that are not protecting capital may wait a few seconds for a maker fill. */
+const PATIENT_EXITS = new Set(['target', 'stalled', 'time']);
 
 /** Starting values when a bot is switched to the intraday style. */
 export const INTRADAY_PRESET = {
@@ -192,6 +205,7 @@ export const GROWTH_PRESET = {
   cooldownSec: 300,
   maxTradesPerHour: 4,
   maxSpreadBps: 3,
+  orderMode: 'maker',
 };
 
 /**
@@ -222,6 +236,7 @@ export const ORDERFLOW_PRESET = {
   cooldownSec: 180,
   maxTradesPerHour: 6,
   maxSpreadBps: 3,
+  orderMode: 'maker',
 };
 
 /**
@@ -253,6 +268,7 @@ export const ADAPTIVE_PRESET = {
   cooldownSec: 60,
   maxTradesPerHour: 8,
   maxSpreadBps: 3,
+  orderMode: 'maker',
 };
 
 export function mergeConfig(cfg = {}) {
@@ -419,6 +435,8 @@ export class AmtEngine {
     this.streak = 0;
     /** live balance from the exchange; paper and backtests use accountUsd + P&L */
     this.liveBalance = NaN;
+    /** paper/backtest: the engine fills its own resting limits; live bots turn this off */
+    this.simulateLimits = true;
     this.cooldownUntil = 0;
     this.entryTimes = [];
     this.lastSignal = null;
@@ -447,7 +465,11 @@ export class AmtEngine {
     this.session.bins.set(idx, (this.session.bins.get(idx) ?? 0) + q);
     this.flow.add(t, p * q, buy);
     this.of?.onTrade(t, p, q, buy);
-    return this.step();
+    // paper and backtests: a resting limit fills when a trade prints through it
+    const fill = this.simulateLimits ? this.simulateLimitFill(p) : null;
+    const out = this.step();
+    if (fill) out.unshift(fill);
+    return out;
   }
 
   onBook(bids, asks) {
@@ -562,6 +584,7 @@ export class AmtEngine {
     }
     const out = [];
     this.brain?.afterExits(p, t);
+    if (this.pending?.order === 'limit') out.push(...this.work(p, t));
     if (this.pos && !this.pending) {
       const x = this.manage(p, t);
       if (x) out.push(x);
@@ -809,7 +832,7 @@ export class AmtEngine {
     const risk = (p - stop) * dir;
     const reward = (target - p) * dir;
     if (!(risk > 0) || !(reward > 0)) return this.skip(ev, 'price already past stop or target');
-    const costBps = 2 * (c.feeBps + c.slippageBps);
+    const costBps = this.costBps();
     if ((risk / p) * 1e4 <= costBps) return this.skip(ev, `stop ${((risk / p) * 1e4).toFixed(1)} bps is inside round-trip costs (${costBps} bps)`);
     if (reward / risk < c.minRR) return this.skip(ev, `R:R ${(reward / risk).toFixed(2)} < ${c.minRR}`);
     if ((reward / p) * 1e4 <= costBps * 1.5) return this.skip(ev, `target ${((reward / p) * 1e4).toFixed(1)} bps does not clear fees`);
@@ -817,9 +840,100 @@ export class AmtEngine {
     const size = this.size(p, risk);
     if (size.skip) return this.skip(ev, size.skip);
     const qty = size.qty;
-    this.pending = { kind: 'entry', side, stop, target, setup, why, wall, t };
     this.lastSignal = { t, event: ev, setup, side, price: p, stop, target, why };
+    if (c.orderMode === 'maker') {
+      // join the queue on our own side of the book: post-only, maker fee
+      const limit = this.makerPrice(side, p);
+      this.pending = { kind: 'entry', order: 'limit', limit, qty, until: t + c.makerWaitSec * 1000, side, stop, target, setup, why, wall, t };
+      return { type: 'enter', order: 'limit', side, qty, price: limit, stop, target, setup, reason: why };
+    }
+    this.pending = { kind: 'entry', side, stop, target, setup, why, wall, t };
     return { type: 'enter', side, qty, price: p, stop, target, setup, reason: why };
+  }
+
+  /** Round-trip cost in bps: maker entry + taker exit with maker orders, taker both ways otherwise. */
+  costBps() {
+    return roundTripBps(this.cfg);
+  }
+
+  /** Best price on our own side of the book (never crossing), or the last trade without a book. */
+  makerPrice(side, p) {
+    const b = this.bookStats();
+    const fresh = b && (!this.of || this.of.book.fresh(this.now));
+    if (side === 'buy') return fresh ? Math.min(b.bid, p) : p;
+    return fresh ? Math.max(b.ask, p) : p;
+  }
+
+  /** Paper/backtest fill of a resting limit: only when a trade prints through it (we are at the back of the queue). */
+  simulateLimitFill(p) {
+    const pd = this.pending;
+    if (pd?.order !== 'limit') return null;
+    const buying = pd.kind === 'entry' ? pd.side === 'buy' : this.pos?.side === 'sell';
+    if (buying ? !(p < pd.limit) : !(p > pd.limit)) return null;
+    const qty = pd.kind === 'entry' ? pd.qty : this.pos.qty;
+    const fee = (pd.limit * qty * this.cfg.makerFeeBps) / 1e4;
+    const side = buying ? 'buy' : 'sell';
+    const kind = pd.kind;
+    const info = { type: 'filled', kind, order: 'limit', side, qty, price: pd.limit, fee, setup: pd.setup ?? this.pos?.setup, stop: pd.stop, target: pd.target, reason: kind === 'entry' ? pd.why : pd.reason };
+    this.filled({ price: pd.limit, qty, fee });
+    return info;
+  }
+
+  /**
+   * A resting limit is being worked: decide whether to keep waiting, take it
+   * at market (only while the trade is still worth it there) or let it go.
+   */
+  work(p, t) {
+    const c = this.cfg;
+    const pd = this.pending;
+    if (pd.kind === 'exit') {
+      const pos = this.pos;
+      const dir = dirOf(pos.side);
+      const stopped = (p - pos.stop) * dir <= 0;
+      if (!stopped && t < pd.until) return [];
+      // the stop always wins, and an exit never waits past its few seconds
+      const reason = stopped ? 'stop' : pd.reason;
+      this.pending = { kind: 'exit', reason, t };
+      const then = { type: 'exit', side: pos.side === 'buy' ? 'sell' : 'buy', qty: pos.qty, price: p, reason };
+      return [{ type: 'cancel', kind: 'exit', reason: stopped ? `stop hit while the ${pd.reason} limit rested — out at market` : `${pd.reason} limit not filled in ${c.exitMakerSec} s — out at market`, then }];
+    }
+    const dir = dirOf(pd.side);
+    const risk0 = Math.abs(pd.limit - pd.stop);
+    const ran = ((p - pd.limit) * dir) / risk0;
+    const atStop = (p - pd.stop) * dir <= 0;
+    const expired = t >= pd.until;
+    if (!atStop && !expired && ran < c.makerChaseR) return [];
+    const missed = atStop ? 'price reached the stop before the limit filled' : expired ? `limit ${fmt(pd.limit)} not filled in ${Math.round((t - pd.t) / 1000)} s` : `price ran ${ran.toFixed(2)}R away from the limit`;
+    // take it at market only if, from here, it still meets every entry rule
+    const risk = (p - pd.stop) * dir;
+    const reward = (pd.target - p) * dir;
+    const takerCost = 2 * (c.feeBps + c.slippageBps);
+    let no = null;
+    if (atStop || !(risk > 0) || !(reward > 0)) no = 'nothing left of the trade';
+    else if (reward / risk < c.minRR) no = `only ${(reward / risk).toFixed(2)}R left at market`;
+    else if ((reward / p) * 1e4 < takerCost * c.targetCostX) no = `target ${((reward / p) * 1e4).toFixed(1)} bps does not clear market fees ${c.targetCostX}×`;
+    else if ((risk / p) * 1e4 <= takerCost) no = 'stop inside market fees';
+    const size = no ? null : this.size(p, risk);
+    if (size?.skip) no = size.skip;
+    if (no) {
+      this.pending = { ...pd, order: 'cancelling' };
+      this.lastSkip = { t, event: `${pd.setup} limit`, reason: `${missed}; ${no} — letting it go, no chasing` };
+      return [{ type: 'cancel', kind: 'entry', reason: this.lastSkip.reason, then: null }];
+    }
+    this.pending = { kind: 'entry', side: pd.side, stop: pd.stop, target: pd.target, setup: pd.setup, why: pd.why, wall: pd.wall, t };
+    const note = `${missed}; still ${(reward / risk).toFixed(2)}R to the target — taking it at market`;
+    const then = { type: 'enter', side: pd.side, qty: size.qty, price: p, stop: pd.stop, target: pd.target, setup: pd.setup, reason: `${pd.why} · ${note}` };
+    return [{ type: 'cancel', kind: 'entry', reason: note, then }];
+  }
+
+  /** The exchange refused or dropped a resting limit (e.g. post-only would have crossed): decide now. */
+  limitMissed() {
+    if (this.pending?.order === 'limit') this.pending.until = -Infinity;
+  }
+
+  /** The executor confirmed a cancel with nothing filled. */
+  cancelled() {
+    if (this.pending?.order === 'cancelling') this.pending = null;
   }
 
   /** Balance the sizing works from: live balance when known, else start + realised P&L. */
@@ -869,7 +983,7 @@ export class AmtEngine {
     const dir = dirOf(pos.side);
     if (!this.brain && c.breakevenAtR > 0 && !pos.be && (p - pos.entry) * dir >= c.breakevenAtR * pos.risk) {
       // move the stop to entry plus round-trip costs — only once price is beyond that level
-      const be = pos.entry * (1 + (dir * 2 * (c.feeBps + c.slippageBps)) / 1e4);
+      const be = pos.entry * (1 + (dir * this.costBps()) / 1e4);
       if ((p - be) * dir > 0 && (be - pos.stop) * dir > 0) {
         pos.stop = be;
         pos.be = true;
@@ -893,8 +1007,15 @@ export class AmtEngine {
     else if (t - pos.t >= c.maxHoldSec * 1000) reason = 'time';
     else if (c.style === 'intraday' && t >= this.session.end - c.flatBeforeCloseMin * MIN) reason = 'session close';
     if (!reason) return null;
+    const side = pos.side === 'buy' ? 'sell' : 'buy';
+    if (c.orderMode === 'maker' && PATIENT_EXITS.has(reason)) {
+      // nothing to protect against: offer it on our side of the book for a few seconds
+      const limit = this.makerPrice(side, p);
+      this.pending = { kind: 'exit', order: 'limit', limit, reason, until: t + c.exitMakerSec * 1000, t };
+      return { type: 'exit', order: 'limit', side, qty: pos.qty, price: limit, reason };
+    }
     this.pending = { kind: 'exit', reason, t };
-    return { type: 'exit', side: pos.side === 'buy' ? 'sell' : 'buy', qty: pos.qty, price: p, reason };
+    return { type: 'exit', side, qty: pos.qty, price: p, reason };
   }
 
   // ---------- executor feedback ----------
@@ -1013,6 +1134,7 @@ export class AmtEngine {
       book: book && { imbalance: book.imbalance, spreadBps: book.spreadBps },
       position: pos,
       pending: this.pending?.kind ?? null,
+      working: this.pending?.order === 'limit' ? { kind: this.pending.kind, side: this.pending.kind === 'entry' ? this.pending.side : this.pos?.side === 'buy' ? 'sell' : 'buy', price: this.pending.limit, ageSec: Math.round((this.now - this.pending.t) / 1000) } : null,
       balance: this.cfg.sizing === 'balance' ? this.balance() : null,
       stats: { ...this.stats, pnlToday: this.stats.day === dayOf(this.now) ? this.stats.pnlToday : 0, winRate: this.stats.trades ? this.stats.wins / this.stats.trades : null, profitFactor: this.stats.grossLoss > 0 ? this.stats.grossWin / this.stats.grossLoss : null },
       halted: this.halted,
@@ -1027,8 +1149,19 @@ export class AmtEngine {
   }
 }
 
-/** Paper fill: market order at the last trade price plus slippage. */
+/**
+ * Paper fill: market orders fill at the last trade price plus slippage.
+ * Resting limits are filled by the engine itself when price trades through
+ * them; a cancel goes on to its market order, if it has one.
+ */
 export function paperFill(engine, intent) {
+  if (intent.type === 'filled') return { price: intent.price, fee: intent.fee };
+  if (intent.type === 'cancel') {
+    if (intent.then) return paperFill(engine, intent.then);
+    engine.cancelled();
+    return null;
+  }
+  if (intent.order === 'limit') return null;
   const c = engine.cfg;
   const price = intent.price * (1 + (dirOf(intent.side) * c.slippageBps) / 1e4);
   const fee = (price * intent.qty * c.feeBps) / 1e4;
@@ -1038,6 +1171,7 @@ export function paperFill(engine, intent) {
 
 /** Close anything still open and summarise a replay. */
 export function finishBacktest(e, trades) {
+  if (e.pending?.kind === 'entry') e.pending = null;
   if (e.pos) {
     e.pending = { kind: 'exit', reason: 'end of data' };
     paperFill(e, { side: e.pos.side === 'buy' ? 'sell' : 'buy', qty: e.pos.qty, price: e.last });

@@ -261,6 +261,12 @@ export interface AmtParams {
   targetCostX: number;
   feeBps: number;
   slippageBps: number;
+  /** 'maker': post-only limit entries (and patient exits) at the maker fee, market only while the trade still pays */
+  orderMode: 'maker' | 'market';
+  makerFeeBps: number;
+  makerWaitSec: number;
+  makerChaseR: number;
+  exitMakerSec: number;
 }
 
 /** Growth, drawdown and score for one part of a training run. */
@@ -366,6 +372,8 @@ export interface AmtSnapshot {
   book: { imbalance: number; spreadBps: number } | null;
   position: { side: 'buy' | 'sell'; entry: number; qty: number; stop: number; target: number; setup: string; why: string; t: number; upnl: number; be: boolean } | null;
   pending: string | null;
+  /** a resting post-only limit (maker execution) */
+  working: { kind: 'entry' | 'exit'; side: 'buy' | 'sell'; price: number; ageSec: number } | null;
   stats: AmtStats;
   halted: string | null;
   /** balance the bot sizes from (balance sizing only) */

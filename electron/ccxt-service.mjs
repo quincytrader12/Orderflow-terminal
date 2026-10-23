@@ -666,6 +666,14 @@ export class CcxtService {
     }
   }
 
+  /** Where an order stands (exchange units): {status, filled, amount, average}. */
+  async orderStatus(secretId, orderId, symbol) {
+    const ex = this.privateExchange(secretId);
+    await ex.loadMarkets();
+    const o = await ex.fetchOrder(orderId, symbol);
+    return { status: o.status ?? 'open', filled: o.filled ?? 0, amount: o.amount ?? null, average: o.average ?? o.price ?? null };
+  }
+
   /** Cancelling only removes risk, so it works even with trading switched off. */
   async cancelOrder(secretId, orderId, symbol) {
     const row = { action: 'cancel', secretId, symbol, orderId, status: 'error' };

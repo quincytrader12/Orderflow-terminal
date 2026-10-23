@@ -253,6 +253,43 @@ Training searches the evidence bar, stop width, stall time, cut momentum,
 trail distance and the main trigger thresholds; the adaptations above also
 run during backtests and training, starting from the trained values.
 
+## 5d. Execution — limit orders to cut costs
+
+**Execution → Limit first (maker fee)** is on in the Growth, Order-flow and
+Adaptive presets. On Binance USDⓈ-M futures (regular tier) a limit order that
+rests in the book pays the **maker fee, 0.02 %**; a market order pays the
+**taker fee, 0.05 %**, plus slippage. A maker entry and a market exit cost
+about 0.08 % round trip instead of 0.12 %: a third less on every trade, and
+since the bot's filters count costs, it also accepts tighter, better trades.
+
+How it keeps quality:
+
+- **Entry**: a post-only limit on the bot's own side of the book (the best bid
+  for a long). It can never cross the spread, so it never pays taker.
+- **Missed fills are the real risk** of limit entries: you get filled on the
+  trades that come back to you and miss the ones that leave at once. So the
+  bot does not wait long (`makerWaitSec`, 10 s) and reacts early (`makerChaseR`,
+  0.15R): if price leaves, it takes the trade at market **only if, from there,
+  it still meets every entry rule** — minimum R:R to the same stop and target,
+  target clearing market fees, size. Otherwise it lets the trade go and says
+  why. It never chases a second time.
+- **Exits**: target, stall and time exits are offered as a post-only limit for
+  `exitMakerSec` (6 s), then go at market. **Stops and every protective exit**
+  (flow turned, trailing stop, wall pulled, momentum faded, flatten) always go
+  at market at once — saving a fee is never worth a worse exit.
+- **Live safety**: a resting order is followed every second; a cancel is
+  confirmed with the exchange, and a fill that raced the cancel is kept (the
+  bot never sends a market order on top of it). A post-only order the exchange
+  refuses because it would have crossed is treated as a missed fill. Switching
+  the bot off withdraws any resting order.
+- **Paper, backtests and training model it the same way**: a resting limit
+  fills only when a later trade prints *through* its price (the bot is assumed
+  to be at the back of the queue), so results are not flattered by fills that
+  would not have happened.
+
+Live bots read the market's maker and taker fees from the exchange (a BNB fee
+discount or VIP tier shows up there).
+
 ## 6. Safety behaviour of live bots
 
 - **Exact sizing.** Live positions are tracked in exchange units (contracts) exactly as filled. Exits and the exchange stop close what was opened.

@@ -37,7 +37,7 @@ function run(e, trades) {
   return intents;
 }
 
-const cfg = (extra = {}) => ({ ...mergeConfig(ADAPTIVE_PRESET), warmupMinutes: 5, useBook: false, feeBps: 2, slippageBps: 0, cooldownSec: 0, sizing: 'fixed', riskUsd: 10, maxPositionUsd: 1e6, ...extra });
+const cfg = (extra = {}) => ({ ...mergeConfig(ADAPTIVE_PRESET), orderMode: 'market', warmupMinutes: 5, useBook: false, feeBps: 2, slippageBps: 0, cooldownSec: 0, sizing: 'fixed', riskUsd: 10, maxPositionUsd: 1e6, ...extra });
 
 /** A warmed-up adaptive engine: 10 minutes of rotation around 100.2. */
 function warm(extra) {

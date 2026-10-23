@@ -10,8 +10,11 @@ import { ADAPTIVE_PRESET, AmtEngine, DEFAULT_AMT, finishBacktest, GROWTH_PRESET,
 import { train } from './train.mjs';
 
 const KEY = 'amtBots';
+/** A post-only order the exchange refused because it would have taken liquidity. */
+const POST_ONLY_REJECT = /post.?only|-5022|GTX|would (immediately )?(match|trigger|take)|as maker|maker only/i;
 const MAX_EVENTS = 200;
 const tidy = (n) => Number(Number(n).toPrecision(8));
+const restingText = (i, qty = i.qty) => `${i.type === 'exit' ? `${i.reason} exit` : i.setup} — limit ${i.side} ${tidy(qty)} @ ${tidy(i.price)} resting (post-only, maker fee)`;
 
 export class BotManager {
   /**
@@ -124,6 +127,7 @@ export class BotManager {
       params.maxPositionUsd = Math.min(params.maxPositionUsd, info.limits.maxOrderUsd * 0.98);
       if (!info.contract) params.allowShort = false;
       if (info.taker) params.feeBps = Math.max(params.feeBps, info.taker * 1e4);
+      if (Number.isFinite(info.maker)) params.makerFeeBps = info.maker * 1e4;
       if (params.sizing === 'balance') {
         // size from the real account, within the market's minimum order
         const bal = await this.ccxt.accountBalance(cfg.secretId, cfg.symbol);
@@ -141,7 +145,9 @@ export class BotManager {
       exchangeId,
       sandbox,
       live,
-      engine: Object.assign(new AmtEngine(params), live?.balance ? { liveBalance: live.balance } : {}),
+      // live bots: the exchange fills resting limits, not the engine's simulation
+      engine: Object.assign(new AmtEngine(params), live?.balance ? { liveBalance: live.balance } : {}, { simulateLimits: cfg.mode !== 'live' }),
+      working: null,
       sid: `amt-${id}`,
       feed: 'connecting',
       feedError: null,
@@ -153,6 +159,7 @@ export class BotManager {
     this.running.set(id, b);
     this.ccxt.subscribe(b.sid, exchangeId, cfg.symbol, (m) => this.onMessage(id, m), { sandbox, liquidations: params.style === 'orderflow' || params.style === 'adaptive' });
     b.timer = setInterval(() => {
+      if (b.working) void this.pollWorking(b);
       this.handle(id, b.engine.tick(this.now()));
       this.emit('status', this.snapshot(id));
     }, 1000);
@@ -190,10 +197,17 @@ export class BotManager {
     // the adaptive bot's reasoning: stop moves, cuts, lessons from its exits
     if (e.brain) for (const th of e.brain.drain()) this.event(id, 'think', th.text);
     for (const intent of intents) {
-      if (b.cfg.mode === 'paper') {
+      if (b.cfg.mode !== 'paper') {
+        // one order action at a time per bot: a cancel must never overtake the placement it cancels
+        b.chain = (b.chain ?? Promise.resolve()).then(() => this.executeLive(b, intent)).catch((err) => this.event(id, 'error', String(err?.message ?? err)));
+      }
+      else if (intent.type === 'filled') this.report(b, { ...intent, type: intent.kind === 'entry' ? 'enter' : 'exit' }, intent.price);
+      else if (intent.type === 'cancel') {
+        this.event(id, 'info', intent.reason);
         const fill = paperFill(e, intent);
-        this.report(b, intent, fill.price);
-      } else void this.executeLive(b, intent);
+        if (fill && intent.then) this.report(b, intent.then, fill.price);
+      } else if (intent.order === 'limit') this.event(id, 'info', restingText(intent));
+      else this.report(b, intent, paperFill(e, intent).price);
     }
     if (e.halted && !e.pos && !e.pending && !b.stopping) void this.stop(id, { reason: e.halted });
   }
@@ -242,6 +256,9 @@ export class BotManager {
     const symbol = b.cfg.symbol;
     const opposite = (side) => (side === 'buy' ? 'sell' : 'buy');
     const feeOf = (price, qty) => (price * qty * e.cfg.feeBps) / 1e4;
+    if (intent.type === 'cancel') return this.cancelWorking(b, intent);
+    // spot exits sell what is actually held (fees may come out of the coin): market only
+    if (intent.order === 'limit' && (intent.type === 'enter' || contract)) return this.placeLimit(b, intent);
     try {
       if (intent.type === 'enter') {
         const r = await this.ccxt.placeOrder(secretId, { symbol, side: intent.side, type: 'market', sizeMode: 'base', size: intent.qty });
@@ -300,8 +317,17 @@ export class BotManager {
           await this.ccxt.cancelOrder(secretId, b.stopOrderId, symbol).catch((err) => this.event(id, 'warn', `could not cancel the exchange stop ${b.stopOrderId}: ${err.message}`));
           b.stopOrderId = null;
         }
-        const price = r.price ?? e.last;
-        e.filled({ price, qty: posQty, fee: feeOf(price, posQty) });
+        let price = r.price ?? e.last;
+        let fee = feeOf(price, posQty);
+        const pe = b.partialExit;
+        if (pe) {
+          // part of it already went at the maker limit
+          const rest = Math.max(0, posQty - pe.base);
+          price = (pe.base * pe.price + rest * price) / Math.max(posQty, 1e-12);
+          fee = (pe.base * pe.price * e.cfg.makerFeeBps) / 1e4 + feeOf(r.price ?? e.last, rest);
+          b.partialExit = null;
+        }
+        e.filled({ price, qty: posQty, fee });
         b.amount = 0;
         this.report(b, intent, price);
       }
@@ -314,6 +340,167 @@ export class BotManager {
       // any live order problem stops the bot so a person can look
       if (!b.stopping) await this.stop(id, { reason: text, flatten: false });
     }
+  }
+
+  /** Live: rest a post-only limit; the 1 s timer follows it until it fills or the engine cancels it. */
+  async placeLimit(b, intent) {
+    const id = b.cfg.id;
+    const e = b.engine;
+    const { secretId, contract } = b.live;
+    const symbol = b.cfg.symbol;
+    const exit = intent.type === 'exit';
+    const req = exit
+      ? { symbol, side: intent.side, type: 'limit', price: intent.price, postOnly: true, sizeMode: 'contracts', size: b.amount, reduceOnly: true }
+      : { symbol, side: intent.side, type: 'limit', price: intent.price, postOnly: true, sizeMode: 'base', size: intent.qty };
+    try {
+      const r = await this.ccxt.placeOrder(secretId, req);
+      const amount = r.amount ?? req.size;
+      b.working = { id: r.id, kind: exit ? 'exit' : 'entry', intent, amount, unit: amount > 0 && r.baseQty ? r.baseQty / amount : 1 };
+      if (b.stopping) {
+        // switched off while it was being placed: withdraw it at once
+        const w = b.working;
+        b.working = null;
+        await this.ccxt.cancelOrder(secretId, w.id, symbol).catch(() => undefined);
+        const o = await this.ccxt.orderStatus(secretId, w.id, symbol).catch(() => null);
+        if (!o || o.status === 'open') this.event(id, 'error', `could not confirm the cancel of resting order ${w.id} — check ${symbol} on the exchange`);
+        else if (o.filled > 0 && !exit) this.event(id, 'warn', `limit entry partly filled before it was withdrawn — position left open: ${intent.side} ${tidy(o.filled * w.unit)} ${symbol}`);
+        return;
+      }
+      this.event(id, 'info', restingText(intent, r.baseQty));
+      if (r.status === 'closed') {
+        const w = b.working;
+        b.working = null;
+        await this.workingFilled(b, w, amount, r.price);
+      }
+    } catch (err) {
+      const msg = String(err?.message ?? err);
+      if (POST_ONLY_REJECT.test(msg) || exit) {
+        // refused as maker (it would have crossed), or an exit limit failed: the engine decides at market
+        this.event(id, 'info', `${exit ? 'exit' : 'entry'} limit not placed (${msg}) — deciding at market`);
+        e.limitMissed();
+        return;
+      }
+      e.failed(err);
+      this.event(id, 'error', `entry order failed: ${msg}`);
+      if (!b.stopping) await this.stop(id, { reason: `entry order failed: ${msg}`, flatten: false });
+    }
+  }
+
+  /** Follow a resting limit (every second). */
+  async pollWorking(b) {
+    const w = b.working;
+    if (!w || b.polling) return;
+    b.polling = true;
+    try {
+      const o = await this.ccxt.orderStatus(b.live.secretId, w.id, b.cfg.symbol);
+      if (b.working !== w) return; // cancelled meanwhile
+      if (o.status === 'closed' || o.filled >= w.amount * 0.9999) {
+        b.working = null;
+        await this.workingFilled(b, w, o.filled || w.amount, o.average);
+      } else if (['canceled', 'cancelled', 'expired', 'rejected'].includes(o.status)) {
+        b.working = null;
+        if (o.filled > 0 && w.kind === 'entry') await this.workingFilled(b, w, o.filled, o.average);
+        else {
+          if (o.filled > 0) this.notePartialExit(b, w, o);
+          this.event(b.cfg.id, 'info', 'the exchange dropped the resting limit — deciding at market');
+          b.engine.limitMissed();
+        }
+      }
+    } catch {
+      /* try again next second */
+    } finally {
+      b.polling = false;
+    }
+  }
+
+  notePartialExit(b, w, o) {
+    b.partialExit = { base: o.filled * w.unit, price: o.average ?? w.intent.price };
+    b.amount = Math.max(0, b.amount - o.filled);
+  }
+
+  /** A resting limit filled (wholly, or partly before it was cancelled): book it at the maker fee. */
+  async workingFilled(b, w, filledAmount, average) {
+    const id = b.cfg.id;
+    const e = b.engine;
+    const price = average ?? w.intent.price;
+    if (w.kind === 'entry') {
+      const qty = filledAmount * w.unit;
+      b.amount = filledAmount;
+      e.filled({ price, qty, fee: (price * qty * e.cfg.makerFeeBps) / 1e4 });
+      this.report(b, { ...w.intent, type: 'enter', qty }, price);
+      await this.protect(b, w.intent, price);
+      return;
+    }
+    const posQty = e.pos?.qty ?? w.intent.qty;
+    if (b.stopOrderId) {
+      await this.ccxt.cancelOrder(b.live.secretId, b.stopOrderId, b.cfg.symbol).catch((err) => this.event(id, 'warn', `could not cancel the exchange stop ${b.stopOrderId}: ${err.message}`));
+      b.stopOrderId = null;
+    }
+    e.filled({ price, qty: posQty, fee: (price * posQty * e.cfg.makerFeeBps) / 1e4 });
+    b.amount = 0;
+    this.report(b, { ...w.intent, type: 'exit' }, price);
+    if (e.halted && !e.pos && !b.stopping) await this.stop(id, { reason: e.halted });
+  }
+
+  /** After an entry fills: the exchange-side disaster stop, or flatten if the bot was switched off meanwhile. */
+  async protect(b, intent, price) {
+    const id = b.cfg.id;
+    const e = b.engine;
+    const { secretId, contract } = b.live;
+    const opposite = intent.side === 'buy' ? 'sell' : 'buy';
+    if (b.stopping) {
+      if (b.flattenOnFill) {
+        e.pending = { kind: 'exit', reason: 'flatten' };
+        await this.executeLive(b, { type: 'exit', side: opposite, qty: e.pos?.qty ?? 0, price: e.last, reason: 'flatten' });
+      } else this.event(id, 'warn', `entry filled after the bot was stopped — position left open: ${intent.side} ${tidy(e.pos?.qty ?? 0)} ${b.cfg.symbol}`);
+      return;
+    }
+    if (!contract || !b.cfg.exchangeStop) return;
+    const dir = intent.side === 'buy' ? 1 : -1;
+    b.stopTrigger = intent.stop - dir * 0.5 * Math.abs(price - intent.stop);
+    try {
+      const s = await this.ccxt.placeOrder(secretId, { symbol: b.cfg.symbol, side: opposite, type: 'stop-market', sizeMode: 'contracts', size: b.amount, triggerPrice: b.stopTrigger, reduceOnly: true });
+      b.stopOrderId = s.id;
+    } catch (err) {
+      this.event(id, 'warn', `protective stop not placed (${err.message}); the bot's own stop still applies`);
+    }
+  }
+
+  /**
+   * The engine gave up on a resting limit: cancel it, then follow its market
+   * order if it has one. A fill that raced the cancel is kept, and then no
+   * market order is sent — the bot never doubles a position.
+   */
+  async cancelWorking(b, intent) {
+    const id = b.cfg.id;
+    const e = b.engine;
+    const { secretId } = b.live;
+    const symbol = b.cfg.symbol;
+    const w = b.working;
+    b.working = null;
+    this.event(id, 'info', intent.reason);
+    let o = null;
+    if (w) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await this.ccxt.cancelOrder(secretId, w.id, symbol).catch(() => undefined);
+        o = await this.ccxt.orderStatus(secretId, w.id, symbol).catch(() => null);
+        if (o && o.status !== 'open') break;
+      }
+      if (!o || o.status === 'open') {
+        if (w.kind === 'exit' && intent.then) return this.executeLive(b, intent.then); // reduce-only: cannot overshoot
+        e.cancelled();
+        const msg = `could not confirm the cancel of resting order ${w.id} — check ${symbol} on the exchange`;
+        this.event(id, 'error', msg);
+        if (!b.stopping) await this.stop(id, { reason: msg, flatten: false });
+        return;
+      }
+      if (o.filled > 0) {
+        if (w.kind === 'entry' || o.filled >= w.amount * 0.9999) return this.workingFilled(b, w, o.filled, o.average);
+        this.notePartialExit(b, w, o);
+      }
+    }
+    if (intent.then) return this.executeLive(b, intent.then);
+    e.cancelled();
   }
 
   /** Is this vault key driving a running live bot? */
@@ -330,6 +517,20 @@ export class BotManager {
     if (b.balanceTimer) clearInterval(b.balanceTimer);
     this.ccxt.unsubscribe(b.sid);
     const e = b.engine;
+    // a resting limit is withdrawn first
+    if (b.working) {
+      const w = b.working;
+      b.working = null;
+      await this.ccxt.cancelOrder(b.live.secretId, w.id, b.cfg.symbol).catch(() => undefined);
+      const o = await this.ccxt.orderStatus(b.live.secretId, w.id, b.cfg.symbol).catch(() => null);
+      if (o?.filled > 0 && w.kind === 'entry') {
+        b.amount = o.filled;
+        e.pending = { kind: 'entry', side: w.intent.side, stop: w.intent.stop, target: w.intent.target, setup: w.intent.setup, why: w.intent.reason };
+        e.filled({ price: o.average ?? w.intent.price, qty: o.filled * w.unit });
+      } else if (o?.filled > 0) this.notePartialExit(b, w, o);
+      this.event(id, 'info', `resting ${w.kind} limit cancelled`);
+    }
+    if (e.pending?.order === 'limit' || e.pending?.order === 'cancelling') e.pending = null;
     if (e.pending?.kind === 'entry' && b.cfg.mode === 'live') {
       // an entry is in flight: deal with it when it fills
       b.flattenOnFill = flatten;

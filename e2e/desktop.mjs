@@ -368,9 +368,11 @@ try {
   for (const name of ['Responsive fade', 'Absorption reversal', 'Sweep & reclaim']) await page.waitForSelector(`.amt-settings :text("${name}")`);
   if (!(await page.locator('.amt-settings details[open]').count())) await page.click('.amt-settings summary:text-is("Advanced AMT parameters")');
   await page.waitForSelector('.amt-settings .section-title:text-is("Judgement")');
+  await page.waitForSelector('.amt-settings .seg button.active:text-is("Limit first (maker fee)")');
+  expect((await page.locator('.amt-settings :text("Chase after (R)")').count()) === 1, 'maker execution settings shown');
   await page.click('.amt-settings button:text-is("Save")');
   const adBot = (await page.evaluate(() => window.novus.amt.list()))[0];
-  expect(adBot.params.style === 'adaptive' && adBot.params.setups.fade && adBot.params.setups.sweep && adBot.params.breakevenAtR === 0, 'adaptive bot saved');
+  expect(adBot.params.style === 'adaptive' && adBot.params.setups.fade && adBot.params.setups.sweep && adBot.params.breakevenAtR === 0 && adBot.params.orderMode === 'maker', 'adaptive bot saved, limit-first execution');
   await page.click('.amt .toolbar button:text-is("Monitor")');
   await page.click('.amt .algo-switch');
   await page.waitForSelector('.amt .algo-switch.on');

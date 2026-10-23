@@ -170,6 +170,87 @@ describe('BotManager', () => {
     await m.stopAll();
   });
 
+  describe('maker (limit) execution, live', () => {
+    const makerParams = { ...params, riskUsd: 1000, maxPositionUsd: 5000, orderMode: 'maker', makerWaitSec: 30 };
+    /** Feed trade by trade until the bot rests its entry limit; returns the rest of the tape. */
+    const flush = async () => {
+      for (let k = 0; k < 8; k++) await Promise.resolve();
+    };
+    const toLimit = async (ccxt, id, tape) => {
+      const s = ccxt.streams.get(`amt-${id}`);
+      s.emit({ kind: 'status', state: 'open' });
+      for (let i = 0; i < tape.length; i++) {
+        s.emit({ kind: 'trades', trades: [tape[i]] });
+        await flush();
+        if (ccxt.orders.length) return tape.slice(i + 1);
+      }
+      throw new Error('no limit order');
+    };
+
+    it('rests a post-only entry, books the fill at the maker fee and then protects it', async () => {
+      const ccxt = fakeCcxt();
+      ccxt.marketInfo = vi.fn(async () => ({ exchangeId: 'bybit', trading: true, sandbox: true, contract: true, taker: 0.00055, maker: 0.0002, limits: { maxOrderUsd: 300 }, freeBase: null }));
+      ccxt.orderStatus = vi.fn(async () => ({ status: 'open', filled: 0 }));
+      const m = new BotManager({ ccxt, db, emit: () => {}, now: () => T0 });
+      const id = m.save({ mode: 'live', secretId: 'k1', symbol: 'BTC/USDT:USDT', params: makerParams });
+      await m.start(id);
+      await toLimit(ccxt, id, breakoutTape());
+      const [limit] = ccxt.orders;
+      expect(limit).toMatchObject({ type: 'limit', postOnly: true, side: 'buy', sizeMode: 'base' });
+      const contracts = Math.floor(limit.size / 0.01);
+      // the exchange fills it
+      ccxt.orderStatus = vi.fn(async () => ({ status: 'closed', filled: contracts, average: limit.price }));
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.waitFor(() => expect(ccxt.orders.length).toBe(2));
+      expect(ccxt.orders[1]).toMatchObject({ type: 'stop-market', reduceOnly: true, size: contracts });
+      const e = m.running.get(id).engine;
+      expect(e.pos).toMatchObject({ side: 'buy', entry: limit.price });
+      expect(e.pos.fees).toBeCloseTo((limit.price * contracts * 0.01 * 2) / 1e4, 9);
+      expect(m.eventsFor(id).some((x) => /resting \(post-only, maker fee\)/.test(x.text))).toBe(true);
+      await m.stopAll();
+    });
+
+    it('a fill that races the cancel is kept, and no market order is sent', async () => {
+      const ccxt = fakeCcxt();
+      ccxt.orderStatus = vi.fn(async () => ({ status: 'open', filled: 0 }));
+      const m = new BotManager({ ccxt, db, emit: () => {}, now: () => T0 });
+      const id = m.save({ mode: 'live', secretId: 'k1', symbol: 'BTC/USDT:USDT', params: makerParams });
+      await m.start(id);
+      const rest = await toLimit(ccxt, id, breakoutTape());
+      const [limit] = ccxt.orders;
+      const contracts = Math.floor(limit.size / 0.01);
+      // by the time the engine gives up on it, the exchange had filled it
+      ccxt.orderStatus = vi.fn(async () => ({ status: 'closed', filled: contracts, average: limit.price }));
+      ccxt.streams.get(`amt-${id}`).emit({ kind: 'trades', trades: rest.slice(0, 400) });
+      await vi.waitFor(() => expect(m.running.get(id).engine.pos).not.toBeNull());
+      expect(ccxt.orders.filter((o) => o.type === 'market')).toEqual([]);
+      expect(ccxt.cancelOrder).toHaveBeenCalled();
+      await m.stopAll();
+    });
+
+    it('a post-only refusal falls back to the market only while the trade still pays', async () => {
+      const ccxt = fakeCcxt();
+      const place = ccxt.placeOrder;
+      ccxt.placeOrder = vi.fn(async (sid, req) => {
+        if (req.postOnly) {
+          ccxt.orders.push(req);
+          throw new Error('binanceusdm {"code":-5022,"msg":"Due to the order could not be executed as maker, the Post Only order will be rejected."}');
+        }
+        return place(sid, req);
+      });
+      ccxt.orderStatus = vi.fn(async () => ({ status: 'open', filled: 0 }));
+      const m = new BotManager({ ccxt, db, emit: () => {}, now: () => T0 });
+      const id = m.save({ mode: 'live', secretId: 'k1', symbol: 'BTC/USDT:USDT', params: makerParams });
+      await m.start(id);
+      await toLimit(ccxt, id, breakoutTape());
+      await vi.waitFor(() => expect(m.eventsFor(id).some((x) => /entry limit not placed .*-5022/.test(x.text))).toBe(true));
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.waitFor(() => expect(ccxt.orders.some((o) => o.type === 'market')).toBe(true));
+      expect(m.eventsFor(id).some((x) => /taking it at market/.test(x.text))).toBe(true);
+      await m.stopAll();
+    });
+  });
+
   it('live balance sizing: real account balance, exchange minimum, isolated margin', async () => {
     const ccxt = fakeCcxt();
     ccxt.marketInfo = vi.fn(async () => ({ exchangeId: 'binanceusdm', trading: true, sandbox: false, contract: true, contractSize: 1, minAmount: 0.001, minCost: 5, last: 100, taker: 0.0005, settle: 'USDT', limits: { maxOrderUsd: 300 } }));

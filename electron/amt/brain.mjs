@@ -48,6 +48,9 @@ export const RESPONSIVE = new Set(['fade', 'reentry', 'absorption', 'sweep']);
 export const INITIATIVE = new Set(['breakout', 'continuation']);
 
 const EARLY = new Set(['flow turned', 'stalled']);
+
+/** Round-trip cost in bps: maker entry + taker exit with maker orders, taker both ways otherwise. */
+export const roundTripBps = (c) => (c.orderMode === 'maker' ? c.makerFeeBps + c.feeBps + c.slippageBps : 2 * (c.feeBps + c.slippageBps));
 /** seconds of adverse momentum before a losing trade is cut */
 const CUT_SEC = 5;
 /** the trailing stop only engages once it locks in this much (R, after fees) */
@@ -172,7 +175,7 @@ export class Brain {
     if (score < c.minScore) return { skip: `not enough agreement (${evidence}; need ${c.minScore})` };
 
     // stop: beyond the structure, the noise and the fees
-    const costs = (2 * (c.feeBps + c.slippageBps) * p) / 1e4;
+    const costs = (roundTripBps(c) * p) / 1e4;
     let stop = plan.stop;
     let risk = (p - stop) * dir;
     const noiseFloor = Number.isFinite(noise) ? this.noiseX * noise : 0;
@@ -259,7 +262,7 @@ export class Brain {
     const c = this.cfg;
     if (!(noise > 0)) return;
     const tr = pos.peak - dir * x * noise;
-    const costs = (pos.entry * 2 * (c.feeBps + c.slippageBps)) / 1e4;
+    const costs = (pos.entry * roundTripBps(c)) / 1e4;
     const locked = ((tr - pos.entry) * dir - costs) / pos.risk;
     if (locked < LOCK_R || (tr - pos.stop) * dir <= 0 || (p - tr) * dir <= 0) return;
     const ns = tr;

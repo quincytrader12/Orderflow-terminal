@@ -30,6 +30,13 @@ const BALANCE_FIELDS: [NumKey, string, string][] = [
   ['maxTradesPerHour', 'Max trades / hour', ''],
 ];
 
+const MAKER_FIELDS: [NumKey, string, string][] = [
+  ['makerFeeBps', 'Maker fee (bps)', 'Binance USDⓈ-M futures: 2 (0.02 %); live bots read the exchange’s rate'],
+  ['makerWaitSec', 'Entry limit wait (s)', 'How long an entry limit rests before the bot decides'],
+  ['makerChaseR', 'Chase after (R)', 'Price this far from the limit: take it at market if it still pays, else let it go'],
+  ['exitMakerSec', 'Exit limit wait (s)', 'How long a target / stall / time exit is offered before market'],
+];
+
 const RISK_FIELDS: [NumKey, string, string][] = [
   ['riskUsd', 'Risk per trade ($)', 'Loss if the stop is hit; size = risk ÷ stop distance'],
   ['maxPositionUsd', 'Max position ($)', 'Never larger than this, and never above the ticket’s order cap'],
@@ -572,6 +579,20 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
       ) : (
         <div className="amt-grid">{RISK_FIELDS.map(([k, l, h]) => num(k, l, h))}</div>
       )}
+      <div className="section-title">Execution</div>
+      <div className="seg">
+        {(['maker', 'market'] as const).map((m) => (
+          <button key={m} type="button" className={`chip ${P.orderMode === m ? 'active' : ''}`} onClick={() => setP({ orderMode: m })}>
+            {m === 'maker' ? 'Limit first (maker fee)' : 'Market'}
+          </button>
+        ))}
+      </div>
+      <div className="muted amt-hint">
+        {P.orderMode === 'maker'
+          ? 'Entries rest as post-only limits on the bot’s own side of the book and pay the maker fee. If price leaves without filling it, the bot takes it at market only while the trade still meets every rule from there (R:R, fees, size) — otherwise it lets it go rather than chase. Target, stall and time exits are offered as limits for a few seconds first; stops and every protective exit always go at market.'
+          : 'Every order goes at market and pays the taker fee: always filled, at a higher cost.'}
+      </div>
+      {P.orderMode === 'maker' && <div className="amt-grid">{MAKER_FIELDS.map(([k, l, h]) => num(k, l, h))}</div>}
       <Check checked={P.allowShort} onChange={(allowShort) => setP({ allowShort })}>
         Allow shorts (ignored on spot markets)
       </Check>
@@ -726,7 +747,7 @@ function Monitor({ bot, snap, running, events }: { bot: AmtBot; snap: AmtSnapsho
               </div>
             </div>
           ) : (
-            <div className="muted amt-hint">{s.pending ? `Order ${s.pending} in flight…` : s.lastSkip ? `Last setup skipped (${s.lastSkip.event}): ${s.lastSkip.reason}` : 'Flat — waiting for a setup.'}</div>
+            <div className="muted amt-hint">{s.working ? `Limit ${s.working.side} resting at ${fmtPrice(s.working.price)} for ${s.working.ageSec} s (post-only, maker fee) — ${s.working.kind === 'entry' ? 'joining the queue' : 'offering the exit'}` : s.pending ? `Order ${s.pending} in flight…` : s.lastSkip ? `Last setup skipped (${s.lastSkip.event}): ${s.lastSkip.reason}` : 'Flat — waiting for a setup.'}</div>
           )}
           {s.brain && s.brain.thoughts.length > 0 && (
             <div className="amt-thoughts">
@@ -901,7 +922,8 @@ function SizingPreview({ p }: { p: AmtParams }) {
   // a typical scalp stop of 0.2 % of price
   const stopPct = 0.2;
   const notional = Math.min(risk / (stopPct / 100), bal * p.maxLeverage, p.maxPositionUsd);
-  const fees = (notional * 2 * (p.feeBps + p.slippageBps)) / 1e4;
+  // limit entries pay the maker fee; exits are counted at market (stops always are)
+  const fees = (notional * (p.orderMode === 'maker' ? p.makerFeeBps + p.feeBps + p.slippageBps : 2 * (p.feeBps + p.slippageBps))) / 1e4;
   const realRisk = (notional * stopPct) / 100;
   return (
     <div className="amt-preview">
