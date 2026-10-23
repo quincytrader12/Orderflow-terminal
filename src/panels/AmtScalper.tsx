@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { fmtNum, fmtPrice, fmtTime } from '../core/format';
 import { AMT_STATE_LABEL, onAmtEvent, useAmtBots, useAmtLive } from '../desktop/amt';
-import { desktop, DesktopOnlyError, type AmtBacktest, type AmtBot, type AmtBotInput, type AmtEvent, type AmtBrain, type AmtOrderFlow, type AmtParams, type AmtSnapshot, type AmtTrainResult, type AmtTrainSegment, type CcxtExchangeInfo } from '../desktop/bridge';
+import { desktop, DesktopOnlyError, type AmtBacktest, type AmtBot, type AmtBotInput, type AmtEvent, type AmtBrain, type AmtOrderFlow, type AmtParams, type AmtSnapshot, type AmtTrainResult, type AmtTrainRow, type AmtTrainSegment, type CcxtExchangeInfo } from '../desktop/bridge';
 import { fetchJson } from '../exchanges/ws';
 import { yahooChart } from '../shared/yahoo';
 import { pickSymbol, unifiedCandidates } from '../desktop/trading';
@@ -976,6 +976,7 @@ function Train({ bot, locked, onApplied }: { bot: AmtBot; locked: boolean; onApp
   const [res, setRes] = useState<AmtTrainResult | null>(null);
   const [err, setErr] = useState('');
   const [applied, setApplied] = useState(false);
+  const [appliedRow, setAppliedRow] = useState<string | null>(null);
   useEffect(() => {
     desktop!.db
       .stats()
@@ -992,6 +993,7 @@ function Train({ bot, locked, onApplied }: { bot: AmtBot; locked: boolean; onApp
     setErr('');
     setRes(null);
     setApplied(false);
+    setAppliedRow(null);
     setProgress(0);
     try {
       setRes(await desktop!.amt.train(bot.params, venue, symbol, { days }));
@@ -1001,10 +1003,22 @@ function Train({ bot, locked, onApplied }: { bot: AmtBot; locked: boolean; onApp
       setBusy(false);
     }
   };
-  const apply = async () => {
-    if (!res?.params) return;
+  const isBest = (l: AmtTrainRow) => Boolean(res?.best) && JSON.stringify(l.params) === JSON.stringify(res!.best!.params);
+  /** Apply one row's settings. A row that did not hold up on the unseen data needs an explicit yes. */
+  const applyRow = async (l: AmtTrainRow) => {
+    if (!isBest(l)) {
+      const u = l.test;
+      const sure = confirm(
+        `These settings did NOT pass the unseen-data check.\n\nOn the last 30% of the data (which the ranking never saw) they made ${u.trades} trades, ${u.winRate === null ? '—' : Math.round(u.winRate * 100) + '%'} wins, and ${u.growthPct >= 0 ? 'grew' : 'shrank'} the balance by ${fmtNum(Math.abs(u.growthPct), 1)}% after fees.\n\nA good win rate on the earlier data alone is often luck. Apply anyway and paper-trade it first?`,
+      );
+      if (!sure) return;
+    }
+    await apply(l.params);
+    setAppliedRow(isBest(l) ? 'the verified settings' : `settings #${res!.leaders.indexOf(l) + 1} (they did not pass the unseen-data check — paper-trade them first)`);
+  };
+  const apply = async (patch: Partial<AmtParams> = res!.best!.params) => {
+    if (!res) return;
     // only the searched knobs change; the owner's risk settings stay
-    const patch = res.best!.params;
     await desktop!.amt.save({ id: bot.id, name: bot.name, mode: bot.mode, exchangeId: bot.exchangeId, symbol: bot.symbol, secretId: bot.secretId, exchangeStop: bot.exchangeStop, params: { ...bot.params, ...patch } });
     setApplied(true);
     onApplied();
@@ -1027,8 +1041,8 @@ function Train({ bot, locked, onApplied }: { bot: AmtBot; locked: boolean; onApp
     <div className="amt-backtest">
       <p className="muted" style={{ marginTop: 0 }}>
         Tries {40} variations of this bot’s order-flow, auction and trade settings on the trades the terminal recorded. Each is ranked on the <b>first 70%</b> of the data only; the best few are then checked on
-        the <b>last 30%</b>, which the ranking never saw. A result is offered only if it also grew the balance there, after fees — otherwise the data shows no edge and nothing changes. Your risk settings are never
-        altered. Recorded data has no order book, so book filters are skipped.
+        the <b>last 30%</b>, which the ranking never saw. A result is marked verified only if it also grew the balance there, after fees. You can apply any row; one that was not verified asks you to confirm. Your risk
+        settings are never altered. Recorded data has no order book, so book filters are skipped.
       </p>
       {instruments.length === 0 ? (
         <div className="muted">No recorded trades yet — keep “Record trades” on in the Database panel and let the terminal run for a day or more on the market you want to trade.</div>
@@ -1078,7 +1092,7 @@ function Train({ bot, locked, onApplied }: { bot: AmtBot; locked: boolean; onApp
                 ) : (
                   <>
                     {locked && <span className="muted">Switch the bot off to apply — its settings cannot change while it trades.</span>}
-                    <button className="btn buy" disabled={locked} onClick={() => void apply()}>
+                    <button className="btn buy" disabled={locked} onClick={() => void apply(res.best!.params)}>
                       Apply to this bot
                     </button>
                   </>
@@ -1092,8 +1106,13 @@ function Train({ bot, locked, onApplied }: { bot: AmtBot; locked: boolean; onApp
             </div>
           ) : (
             <div className="confirm-card sell">
-              <b>No settings grew the balance on the unseen part of the data</b> — nothing was changed. That is a real answer: on this market and period the setups did not beat fees. Try another market, more
+              <b>No settings grew the balance on the unseen part of the data</b> — nothing was changed. Each row below shows how it did on the earlier (train) and the unseen part; you can still apply one, and the bot asks you to confirm. That is a real answer: on this market and period the setups did not beat fees. Try another market, more
               recorded days, or the other style.
+            </div>
+          )}
+          {appliedRow && (
+            <div className="up amt-hint">
+              Applied {appliedRow} to {bot.name}.
             </div>
           )}
           {res.leaders.length > 0 && (
@@ -1112,22 +1131,29 @@ function Train({ bot, locked, onApplied }: { bot: AmtBot; locked: boolean; onApp
             <tbody>
               {res.leaders.map((l, i) => (
                 <Fragment key={i}>
-                  <tr className={res.best && l.params === res.best.params ? 'best' : ''}>
+                  <tr className={isBest(l) ? 'best' : ''}>
                     <td rowSpan={2} className="mono amt-train-params" title={JSON.stringify(l.params)}>
                       {l.base ? 'current' : `#${i + 1}`}
+                      {isBest(l) && <span className="up"> ✓ held up on unseen data</span>}
                       <div className="muted">
-                        {bot.params.style === 'adaptive'
-                          ? Object.entries(l.params)
-                              .map(([k, v]) => `${k} ${v}`)
-                              .join(' · ')
-                          : bot.params.style === 'orderflow'
-                          ? `abs ${l.params.absorbX}×/Δ${l.params.absorbDelta} · flip ${l.params.flipDelta} · imb ${l.params.imbalanceRatio}:1×${l.params.stackMin} · sweep ${l.params.sweepMinBps}bps/${l.params.sweepBurstX}× · stop ${l.params.stopBufferBins} · ${l.params.ofTargetR}R · BE ${l.params.breakevenAtR}`
-                          : `Δ${l.params.deltaThreshold} · int ${l.params.intensityMin} · RR ${l.params.minRR} · stop ${l.params.stopBufferBins} · prof ${l.params.profileMinutes}m · BE ${l.params.breakevenAtR} · fee× ${l.params.targetCostX}`}
+                        {Object.entries(l.params)
+                          .map(([k, v]) => `${k} ${v}`)
+                          .join(' · ')}
                       </div>
+                      {!l.base && !applied && (
+                        <button
+                          className={`chip ${isBest(l) ? 'buy' : ''}`}
+                          disabled={locked}
+                          title={locked ? 'Switch the bot off to apply' : isBest(l) ? 'Apply these settings' : 'Did not pass the unseen-data check — asks to confirm'}
+                          onClick={() => void applyRow(l)}
+                        >
+                          Apply #{i + 1}
+                        </button>
+                      )}
                     </td>
                     {seg('train', l.train)}
                   </tr>
-                  <tr className={res.best && l.params === res.best.params ? 'best' : ''}>{seg('unseen', l.test)}</tr>
+                  <tr className={isBest(l) ? 'best' : ''}>{seg('unseen', l.test)}</tr>
                 </Fragment>
               ))}
             </tbody>

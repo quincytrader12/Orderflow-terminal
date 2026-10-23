@@ -331,6 +331,44 @@ try {
   await page.waitForSelector('.amt-backtest .confirm-card', { timeout: 240_000 });
   const trained = await page.locator('.amt-backtest').innerText();
   expect(/40 settings tried/.test(trained) && /(held up on unseen data|nothing was changed)/.test(trained), `training finished in ${((Date.now() - t0) / 1000).toFixed(0)} s with a verdict`);
+  // every searched setting can be applied: a known result, served by the main process in place of a real run
+  await app.evaluate(({ ipcMain }) => {
+    const seg = (trades, win, growth) => ({ trades, wins: Math.round(trades * win), winRate: win, pnl: growth / 10, fees: 0.5, growthPct: growth, maxDrawdownPct: 3, profitFactor: 1.2, score: 0.01, startBalance: 27 });
+    ipcMain.removeHandler('amt:train');
+    ipcMain.handle('amt:train', async (_e, params, venue, symbol) => ({
+      ok: true,
+      value: {
+        verdict: 'no-edge',
+        params: null,
+        best: null,
+        baseline: { train: seg(10, 0.4, -2), test: seg(5, 0.4, -1) },
+        leaders: [
+          { params: { deltaThreshold: 0.4, minRR: 2 }, train: seg(12, 0.56, 4), test: seg(6, 0.5, -0.8), base: false },
+          { params: { deltaThreshold: 0.3, minRR: 2.5 }, train: seg(11, 0.45, 3), test: seg(5, 0.4, -1.5), base: false },
+        ],
+        searched: 40,
+        count: 120000,
+        from: Date.now() - 86_400_000,
+        to: Date.now(),
+        splitT: Date.now() - 20_000_000,
+        venue,
+        symbol,
+      },
+    }));
+  });
+  await page.click('.amt-backtest button:text-is("Train")');
+  await page.waitForSelector('.amt-train button:has-text("Apply #1")');
+  expect((await page.locator('.amt-train button:has-text("Apply #")').count()) === 2, 'every row of a no-edge result can be applied');
+  let asked = '';
+  // (dialogs are accepted by the handler set up at launch)
+  page.once('dialog', (d) => {
+    asked = d.message();
+  });
+  await page.click('.amt-train button:has-text("Apply #1")');
+  await page.waitForSelector('.amt-backtest :text("Applied settings #1")', { timeout: 5000 });
+  const appliedBot = (await page.evaluate(() => window.novus.amt.list()))[0].params;
+  expect(/did NOT pass the unseen-data check/.test(asked) && /6 trades, 50% wins, and shrank the balance by 0\.80?% after fees/.test(asked), 'a setting that failed the unseen check asks, with its unseen result');
+  expect(appliedBot.deltaThreshold === 0.4 && appliedBot.minRR === 2, 'confirmed setting saved to the bot');
   await page.screenshot({ path: `${OUT}desktop-amt-train.png` });
   await page.click('.amt .toolbar button:text-is("Monitor")');
   await page.click('.amt .algo-switch');
