@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { fmtNum, fmtPrice, fmtTime } from '../core/format';
 import { AMT_STATE_LABEL, onAmtEvent, useAmtBots, useAmtLive } from '../desktop/amt';
-import { desktop, DesktopOnlyError, type AmtBacktest, type AmtBot, type AmtBotInput, type AmtEvent, type AmtBrain, type AmtOrderFlow, type AmtParams, type AmtSnapshot, type AmtTrainResult, type AmtTrainRow, type AmtTrainSegment, type CcxtExchangeInfo } from '../desktop/bridge';
+import { desktop, DesktopOnlyError, type AmtBacktest, type AmtBot, type AmtBotInput, type AmtEvent, type AmtBrain, type AmtOrderFlow, type AmtParams, type AmtSnapshot, type AmtTrainResult, type AmtTrainRow, type AmtTrendBacktest, type AmtTrainSegment, type CcxtExchangeInfo } from '../desktop/bridge';
 import { fetchJson } from '../exchanges/ws';
 import { yahooChart } from '../shared/yahoo';
 import { pickSymbol, unifiedCandidates } from '../desktop/trading';
@@ -94,7 +94,9 @@ type Style = AmtParams['style'];
 /** What the style chips show: the engine styles plus the small-account growth preset. */
 type Preset = Style | 'growth';
 const presetOf = (p: AmtParams): Preset => (p.sizing === 'balance' && p.style === 'scalp' ? 'growth' : p.style);
-const PRESET_NAME: Record<Preset, string> = { scalp: 'Scalp', intraday: 'Intraday', growth: 'Growth (small account)', orderflow: 'Order-flow hybrid', adaptive: 'Adaptive scalper' };
+const PRESET_NAME: Record<Preset, string> = { scalp: 'Scalp', intraday: 'Intraday', growth: 'Growth (small account)', orderflow: 'Order-flow hybrid', adaptive: 'Adaptive scalper', trend: 'Trend (daily, spot)' };
+const TREND_TEXT =
+  'The strategy with the strongest statistical record in crypto: time-series momentum. Once a day, at the daily close, three trend lookbacks (20, 60 and 120 days) vote; the coin is held in proportion to how many are up, sized so the swings stay near a 60 % yearly volatility, and sold when the trends turn down. Spot only — no leverage, no liquidation, no funding. It trades a few times a month and spends long stretches out of the market. It will not catch tops or bottoms and has losing streaks in sideways markets; its edge is staying in the big trends and out of the big crashes. Backtest it on the exchange’s full history first.';
 const ADAPTIVE_TEXT =
   'The terminal’s most complete bot: every scalp and order-flow trigger, judged by a confluence score before it trades. Stops go beyond the one-minute noise (smaller size, same money at risk). In a trade it reads momentum every second — cuts trades the flow turns against, leaves ones that stall, trails winners without snapping to breakeven, and lets them run past the target while momentum lasts. After each exit it watches price and learns: wider stops after noise stop-outs, more patience after early exits that would have worked, a bench for setups that keep losing. It explains every decision in the activity log. Sizes from the balance like Growth.';
 const ORDERFLOW_TEXT =
@@ -103,6 +105,7 @@ const GROWTH_TEXT =
   'Compounds a small balance: risks a % of the current balance on A+ scalps only — stricter order-flow confirmation, 2R minimum, targets that clear fees 4×, the trade manager instead of a fixed breakeven, a pause after 3 losses in a row and a hard stop at a 20 % drawdown. Train it on recorded data before going live.';
 
 const SETUPS: Record<Style, [keyof AmtParams['setups'], string, string][]> = {
+  trend: [],
   scalp: [
     ['fade', 'Responsive fade', 'Probe beyond VAH/VAL is rejected → trade back to POC'],
     ['breakout', 'Initiative breakout', 'Price accepted outside value with strong delta → trade the extension'],
@@ -134,7 +137,19 @@ const STYLE_TEXT: Record<Style, string> = {
   intraday: 'Hours. Session structure (initial balance, prior-day value), wider stops, at most a few trades a session, trailing stop, flat before the session closes.',
   orderflow: ORDERFLOW_TEXT,
   adaptive: ADAPTIVE_TEXT,
+  trend: TREND_TEXT,
 };
+
+const TREND_FIELDS: [NumKey, string, string][] = [
+  ['trendL1', 'Lookback 1 (days)', 'Short trend vote'],
+  ['trendL2', 'Lookback 2 (days)', 'Medium trend vote'],
+  ['trendL3', 'Lookback 3 (days)', 'Long trend vote'],
+  ['volDays', 'Volatility window (days)', 'Realised volatility measured over this many days'],
+  ['targetVol', 'Target volatility (% a year)', 'Position = trend strength × this ÷ realised volatility — lower is calmer, higher grows faster and falls harder'],
+  ['maxExposure', 'Max in the coin (× balance)', '1 = at most the whole balance, no leverage'],
+  ['rebalanceBand', 'Rebalance band (%)', 'Trade only when the target moves this far from the holding — fewer trades, lower fees'],
+  ['feeBps', 'Fee per trade (bps)', 'Binance spot: 10 (0.1 %); live bots read the exchange’s rate'],
+];
 
 const ADAPTIVE_FIELDS: [NumKey, string, string][] = [
   ['minScore', 'Evidence needed (score)', 'Delta, volume, OFI, queue, regime, location and recent form add up; below this no trade'],
@@ -307,7 +322,7 @@ export function AmtScalper({ config: c, setConfig }: PanelProps<AmtConfig>) {
   return (
     <div className="panel amt">
       <Toolbar>
-        <Select value={c.botId} options={[{ value: '', label: bots.length ? 'Choose bot…' : 'No bots yet' }, ...bots.map((b) => ({ value: b.id, label: `${b.running ? '● ' : ''}${b.name}${presetOf(b.params) === 'growth' ? ' · growth' : b.params.style === 'intraday' ? ' · intraday' : b.params.style === 'orderflow' ? ' · order flow' : b.params.style === 'adaptive' ? ' · adaptive' : ''}` }))]} onChange={(botId) => setConfig({ botId })} width={150} />
+        <Select value={c.botId} options={[{ value: '', label: bots.length ? 'Choose bot…' : 'No bots yet' }, ...bots.map((b) => ({ value: b.id, label: `${b.running ? '● ' : ''}${b.name}${presetOf(b.params) === 'growth' ? ' · growth' : b.params.style === 'intraday' ? ' · intraday' : b.params.style === 'orderflow' ? ' · order flow' : b.params.style === 'adaptive' ? ' · adaptive' : b.params.style === 'trend' ? ' · trend' : ''}` }))]} onChange={(botId) => setConfig({ botId })} width={150} />
         <button className="chip" onClick={() => void create()} title="New AMT bot">
           + New
         </button>
@@ -355,11 +370,15 @@ export function AmtScalper({ config: c, setConfig }: PanelProps<AmtConfig>) {
         ) : c.tab === 'settings' ? (
           <Settings key={bot.id} bot={bot} locked={running} onSaved={reload} />
         ) : c.tab === 'backtest' ? (
-          <Backtest bot={bot} />
+          bot.params.style === 'trend' ? <TrendBacktest bot={bot} /> : <Backtest bot={bot} />
         ) : c.tab === 'train' ? (
-          <Train key={bot.id} bot={bot} locked={running} onApplied={reload} />
+          bot.params.style === 'trend' ? (
+            <div className="amt-backtest muted">The trend bot uses fixed rules from the research — nothing is fitted to the data, so the backtest on the exchange’s history is an honest out-of-sample check. Use the Backtest tab.</div>
+          ) : (
+            <Train key={bot.id} bot={bot} locked={running} onApplied={reload} />
+          )
         ) : (
-          <Monitor bot={bot} snap={snap} running={running} events={events} />
+          bot.params.style === 'trend' ? <TrendMonitor bot={bot} snap={snap} running={running} events={events} /> : <Monitor bot={bot} snap={snap} running={running} events={events} />
         )}
       </div>
     </div>
@@ -374,7 +393,7 @@ function Intro({ onCreate }: { onCreate: () => void }) {
         The bot builds a rolling volume profile (POC and the 70% value area), tracks whether price is in <b>balance</b> inside value, <b>probing</b> outside it, or has been <b>accepted</b> outside it, and
         waits for order flow — aggressor delta, volume intensity and the order book — to agree before it trades:
       </p>
-      {(['adaptive', 'scalp', 'intraday', 'orderflow'] as Style[]).map((st) => (
+      {(['trend', 'adaptive', 'scalp', 'intraday', 'orderflow'] as Style[]).map((st) => (
         <div key={st}>
           <b>{PRESET_NAME[st]}</b> <span className="muted">— {STYLE_TEXT[st]}</span>
           <ul>
@@ -545,7 +564,7 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
 
       <div className="section-title">Style</div>
       <div className="seg">
-        {(['adaptive', 'scalp', 'intraday', 'growth', 'orderflow'] as Preset[]).map((st) => (
+        {(['trend', 'adaptive', 'scalp', 'intraday', 'growth', 'orderflow'] as Preset[]).map((st) => (
           <button
             key={st}
             type="button"
@@ -555,7 +574,8 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
               // load the preset but keep the owner's cost settings, and their
               // fixed-$ risk unless the preset sizes from the balance
               const keep = { riskUsd: P.riskUsd, maxPositionUsd: P.maxPositionUsd, maxDailyLossUsd: P.maxDailyLossUsd, allowShort: P.allowShort, useBook: P.useBook, feeBps: P.feeBps, slippageBps: P.slippageBps };
-              setD({ ...d, params: { ...presets[st], ...keep, ...(st === 'growth' || st === 'orderflow' || st === 'adaptive' ? { maxPositionUsd: presets[st].maxPositionUsd } : {}) } });
+              // the trend bot trades spot: BTC/USDT:USDT (perpetual) becomes BTC/USDT
+              setD({ ...d, symbol: st === 'trend' ? d.symbol.split(':')[0] : d.symbol, params: { ...presets[st], ...keep, ...(st === 'growth' || st === 'orderflow' || st === 'adaptive' ? { maxPositionUsd: presets[st].maxPositionUsd } : {}), ...(st === 'trend' ? { feeBps: presets.trend.feeBps, slippageBps: 0 } : {}) } });
             }}
           >
             {PRESET_NAME[st]}
@@ -564,6 +584,16 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
       </div>
       <div className="muted amt-hint">{presetOf(P) === 'growth' ? GROWTH_TEXT : STYLE_TEXT[P.style]}</div>
 
+      {P.style === 'trend' ? (
+        <>
+          <div className="section-title">Balance</div>
+          <BalanceInput value={P.accountUsd} locked={locked} live={d.mode === 'live'} onChange={(accountUsd) => setP({ accountUsd })} />
+          <div className="muted amt-hint">Use a spot market — BTC/USDT or ETH/USDT. Live, the bot buys and sells the coin with the USDT in your spot wallet; it never borrows. Raise the order cap in the ticket’s ⚙ limits to at least your balance.</div>
+          <div className="section-title">Trend rules</div>
+          <div className="amt-grid">{TREND_FIELDS.map(([k, l, h]) => num(k, l, h))}</div>
+        </>
+      ) : (
+        <>
       <div className="section-title">Setups</div>
       {SETUPS[P.style].map(([k, name, text]) => (
         <Check key={k} checked={P.setups[k]} onChange={(v) => setP({ setups: { ...P.setups, [k]: v } })}>
@@ -669,6 +699,8 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
           </div>
         ))}
       </details>
+        </>
+      )}
 
       <div className="confirm-actions">
         {note && <span className={note.ok ? 'up' : 'down'}>{note.text}</span>}
@@ -1282,6 +1314,181 @@ function Equity({ points }: { points: [number, number][] }) {
     <svg className="amt-equity" viewBox="0 0 100 40" preserveAspectRatio="none">
       <line x1="0" x2="100" y1={path.zero} y2={path.zero} className="zero" />
       <path d={path.d} className={path.up ? 'up' : 'down'} />
+    </svg>
+  );
+}
+
+/** The trend bot at a glance: what the trends say, what it holds, what it does next. */
+function TrendMonitor({ bot, snap, running, events }: { bot: AmtBot; snap: AmtSnapshot | null; running: boolean; events: AmtEvent[] }) {
+  const tr = snap?.trend;
+  const pct = (v: number | null | undefined) => (v === null || v === undefined || !isFinite(v) ? '—' : `${Math.round(v * 100)}%`);
+  return (
+    <div className="amt-monitor">
+      <div className="amt-head">
+        <b className="mono">{bot.symbol}</b>
+        <span className="muted">{snap?.exchange ?? bot.exchangeId} · daily trend</span>
+        <Spacer />
+        {running ? <span className={`status-dot status-${snap?.feed === 'open' ? 'open' : snap?.feed === 'error' ? 'error' : 'connecting'}`} title={snap?.feedError ?? snap?.feed ?? ''} /> : <span className="muted">off</span>}
+      </div>
+      {!running && !snap && <div className="muted amt-hint">Switch the bot on: it reads the daily closes right away, then once a day. Run the Backtest first to see how it did on the full history.</div>}
+      {running && snap?.feed === 'error' && <div className="down amt-hint">{snap.feedError} — retrying every minute.</div>}
+      {tr && (
+        <>
+          <div className="amt-thought">{tr.explain || 'Reading the daily closes…'}</div>
+          <div className="amt-cards">
+            <Stat label="Trends up" value={tr.votes.length ? `${tr.votes.filter((v) => v.vote > 0).length}/3` : '—'} />
+            {tr.votes.map((v) => (
+              <Stat key={v.L} label={`${v.L}-day`} value={`${v.ret >= 0 ? '+' : ''}${fmtNum(v.ret * 100, 1)}%`} tone={v.ret} />
+            ))}
+            <Stat label="Volatility" value={tr.vol === null ? '—' : `${Math.round(tr.vol * 100)}% a year`} />
+            <Stat label="Target" value={pct(tr.target)} />
+            <Stat label="Holding" value={pct(tr.held)} />
+            {tr.equity !== null && <BalanceStat balance={tr.equity} start={tr.start} pnl={tr.equity - tr.start} />}
+            <Stat label={`${tr.base} held`} value={tr.units === null ? '—' : fmtNum(tr.units, 6)} />
+            <Stat label="Next check" value={new Date(tr.nextCheck).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })} />
+          </div>
+        </>
+      )}
+      <div className="section-title">Activity</div>
+      {events.length === 0 ? (
+        <div className="muted">Nothing yet.</div>
+      ) : (
+        [...events]
+          .reverse()
+          .slice(0, 60)
+          .map((e, i) => (
+            <div key={i} className={`log-row amt-ev ev-${e.kind}`}>
+              <span className="muted mono">{fmtTime(e.t)}</span>
+              <span className={`tag ev-tag-${e.kind}`}>{e.kind}</span>
+              <span>{e.text}</span>
+            </div>
+          ))
+      )}
+    </div>
+  );
+}
+
+/** Backtest the trend rules on the exchange's full daily history, against simply holding the coin. */
+function TrendBacktest({ bot }: { bot: AmtBot }) {
+  const rate = useZarRate();
+  const [from, setFrom] = useState(2018);
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<AmtTrendBacktest | null>(null);
+  const [err, setErr] = useState('');
+  const exchange = bot.mode === 'paper' ? bot.exchangeId || 'binance' : 'binance';
+  const symbol = bot.symbol.split(':')[0];
+  const run = async () => {
+    setBusy(true);
+    setErr('');
+    setRes(null);
+    try {
+      setRes(await desktop!.amt.trendBacktest(bot.params, exchange, symbol, from));
+    } catch (e) {
+      setErr(String((e as Error).message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const s = res?.strategy;
+  const h = res?.hold;
+  const money = (usdV: number) => `$${fmtNum(usdV, 2)}${rate ? ` (R${fmtNum(usdV * rate, 0)})` : ''}`;
+  return (
+    <div className="amt-backtest">
+      <p className="muted" style={{ marginTop: 0 }}>
+        Downloads every daily candle of {symbol} on {exchange} since the year you pick and runs these exact rules day by day — the signal at each close, traded at the next day’s open, {bot.params.feeBps / 100}% fee on every trade — against simply buying and holding. Nothing is fitted to this data.
+      </p>
+      <div className="input-with-chips">
+        <Select value={from} options={[2018, 2019, 2020, 2021, 2022, 2023, 2024].map((y) => ({ value: y, label: `from ${y}` }))} onChange={setFrom} />
+        <button className="btn" disabled={busy} onClick={() => void run()}>
+          {busy ? 'Downloading history…' : 'Backtest on full history'}
+        </button>
+      </div>
+      {err && <div className="down amt-hint">{err}</div>}
+      {res && s && h && (
+        <>
+          <div className="muted amt-hint">
+            {res.days.toLocaleString()} days · {new Date(res.from).toLocaleDateString()} → {new Date(res.to).toLocaleDateString()} · start {money(res.startUsd)}
+          </div>
+          <table className="grid amt-trend-table">
+            <thead>
+              <tr>
+                <th />
+                <th>Ends at</th>
+                <th>Total</th>
+                <th>Per year</th>
+                <th>Worst fall</th>
+                <th>Sharpe</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <b>Trend bot</b>
+                </td>
+                <td>{money(s.end)}</td>
+                <td className={s.totalPct >= 0 ? 'up' : 'down'}>{fmtNum(s.totalPct, 0)}%</td>
+                <td>{fmtNum(s.cagrPct, 1)}%</td>
+                <td className="down">−{fmtNum(s.maxDrawdownPct, 0)}%</td>
+                <td>{fmtNum(s.sharpe, 2)}</td>
+              </tr>
+              <tr>
+                <td>Buy & hold</td>
+                <td>{money(h.end)}</td>
+                <td className={h.totalPct >= 0 ? 'up' : 'down'}>{fmtNum(h.totalPct, 0)}%</td>
+                <td>{fmtNum(h.cagrPct, 1)}%</td>
+                <td className="down">−{fmtNum(h.maxDrawdownPct, 0)}%</td>
+                <td>{fmtNum(h.sharpe, 2)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="muted amt-hint">
+            {s.trades} trades ({fmtNum(s.trades / Math.max(1, res.days / 30.4), 1)} a month) · {money(s.fees)} fees · in the market {Math.round(s.timeInMarket * 100)}% of the time
+          </div>
+          <TwoCurves a={res.equity} b={res.holdCurve} />
+          <div className="muted amt-hint">Log scale: <span className="up">trend bot</span> vs <span className="muted">buy &amp; hold</span>.</div>
+          <table className="grid amt-trend-table">
+            <thead>
+              <tr>
+                <th>Year</th>
+                <th>Trend bot</th>
+                <th>Buy & hold</th>
+              </tr>
+            </thead>
+            <tbody>
+              {res.years.map((y) => (
+                <tr key={y.year}>
+                  <td>
+                    {y.year}
+                    {y.partial ? ' (so far)' : ''}
+                  </td>
+                  <td className={y.strategyPct >= 0 ? 'up' : 'down'}>{fmtNum(y.strategyPct, 1)}%</td>
+                  <td className={y.holdPct >= 0 ? 'up' : 'down'}>{fmtNum(y.holdPct, 1)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="muted amt-hint">Past results are evidence, not a promise. Paper-trade it first; when you go live, a few bad months in a row are normal for trend following.</div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Two equity curves on one log-scale chart. */
+function TwoCurves({ a, b }: { a: [number, number][]; b: [number, number][] }) {
+  const paths = useMemo(() => {
+    const vals = [...a, ...b].map(([, v]) => Math.log(Math.max(v, 1e-9)));
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    const n = Math.max(a.length, b.length) - 1 || 1;
+    const line = (pts: [number, number][]) => pts.map(([, v], i) => `${i ? 'L' : 'M'}${((i / n) * 100).toFixed(2)},${(38 - ((Math.log(Math.max(v, 1e-9)) - min) / (max - min || 1)) * 36).toFixed(2)}`).join(' ');
+    return { a: line(a), b: line(b) };
+  }, [a, b]);
+  if (a.length < 2) return null;
+  return (
+    <svg className="amt-equity amt-two" viewBox="0 0 100 40" preserveAspectRatio="none">
+      <path d={paths.b} className="hold" />
+      <path d={paths.a} className="up" />
     </svg>
   );
 }

@@ -142,6 +142,25 @@ export class CcxtService {
     return rows.map(([t, o, h, l, c, v]) => ({ time: t, open: o, high: h, low: l, close: c, volume: v }));
   }
 
+  /** Candles from `since` to now, paged (public data; e.g. years of daily candles for a backtest). */
+  async history(id, symbol, timeframe, since, max = 6000) {
+    const ex = this.publicExchange(id);
+    await ex.loadMarkets();
+    if (!ex.markets[symbol]) throw new Error(`${symbol} is not listed on ${ex.name}`);
+    const step = ex.parseTimeframe(timeframe) * 1000;
+    const out = [];
+    let t = since;
+    while (out.length < max) {
+      const rows = await ex.fetchOHLCV(symbol, timeframe, t, 1000);
+      if (!rows?.length) break;
+      for (const [time, open, high, low, close, volume] of rows) if (!out.length || time > out[out.length - 1].time) out.push({ time, open, high, low, close, volume });
+      const last = rows[rows.length - 1][0];
+      if (rows.length < 2 || last + step >= Date.now()) break;
+      t = last + step;
+    }
+    return out;
+  }
+
   async tickers(id) {
     const ex = this.publicExchange(id);
     await ex.loadMarkets();

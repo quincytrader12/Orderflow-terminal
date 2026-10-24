@@ -402,6 +402,28 @@ try {
   await page.click('.amt .algo-switch');
   await page.waitForSelector('.amt .algo-switch:not(.on)');
 
+  step('trend bot: daily time-series momentum on spot, backtest on full history');
+  await page.click('.amt .toolbar button:text-is("Settings")');
+  await page.click('.amt-settings .seg button:text-is("Trend (daily, spot)")');
+  await page.waitForSelector('.amt-settings .section-title:text-is("Trend rules")');
+  expect((await page.locator('.amt-settings :text("Target volatility (% a year)")').count()) === 1, 'trend rules editable');
+  await page.click('.amt-settings button:text-is("Save")');
+  const trendBot = (await page.evaluate(() => window.novus.amt.list()))[0];
+  expect(trendBot.params.style === 'trend' && trendBot.params.targetVol === 60 && trendBot.params.feeBps === 10, 'trend bot saved with its preset');
+  expect(!trendBot.symbol.includes(':'), `trend bot moved to the spot market (${trendBot.symbol})`);
+  await page.click('.amt .toolbar button:text-is("Backtest")');
+  await page.click('.amt-backtest button:text-is("Backtest on full history")');
+  // the sandbox has no exchange access: the error is shown, nothing breaks
+  await page.waitForSelector('.amt-backtest .down', { timeout: 60_000 });
+  expect((await page.locator('.amt-backtest .down').innerText()).length > 0, 'trend backtest reports why it could not download history');
+  await page.click('.amt .toolbar button:text-is("Monitor")');
+  await page.click('.amt .algo-switch');
+  await page.waitForSelector('.amt .algo-switch.on');
+  await page.waitForSelector('.amt-ev.ev-started');
+  await page.screenshot({ path: `${OUT}desktop-amt-trend.png` });
+  await page.click('.amt .algo-switch');
+  await page.waitForSelector('.amt .algo-switch:not(.on)');
+
   step('adaptive scalper: judgement settings, reasoning read-out');
   await page.click('.amt .toolbar button:text-is("Settings")');
   await page.click('.amt-settings .seg button:text-is("Adaptive scalper")');

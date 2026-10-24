@@ -77,6 +77,7 @@ contextBridge.exposeInMainWorld('novus', {
     events: (id) => call('amt:events', id),
     backtest: (params, venue, symbol, from) => call('amt:backtest', params, venue, symbol, from),
     train: (params, venue, symbol, opts) => call('amt:train', params, venue, symbol, opts),
+    trendBacktest: (params, exchangeId, symbol, fromYear) => call('amt:trendBacktest', params, exchangeId, symbol, fromYear),
     onTrain: (fn) => listen(amtListeners.train, fn),
     onStatus: (fn) => listen(amtListeners.status, fn),
     onEvent: (fn) => listen(amtListeners.event, fn),

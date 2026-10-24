@@ -388,6 +388,7 @@ function registerIpc() {
   handle('amt:events', (_e, id) => bots.eventsFor(id));
   handle('amt:backtest', (_e, params, venue, symbol, from) => bots.backtest(params, venue, symbol, from));
   handle('amt:train', (_e, params, venue, symbol, opts) => bots.train(params, venue, symbol, opts));
+  handle('amt:trendBacktest', (_e, params, exchangeId, symbol, fromYear) => bots.trendBacktest(params, exchangeId, symbol, fromYear));
   handle('ccxt:subscribe', (e, sid, id, symbol) => {
     const wc = e.sender;
     ccxtSvc.subscribe(sid, id, symbol, (msg) => {

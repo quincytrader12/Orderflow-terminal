@@ -184,7 +184,7 @@ export interface AmtParams {
   acceptSec: number;
   rejectSec: number;
   reentrySec: number;
-  style: 'scalp' | 'intraday' | 'orderflow' | 'adaptive';
+  style: 'scalp' | 'intraday' | 'orderflow' | 'adaptive' | 'trend';
   setups: { fade: boolean; breakout: boolean; reentry: boolean; ibBreakout: boolean; priorAccept: boolean; priorReject: boolean; absorption: boolean; continuation: boolean; sweep: boolean };
   ibMinutes: number;
   ibAcceptMin: number;
@@ -229,6 +229,17 @@ export interface AmtParams {
   wallBandBps: number;
   ofTargetR: number;
   ofRegime: boolean;
+  // trend (daily time-series momentum, spot)
+  trendL1: number;
+  trendL2: number;
+  trendL3: number;
+  volDays: number;
+  /** annualised volatility to aim for, % */
+  targetVol: number;
+  maxExposure: number;
+  /** % of the balance the target must move before it trades */
+  rebalanceBand: number;
+  trendShort: boolean;
   /** trade manager (every style but intraday; always on for adaptive) */
   manageTrades: boolean;
   steamAtR: number;
@@ -398,6 +409,50 @@ export interface AmtSnapshot {
   orderflow: AmtOrderFlow | null;
   /** the adaptive scalper's state of mind (adaptive style only) */
   brain: AmtBrain | null;
+  /** trend bot read-out (trend style only) */
+  trend?: AmtTrend;
+}
+
+export interface AmtTrend {
+  ready: boolean;
+  explain: string;
+  votes: { L: number; ret: number; vote: number }[];
+  vol: number | null;
+  scale: number | null;
+  /** target share of the balance in the coin (−1…1) */
+  target: number | null;
+  held: number;
+  equity: number | null;
+  start: number;
+  cash: number | null;
+  units: number | null;
+  base: string;
+  closeT: number | null;
+  nextCheck: number;
+}
+
+export interface AmtTrendStats {
+  end: number;
+  totalPct: number;
+  cagrPct: number;
+  maxDrawdownPct: number;
+  sharpe: number;
+  volPct: number;
+}
+
+export interface AmtTrendBacktest {
+  strategy: AmtTrendStats & { trades: number; fees: number; timeInMarket: number };
+  hold: AmtTrendStats;
+  years: { year: number; strategyPct: number; holdPct: number; partial?: boolean }[];
+  equity: [number, number][];
+  holdCurve: [number, number][];
+  from: number;
+  to: number;
+  days: number;
+  feeBps: number;
+  startUsd: number;
+  exchangeId: string;
+  symbol: string;
 }
 
 export interface AmtBrain {
@@ -430,7 +485,7 @@ export interface AmtOrderFlow {
 export interface AmtEvent {
   id: string;
   t: number;
-  kind: 'started' | 'stopped' | 'entry' | 'exit' | 'skip' | 'info' | 'warn' | 'error' | 'think';
+  kind: 'started' | 'stopped' | 'entry' | 'exit' | 'skip' | 'info' | 'warn' | 'error' | 'think' | 'trade';
   text: string;
 }
 
@@ -497,7 +552,7 @@ export interface NovusApi {
   amt: {
     list(): Promise<AmtBot[]>;
     defaults(): Promise<AmtParams>;
-    presets(): Promise<Record<'scalp' | 'intraday' | 'growth' | 'orderflow' | 'adaptive', AmtParams>>;
+    presets(): Promise<Record<'scalp' | 'intraday' | 'growth' | 'orderflow' | 'adaptive' | 'trend', AmtParams>>;
     save(cfg: AmtBotInput): Promise<string>;
     remove(id: string): Promise<void>;
     start(id: string): Promise<boolean>;
@@ -507,6 +562,7 @@ export interface NovusApi {
     events(id: string): Promise<AmtEvent[]>;
     backtest(params: AmtParams, venue: string, symbol: string, from?: number): Promise<AmtBacktest>;
     train(params: AmtParams, venue: string, symbol: string, opts?: { days?: number; n?: number }): Promise<AmtTrainResult>;
+    trendBacktest(params: AmtParams, exchangeId: string, symbol: string, fromYear: number): Promise<AmtTrendBacktest>;
     onTrain(fn: (m: { progress: number }) => void): () => void;
     onStatus(fn: (s: AmtSnapshot) => void): () => void;
     onEvent(fn: (e: AmtEvent) => void): () => void;

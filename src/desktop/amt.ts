@@ -31,6 +31,7 @@ export function startAmtService() {
     eventListeners.forEach((fn) => fn(e));
     if (e.kind === 'entry') void entryWithChart(e);
     else if (e.kind === 'exit' || e.kind === 'stopped' || e.kind === 'error') forwardAlert(`AMT bot · ${e.kind}`, e.text);
+    else if (e.kind === 'trade') forwardAlert('Trend bot · trade', e.text);
   });
 }
 

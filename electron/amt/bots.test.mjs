@@ -110,6 +110,90 @@ describe('BotManager', () => {
     expect(m.list()[0].running).toBe(false);
   });
 
+  describe('trend bot (daily, spot)', () => {
+    const DAY = 86_400_000;
+    /** 200 daily candles of a steady uptrend ending yesterday, and a price feed */
+    const trendCcxt = (now, drift = 0.004) => {
+      const ccxt = fakeCcxt();
+      let p = 100;
+      const rows = [];
+      const first = Math.floor(now / DAY) * DAY - 200 * DAY;
+      for (let i = 0; i < 200; i++) {
+        const o = p;
+        p *= Math.exp(drift + (i % 2 ? 0.01 : -0.01));
+        rows.push({ time: first + i * DAY, open: o, high: Math.max(o, p), low: Math.min(o, p), close: p, volume: 1 });
+      }
+      // today's candle is still open: the bot must ignore it
+      rows.push({ time: first + 200 * DAY, open: p, high: p, low: p, close: p * 0.5, volume: 1 });
+      ccxt.ohlcv = vi.fn(async () => rows);
+      ccxt.ticker = vi.fn(async () => ({ last: p }));
+      ccxt.history = vi.fn(async () => rows.slice(0, 200));
+      ccxt.price = p;
+      return ccxt;
+    };
+
+    it('paper: buys into an uptrend at the daily check, keeps the book across restarts, holds inside the band', async () => {
+      let now = Date.UTC(2026, 9, 24, 10);
+      const ccxt = trendCcxt(now);
+      const m = new BotManager({ ccxt, db, emit: () => {}, now: () => now });
+      expect(m.presets().trend).toMatchObject({ style: 'trend', targetVol: 60, maxExposure: 1, feeBps: 10 });
+      const id = m.save({ mode: 'paper', exchangeId: 'binance', symbol: 'BTC/USDT', params: { ...m.presets().trend, accountUsd: 55 } });
+      await m.start(id);
+      await vi.waitFor(() => expect(m.eventsFor(id).some((e) => e.kind === 'trade')).toBe(true));
+      const trade = m.eventsFor(id).find((e) => e.kind === 'trade').text;
+      expect(trade).toMatch(/^BUY .* BTC ≈ \$\d+\.\d\d @ .* → \d+% of the balance in BTC \(was 0%\) — 3\/3 trends up/);
+      const snap = m.snapshot(id);
+      expect(snap.trend).toMatchObject({ ready: true, base: 'BTC' });
+      expect(snap.trend.held).toBeCloseTo(snap.trend.target, 2);
+      expect(snap.balance).toBeGreaterThan(54.5);
+      expect(snap.stats.fees).toBeGreaterThan(0);
+      await m.stop(id, { reason: 'test' });
+      expect(m.eventsFor(id).at(-1).text).toMatch(/BTC stays in the paper account/);
+      // the next day, restarted: the same book, already on target → no trade
+      now += DAY;
+      // the same market a day on (yesterday's last candle unchanged)
+      const m2 = new BotManager({ ccxt: trendCcxt(now), db, emit: () => {}, now: () => now });
+      await m2.start(id);
+      await vi.waitFor(() => expect(m2.eventsFor(id).some((e) => /Daily check/.test(e.text))).toBe(true));
+      expect(m2.eventsFor(id).find((e) => /Daily check/.test(e.text)).text).toMatch(/within the 10% band, no trade/);
+      expect(m2.snapshot(id).trend.units).toBeCloseTo(snap.trend.units, 9);
+      await m2.stop(id, { reason: 'test' });
+    });
+
+    it('live trend bots trade spot only', async () => {
+      const now = Date.UTC(2026, 9, 24, 10);
+      const ccxt = trendCcxt(now);
+      const m = new BotManager({ ccxt, db, emit: () => {}, now: () => now });
+      const id = m.save({ mode: 'live', secretId: 'k1', symbol: 'BTC/USDT:USDT', params: m.presets().trend });
+      await expect(m.start(id)).rejects.toThrow(/trades spot/);
+    });
+
+    it('live: buys with a market order sized in USDT, sells only what is held', async () => {
+      const now = Date.UTC(2026, 9, 24, 10);
+      const ccxt = trendCcxt(now);
+      ccxt.marketInfo = vi.fn(async () => ({ exchangeId: 'binance', trading: true, sandbox: false, contract: false, taker: 0.001, minCost: 5, minAmount: 0.00001, freeQuote: 55, freeBase: 0, limits: { maxOrderUsd: 300 } }));
+      const m = new BotManager({ ccxt, db, emit: () => {}, now: () => now });
+      const id = m.save({ mode: 'live', secretId: 'k1', symbol: 'BTC/USDT', params: m.presets().trend });
+      await m.start(id);
+      await vi.waitFor(() => expect(ccxt.orders.length).toBe(1));
+      expect(ccxt.orders[0]).toMatchObject({ symbol: 'BTC/USDT', side: 'buy', type: 'market', sizeMode: 'quote' });
+      expect(ccxt.orders[0].size).toBeGreaterThan(5);
+      expect(ccxt.orders[0].size).toBeLessThanOrEqual(55);
+      await m.stop(id, { reason: 'test' });
+    });
+
+    it('backtests on the exchange history', async () => {
+      const now = Date.UTC(2026, 9, 24, 10);
+      const ccxt = trendCcxt(now);
+      const m = new BotManager({ ccxt, db, emit: () => {}, now: () => now });
+      const r = await m.trendBacktest(m.presets().trend, 'binance', 'BTC/USDT', 2026);
+      expect(ccxt.history).toHaveBeenCalledWith('binance', 'BTC/USDT', '1d', Date.UTC(2026, 0, 1) - 122 * DAY);
+      expect(r.strategy.cagrPct).toBeGreaterThan(0);
+      expect(r).toMatchObject({ exchangeId: 'binance', symbol: 'BTC/USDT' });
+      expect(r.equity.length).toBeLessThan(r.days);
+    });
+  });
+
   it('switches the trade manager on for bots saved before it existed, except intraday', async () => {
     const ccxt = fakeCcxt();
     const m = new BotManager({ ccxt, db, emit: () => undefined, now: () => T0 });

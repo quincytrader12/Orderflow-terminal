@@ -6,7 +6,8 @@
 //
 // Bots never start on their own: after a restart every bot is off.
 import { randomUUID } from 'node:crypto';
-import { ADAPTIVE_PRESET, AmtEngine, DEFAULT_AMT, finishBacktest, GROWTH_PRESET, INTRADAY_PRESET, mergeConfig, ORDERFLOW_PRESET, paperFill, replay, SCALP_PRESET } from './engine.mjs';
+import { ADAPTIVE_PRESET, AmtEngine, DEFAULT_AMT, finishBacktest, GROWTH_PRESET, INTRADAY_PRESET, mergeConfig, ORDERFLOW_PRESET, paperFill, replay, SCALP_PRESET, TREND_PRESET } from './engine.mjs';
+import { backtestTrend, DAY, explainSignal, rebalanceOrder, trendSignal } from './trend.mjs';
 import { train } from './train.mjs';
 
 const KEY = 'amtBots';
@@ -58,7 +59,7 @@ export class BotManager {
   }
 
   presets() {
-    return { scalp: mergeConfig(SCALP_PRESET), intraday: mergeConfig(INTRADAY_PRESET), growth: mergeConfig(GROWTH_PRESET), orderflow: mergeConfig(ORDERFLOW_PRESET), adaptive: mergeConfig(ADAPTIVE_PRESET) };
+    return { scalp: mergeConfig(SCALP_PRESET), intraday: mergeConfig(INTRADAY_PRESET), growth: mergeConfig(GROWTH_PRESET), orderflow: mergeConfig(ORDERFLOW_PRESET), adaptive: mergeConfig(ADAPTIVE_PRESET), trend: mergeConfig(TREND_PRESET) };
   }
 
   save(input) {
@@ -112,6 +113,7 @@ export class BotManager {
   snapshot(id) {
     const b = this.running.get(id);
     if (!b) return null;
+    if (b.trend) return this.trendSnapshot(b);
     return { id, running: true, mode: b.cfg.mode, symbol: b.cfg.symbol, exchange: b.exchangeId, sandbox: b.sandbox, feed: b.feed, feedError: b.feedError, startedAt: b.startedAt, ...b.engine.snapshot() };
   }
 
@@ -120,6 +122,7 @@ export class BotManager {
     const cfg = this.configs().find((c) => c.id === id);
     if (!cfg) throw new Error('bot not found');
     const params = botParams(cfg.params);
+    if (params.style === 'trend') return this.startTrend(cfg, params);
     let exchangeId = cfg.exchangeId;
     let sandbox = false;
     let live = null;
@@ -513,6 +516,215 @@ export class BotManager {
     e.cancelled();
   }
 
+  // ---------- trend bot (daily time-series momentum, spot) ----------
+
+  async startTrend(cfg, params) {
+    const id = cfg.id;
+    let exchangeId = cfg.exchangeId;
+    let live = null;
+    if (cfg.mode === 'live') {
+      const info = await this.ccxt.marketInfo(cfg.secretId, cfg.symbol);
+      if (!info.trading) throw new Error('Trading is off for this key — tick “Allow trading” in 🔑 Keys first');
+      if (info.contract) throw new Error('The trend bot trades spot — no leverage, no liquidation, no funding. Choose a spot market such as BTC/USDT.');
+      exchangeId = info.exchangeId;
+      live = { secretId: cfg.secretId };
+      if (info.taker) params.feeBps = Math.max(params.feeBps, info.taker * 1e4);
+    }
+    const key = `trendPaper:${id}`;
+    // a paper portfolio lives across restarts: a trend trade lasts weeks
+    const paper = cfg.mode === 'paper' ? this.db.get(key) ?? { cash: params.accountUsd, units: 0, start: params.accountUsd, since: this.now(), trades: 0, fees: 0 } : null;
+    const b = {
+      cfg,
+      trend: true,
+      mode: cfg.mode,
+      params,
+      exchangeId,
+      live,
+      paper,
+      paperKey: key,
+      base: cfg.symbol.split('/')[0],
+      feed: 'connecting',
+      feedError: null,
+      startedAt: this.now(),
+      sig: null,
+      why: '',
+      price: NaN,
+      lastDay: null,
+      checking: false,
+      stopping: false,
+    };
+    this.running.set(id, b);
+    const where = `${cfg.symbol} on ${exchangeId}`;
+    this.event(id, 'started', `${cfg.mode === 'live' ? 'LIVE' : 'Paper'} trend bot started: ${where} — checks the daily close once a day, trades only when the target moves more than ${params.rebalanceBand}% of the balance`);
+    b.timer = setInterval(() => void this.trendCheck(b), 60_000);
+    void this.trendCheck(b);
+    return true;
+  }
+
+  /** Every minute: the price; once per new daily close: the signal and, if needed, a rebalance. */
+  async trendCheck(b) {
+    if (b.checking || b.stopping) return;
+    b.checking = true;
+    const id = b.cfg.id;
+    const p = b.params;
+    try {
+      const tk = await this.ccxt.ticker(b.exchangeId, b.cfg.symbol);
+      b.price = tk.last;
+      b.feed = 'open';
+      b.feedError = null;
+      const day = Math.floor(this.now() / DAY);
+      if (b.lastDay === day) return;
+      const need = Math.max(p.trendL1, p.trendL2, p.trendL3, p.volDays) + 3;
+      const rows = await this.ccxt.ohlcv(b.exchangeId, b.cfg.symbol, '1d', Math.min(1000, need + 2));
+      // only candles that have closed
+      const closed = rows.filter((r) => r.time + DAY <= this.now());
+      const sig = trendSignal(
+        closed.map((r) => r.close),
+        p,
+      );
+      b.sig = sig;
+      b.closeT = closed.at(-1)?.time ?? null;
+      b.why = explainSignal(sig, b.base);
+      b.lastDay = day;
+      if (!sig.ready) {
+        this.event(id, 'info', `Daily check: ${b.why}`);
+        return;
+      }
+      const pf = await this.trendPortfolio(b);
+      const order = rebalanceOrder(sig, { cash: pf.cash, units: pf.units, price: b.price }, p, pf.minNotional);
+      if (!order) {
+        const held = pf.cash + pf.units * b.price > 0 ? (pf.units * b.price) / (pf.cash + pf.units * b.price) : 0;
+        this.event(id, 'info', `Daily check: ${b.why}. Holding ${(held * 100).toFixed(0)}% — within the ${p.rebalanceBand}% band, no trade.`);
+        return;
+      }
+      await this.trendTrade(b, order, pf);
+    } catch (err) {
+      b.feed = 'error';
+      b.feedError = String(err?.message ?? err);
+      this.event(id, 'warn', `trend check: ${b.feedError}`);
+    } finally {
+      b.checking = false;
+      if (this.running.get(id) === b) this.emit('status', this.snapshot(id));
+    }
+  }
+
+  /** What the bot holds: the paper book, or the spot balances on the exchange. */
+  async trendPortfolio(b) {
+    if (b.mode === 'paper') return { cash: b.paper.cash, units: b.paper.units, minNotional: 0 };
+    const info = await this.ccxt.marketInfo(b.live.secretId, b.cfg.symbol);
+    const cash = Number(info.freeQuote ?? 0);
+    const units = Number(info.freeBase ?? 0);
+    b.liveUnits = units;
+    b.liveEquity = cash + units * b.price;
+    return { cash, units, minNotional: Math.max(info.minCost ?? 0, (info.minAmount ?? 0) * b.price) };
+  }
+
+  async trendTrade(b, order, pf) {
+    const id = b.cfg.id;
+    const p = b.params;
+    const buy = order.delta > 0;
+    const units = Math.abs(order.delta);
+    const notional = units * b.price;
+    const head = `${buy ? 'BUY' : 'SELL'} ${tidy(units)} ${b.base} ≈ $${notional.toFixed(2)} @ ${tidy(b.price)} → ${(order.target * 100).toFixed(0)}% of the balance in ${b.base} (was ${(order.held * 100).toFixed(0)}%)`;
+    if (b.mode === 'paper') {
+      const fee = (notional * p.feeBps) / 1e4;
+      b.paper.cash -= order.delta * b.price + fee;
+      b.paper.units += order.delta;
+      if (Math.abs(b.paper.units) * b.price < 1e-9) b.paper.units = 0;
+      b.paper.trades++;
+      b.paper.fees += fee;
+      this.db.set(b.paperKey, b.paper);
+      this.event(id, 'trade', `${head} — ${b.why}`);
+      return;
+    }
+    const req = buy
+      ? { symbol: b.cfg.symbol, side: 'buy', type: 'market', sizeMode: 'quote', size: notional }
+      : // sells only what is held (fees may have come out of the coin)
+        { symbol: b.cfg.symbol, side: 'sell', type: 'market', sizeMode: 'contracts', size: Math.min(units, pf.units), closeSpot: true };
+    try {
+      const r = await this.ccxt.placeOrder(b.live.secretId, req);
+      this.event(id, 'trade', `${head}${r.price ? ` (filled ${tidy(r.price)})` : ''} — ${b.why}`);
+      await this.trendPortfolio(b).catch(() => undefined);
+    } catch (err) {
+      const msg = String(err?.message ?? err);
+      this.event(id, 'error', `${buy ? 'buy' : 'sell'} not placed: ${msg}${/cap/.test(msg) ? ' — raise the order cap in the ticket ⚙ limits, or it will retry tomorrow' : ''}`);
+      // try again at the next daily check
+      b.lastDay = null;
+    }
+  }
+
+  trendSnapshot(b) {
+    const pf = b.mode === 'paper' ? b.paper : { cash: NaN, units: b.liveUnits ?? NaN };
+    const equity = b.mode === 'paper' ? b.paper.cash + b.paper.units * (Number.isFinite(b.price) ? b.price : 0) : b.liveEquity ?? NaN;
+    const start = b.mode === 'paper' ? b.paper.start : b.params.accountUsd;
+    const held = equity > 0 && Number.isFinite(b.price) ? (pf.units * b.price) / equity : 0;
+    const sig = b.sig;
+    return {
+      id: b.cfg.id,
+      running: true,
+      mode: b.mode,
+      symbol: b.cfg.symbol,
+      exchange: b.exchangeId,
+      sandbox: false,
+      feed: b.feed,
+      feedError: b.feedError,
+      startedAt: b.startedAt,
+      style: 'trend',
+      session: null,
+      state: 'trend',
+      t: this.now(),
+      last: b.price,
+      bin: 0,
+      va: null,
+      prior: null,
+      probe: null,
+      flow: null,
+      book: null,
+      position: null,
+      pending: null,
+      working: null,
+      stats: { trades: b.paper?.trades ?? 0, wins: 0, losses: 0, pnl: b.mode === 'paper' && Number.isFinite(equity) ? equity - start : 0, fees: b.paper?.fees ?? 0, grossWin: 0, grossLoss: 0, maxDrawdown: 0, pnlToday: 0, winRate: null, profitFactor: null },
+      halted: null,
+      balance: Number.isFinite(equity) ? equity : null,
+      warmupSec: 0,
+      lastSignal: null,
+      lastSkip: null,
+      trades: [],
+      profile: [],
+      orderflow: null,
+      brain: null,
+      trend: {
+        ready: Boolean(sig?.ready),
+        explain: b.why,
+        votes: sig?.ready ? sig.votes : [],
+        vol: sig?.ready ? sig.vol : null,
+        scale: sig?.ready ? sig.scale : null,
+        target: sig?.ready ? sig.exposure : null,
+        held,
+        equity: Number.isFinite(equity) ? equity : null,
+        start,
+        cash: Number.isFinite(pf.cash) ? pf.cash : null,
+        units: Number.isFinite(pf.units) ? pf.units : null,
+        base: b.base,
+        closeT: b.closeT ?? null,
+        nextCheck: (Math.floor(this.now() / DAY) + 1) * DAY,
+      },
+    };
+  }
+
+  /** Backtest the trend strategy on the exchange's daily history (public data). */
+  async trendBacktest(params, exchangeId, symbol, fromYear = 2018) {
+    const p = mergeConfig(params);
+    const need = Math.max(p.trendL1, p.trendL2, p.trendL3, p.volDays) + 2;
+    const since = Date.UTC(fromYear, 0, 1) - need * DAY;
+    const candles = await this.ccxt.history(exchangeId, symbol, '1d', since);
+    if (candles.length < need + 60) throw new Error(`only ${candles.length} daily candles of ${symbol} on ${exchangeId} — pick an earlier market or year`);
+    const r = backtestTrend(candles, p, { startUsd: p.accountUsd, feeBps: p.feeBps });
+    // a lighter curve for the screen: one point every 3 days
+    const thin = (c) => c.filter((_, i) => i % 3 === 0 || i === c.length - 1);
+    return { ...r, equity: thin(r.equity), holdCurve: thin(r.holdCurve), exchangeId, symbol };
+  }
+
   /** Is this vault key driving a running live bot? */
   usesKey(secretId) {
     return [...this.running.values()].some((b) => b.live?.secretId === secretId);
@@ -525,6 +737,15 @@ export class BotManager {
     b.stopping = true;
     clearInterval(b.timer);
     if (b.balanceTimer) clearInterval(b.balanceTimer);
+    if (b.trend) {
+      // a trend bot holds coins for weeks: stopping it leaves them where they are
+      const final = this.snapshot(id);
+      this.running.delete(id);
+      const held = b.mode === 'paper' ? b.paper.units : b.liveUnits ?? 0;
+      this.event(id, 'stopped', `Stopped: ${reason}${held > 0 ? ` — ${tidy(held)} ${b.base} stays in the ${b.cfg.mode === 'paper' ? 'paper' : 'exchange'} account` : ''}`);
+      this.emit('status', { ...final, running: false });
+      return true;
+    }
     this.ccxt.unsubscribe(b.sid);
     const e = b.engine;
     // a resting limit is withdrawn first

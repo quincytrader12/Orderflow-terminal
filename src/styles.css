@@ -1684,6 +1684,21 @@ ol.steps li.done::marker {
 .amt-ev.ev-skip {
   opacity: 0.7;
 }
+.tag.ev-tag-trade {
+  color: var(--buy);
+}
+.amt-two path.hold {
+  stroke: var(--muted);
+  stroke-dasharray: 1.5 1.5;
+}
+.amt-trend-table td,
+.amt-trend-table th {
+  text-align: right;
+}
+.amt-trend-table td:first-child,
+.amt-trend-table th:first-child {
+  text-align: left;
+}
 .tag.ev-tag-think {
   color: var(--accent);
   opacity: 0.85;

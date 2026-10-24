@@ -125,6 +125,15 @@ export const DEFAULT_AMT = {
   benchMin: 30,
   erChop: 0.25,
   erTrend: 0.5,
+  // trend style (daily time-series momentum; see trend.mjs)
+  trendL1: 20,
+  trendL2: 60,
+  trendL3: 120,
+  volDays: 30,
+  targetVol: 60,
+  maxExposure: 1,
+  rebalanceBand: 10,
+  trendShort: false,
   // trade management
   stopBufferBins: 2,
   minRR: 1.5,
@@ -175,6 +184,14 @@ export const DEFAULT_AMT = {
 
 /** Exits that are not protecting capital may wait a few seconds for a maker fill. */
 const PATIENT_EXITS = new Set(['target', 'stalled', 'time']);
+
+/**
+ * Trend: time-series momentum on daily closes with volatility targeting,
+ * long or flat on a spot market (no leverage, no liquidation, no funding).
+ * The 60 % volatility target is set in advance (about Bitcoin's long-run
+ * average), not fitted to a backtest. Spot taker fee 0.1 %.
+ */
+export const TREND_PRESET = { style: 'trend', sizing: 'balance', accountUsd: 55, feeBps: 10, slippageBps: 0, targetVol: 60, maxExposure: 1, rebalanceBand: 10, trendShort: false };
 
 /** The Scalp chip: the defaults, with the trade manager and limit-first execution. */
 export const SCALP_PRESET = { style: 'scalp', manageTrades: true, orderMode: 'maker' };

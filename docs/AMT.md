@@ -326,6 +326,39 @@ How it keeps quality:
 Live bots read the market's maker and taker fees from the exchange (a BNB fee
 discount or VIP tier shows up there).
 
+## 5e. Trend (daily, spot) — the evidence-based one
+
+The scalping styles above trade a minutes-long edge that is hard to prove and
+easy for fees to erase on a small account. **Trend** is the opposite: the one
+crypto strategy with a consistent statistical record — **time-series
+momentum** (returns over past weeks and months tend to continue).
+
+- Evidence: time-series momentum across asset classes (Moskowitz, Ooi &
+  Pedersen 2012); in crypto, Liu & Tsyvinski ("Risks and Returns of
+  Cryptocurrency", 2021) find a strong time-series momentum effect, and later
+  work that nets out trading costs finds it holds up while cross-sectional
+  (coin-picking) momentum does not.
+- Rules (fixed, not fitted): at each daily close three lookbacks — 20, 60 and
+  120 days — vote "up" if the price is above where it was that many days ago.
+  The coin is held in proportion to the up votes (0, ⅓, ⅔, all), scaled by
+  60 % ÷ the 30-day realised volatility, never more than the balance. Trades
+  only when the target moves more than 10 % of the balance.
+- Market: **spot** (BTC/USDT, ETH/USDT): no leverage, no liquidation, no
+  funding. It buys and sells with the USDT in the spot wallet.
+- What to expect: a few trades a month, long periods out of the market, losing
+  streaks in sideways years, and it gives back part of each trend before it
+  steps aside. What it is for: staying in the big trends and out of the big
+  crashes — a much smaller worst fall than holding.
+- **Backtest on full history** downloads every daily candle since the year you
+  pick from the exchange and runs these exact rules (signal at the close,
+  trade at the next open, 0.1 % fee each trade) against buy-and-hold, with a
+  per-year table. As a sanity check on real BTC prices (CoinGecko daily
+  closes) from May 2017 to April 2018 — the 2017 run-up and the 2018 crash —
+  the rules at a 40 % volatility target returned +245 % with a worst fall of
+  −20 %, against +487 % and −66 % for holding; at 80 % they returned +569 %
+  with a −31 % worst fall. One year is not proof: run the full-history
+  backtest before trusting it.
+
 ## 6. Safety behaviour of live bots
 
 - **Exact sizing.** Live positions are tracked in exchange units (contracts) exactly as filled. Exits and the exchange stop close what was opened.
