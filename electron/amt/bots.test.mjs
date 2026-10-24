@@ -424,7 +424,7 @@ describe('BotManager', () => {
     expect(m.running.has(id)).toBe(false);
   });
 
-  it('tells its story in plain English: entry, and how the trade ended', async () => {
+  it('tells its story: the decision in words, then the numbers', async () => {
     const events = [];
     const ccxt = fakeCcxt();
     const m = new BotManager({ ccxt, db, emit: (ch, e) => ch === 'event' && events.push(e), now: () => T0 });
@@ -433,10 +433,9 @@ describe('BotManager', () => {
     feed(ccxt, `amt-${id}`, breakoutTape());
     await m.stop(id, { flatten: true, reason: 'stopped and flattened by you' });
     const story = events.filter((e) => e.kind === 'story').map((e) => e.text);
-    expect(story[0]).toMatch(/^✅ Bought BTC — went long \(paper\)\. Why: price broke above today's fair-value area/);
-    expect(story.some((t) => /^(💰|➖|🔻) Closed the BTC long/.test(t))).toBe(true);
-    expect(story.at(-1)).toBe('⏸ The BTC bot has stopped — you stopped it and closed its position.');
-    for (const t of story) expect(t).not.toMatch(/\d/);
+    expect(story[0]).toMatch(/^✅ Entered BTC long at [\d,.]+ \(paper\)\nWhy: price broke above today's fair-value area[^\n]*\nStop: [^\n]*\nPlan: stop [\d,.]+ \(−[\d.]+%, risking \$[\d.]+ = [\d.]+% of \$1000\.00\) · target [\d,.]+ \(\+[\d.]+%, [\d.]+R\) · size \$[\d.]+/);
+    expect(story.some((t) => /^(💰|➖|🔻) Closed [^:]*: BTC long \(paper\) [+−]\$[\d.]+ \([+−][\d.]+R\)/.test(t))).toBe(true);
+    expect(story.at(-1)).toMatch(/^⏸ The BTC bot has stopped — you stopped it and closed its position\.\nDetail: stopped and flattened by you\n1 trade, [+−]\$[\d.]+ this run · balance \$[\d.]+$/);
   });
 
   it('closes an entry that fills after "Stop & close position"', async () => {

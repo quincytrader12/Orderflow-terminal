@@ -1,6 +1,7 @@
-// The bot's story in plain English, for Telegram: what it is watching and
-// why, when it takes a trade, when the trade is safe, and how and why it
-// ended. No prices, ratios or jargon — the activity log keeps those.
+// The bot's story for Telegram: what it is watching and why, when it takes a
+// trade, when the trade is safe, and how and why it ended — the decision in
+// plain words first, then the numbers behind it (levels, stop, target, risk,
+// result) and the bot's own notes.
 //
 // A watched setup that never becomes a trade gets one line saying why it was
 // let go, so every "watching" message is closed. To keep the phone quiet, the
@@ -8,6 +9,21 @@
 // (15 minutes); its let-go line only follows a watch that was announced.
 
 const MIN = 60_000;
+
+/** A price as people read it: grouped, with the decimals the size needs. */
+export function px(p) {
+  if (!Number.isFinite(p)) return '—';
+  const a = Math.abs(p);
+  return p.toLocaleString('en-US', { maximumFractionDigits: a >= 100 ? 2 : a >= 1 ? 4 : 6 });
+}
+const usd = (v) => `${v < 0 ? '−' : ''}$${Math.abs(v).toFixed(2)}`;
+const signed = (v, d = 2) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(d)}`;
+const pctFrom = (a, b) => `${signed(((b - a) / a) * 100)}%`;
+function duration(ms) {
+  const m = Math.round(ms / MIN);
+  if (m < 1) return `${Math.max(1, Math.round(ms / 1000))} s`;
+  return m < 90 ? `${m} min` : `${(m / 60).toFixed(1)} h`;
+}
 
 export function coinName(symbol = '') {
   return String(symbol).replace(/[:/].*$/, '').replace(/(USDT|USDC|USD|BUSD)$/, '') || String(symbol);
@@ -159,17 +175,17 @@ export class Narrator {
     return { kind: 'watch', text };
   }
 
-  /** The watched setup ended without a trade. */
-  pass(why) {
+  /** The watched setup ended without a trade: why in words, and the bot's measurement. */
+  pass(why, detail) {
     const w = this.watching;
     this.watching = null;
     if (!w?.announced) return null;
-    return { kind: 'pass', text: `✋ Let the ${this.coin} ${w.dir > 0 ? 'long' : 'short'} go${this.tag()} — ${why}.` };
+    return { kind: 'pass', text: `✋ Let the ${this.coin} ${w.dir > 0 ? 'long' : 'short'} go${this.tag()} — ${why}.${detail ? `\nDetail: ${detail}` : ''}` };
   }
 
   /**
    * After each engine step: new watches, watches that ended, and the moment an
-   * open trade becomes safe. Returns plain-English lines.
+   * open trade becomes safe. Returns the story lines.
    */
   step(e, t) {
     const out = [];
@@ -178,29 +194,34 @@ export class Narrator {
     const skip = e.lastSkip && e.lastSkip !== this.seenSkip && t - e.lastSkip.t < 5000 ? e.lastSkip : null;
     if (e.lastSkip) this.seenSkip = e.lastSkip;
     // a watched setup turned down at the last check (gate, daily trend, evidence, fees)
-    if (skip && this.watching && skip.event.startsWith(this.watching.setup === 'absorption' ? 'absorb' : this.watching.setup)) push(this.pass(passWords(skip.reason)));
+    if (skip && this.watching && skip.event.startsWith(this.watching.setup === 'absorption' ? 'absorb' : this.watching.setup)) push(this.pass(passWords(skip.reason), skip.reason));
     // a trade on its way in: the entry line closes the watch, not a "let go"
     const entering = Boolean(e.pos) || e.pending?.kind === 'entry';
+    const now = Number.isFinite(e.last) ? `\nNow: ${px(e.last)}` : '';
     if (of) {
       // 1. a stop run: wait for the reclaim
       const s = of.sweep;
       if (s && s !== this.sweepObj && !entering) {
         this.sweepObj = s;
         const dir = -s.dir;
+        const lv = s.level ?? {};
+        const run = lv.price > 0 && Number.isFinite(s.extreme) ? (Math.abs(s.extreme - lv.price) / lv.price) * 1e4 : NaN;
+        const force = [Number.isFinite(s.burst) ? `${s.burst.toFixed(1)}× normal ${s.dir > 0 ? 'buying' : 'selling'}` : '', s.liq > 0 ? `${usd(s.liq)} of ${s.dir > 0 ? 'shorts' : 'longs'} liquidated` : ''].filter(Boolean).join(', ');
         if (this.allowed(e, dir, t))
           push(
             this.watch(
               'sweep',
               dir,
               t,
-              `👀 Watching ${this.coin} for a ${sideWord(dir > 0 ? 'buy' : 'sell')}${this.tag()}. Price just ran ${s.dir > 0 ? 'above' : 'below'} ${levelWords(s.level?.kind)} and knocked out the stops parked there. If it ${s.dir > 0 ? 'falls back under' : 'climbs back over'} that level, stays there, and the ${s.dir > 0 ? 'buying' : 'selling'} dries up, I'll ${dir > 0 ? 'buy' : 'sell'} — the traders who chased it would be trapped.`,
-              s.level?.kind,
+              `👀 Watching ${this.coin} for a ${sideWord(dir > 0 ? 'buy' : 'sell')}${this.tag()}\nPrice just ran ${s.dir > 0 ? 'above' : 'below'} ${levelWords(lv.kind)} and knocked out the stops parked there. If it ${s.dir > 0 ? 'falls back under' : 'climbs back over'} that level, stays there, and the ${s.dir > 0 ? 'buying' : 'selling'} dries up, I'll ${dir > 0 ? 'buy' : 'sell'} — the traders who chased it would be trapped.\nLevel: ${lv.kind ?? 'level'} ${px(lv.price)} · ran to ${px(s.extreme)}${Number.isFinite(run) ? ` (${run.toFixed(1)} bps through)` : ''}${force ? ` on ${force}` : ''}${now}`,
+              lv.kind,
             ),
           );
       } else if (!s && this.sweepObj) {
         const gone = this.sweepObj;
         this.sweepObj = null;
-        if (this.watching?.setup === 'sweep' && !entering) push(this.pass(passWords(skip?.event === 'sweep' ? skip.reason : gone.why)));
+        const raw = skip?.event === 'sweep' ? skip.reason : gone.why;
+        if (this.watching?.setup === 'sweep' && !entering) push(this.pass(passWords(raw), raw));
       }
       // 2. aggression soaked up at a level: wait for the other side to take over
       const a = of.absorb;
@@ -212,7 +233,7 @@ export class Narrator {
               'absorption',
               a.dir,
               t,
-              `👀 Watching ${this.coin} for a ${sideWord(a.dir > 0 ? 'buy' : 'sell')}${this.tag()}. ${a.dir > 0 ? 'Sellers' : 'Buyers'} are hitting ${absorbWords(a.level)} hard, but price is not ${a.dir > 0 ? 'dropping' : 'rising'} — someone is soaking it all up. If ${a.dir > 0 ? 'buyers' : 'sellers'} take over from here, I'll ${a.dir > 0 ? 'buy' : 'sell'}.`,
+              `👀 Watching ${this.coin} for a ${sideWord(a.dir > 0 ? 'buy' : 'sell')}${this.tag()}\n${a.dir > 0 ? 'Sellers' : 'Buyers'} are hitting ${absorbWords(a.level)} hard, but price is not ${a.dir > 0 ? 'dropping' : 'rising'} — someone is soaking it all up. If ${a.dir > 0 ? 'buyers' : 'sellers'} take over from here, I'll ${a.dir > 0 ? 'buy' : 'sell'}.\nLevel: ${a.level} · ${Number.isFinite(a.x) ? `${a.x.toFixed(1)}× normal ${a.dir > 0 ? 'selling' : 'buying'} into it, ` : ''}price holding at ${px(a.extreme)}${now}`,
               a.level,
             ),
           );
@@ -221,7 +242,8 @@ export class Narrator {
         this.absorbObj = null;
         if (this.watching?.setup === 'absorption' && !entering) {
           const broke = gone.dir > 0 ? e.last < gone.extreme : e.last > gone.extreme;
-          push(this.pass(skip?.event === 'absorption' ? passWords(skip.reason) : broke ? 'price broke through the level after all — the defence failed' : `the ${gone.dir > 0 ? 'buyers' : 'sellers'} never took over`));
+          if (skip?.event === 'absorption') push(this.pass(passWords(skip.reason), skip.reason));
+          else push(this.pass(broke ? 'price broke through the level after all — the defence failed' : `the ${gone.dir > 0 ? 'buyers' : 'sellers'} never took over`, broke ? `price ${px(e.last)} went through ${px(gone.extreme)}` : null));
         }
       }
     }
@@ -231,29 +253,51 @@ export class Narrator {
       const dir = pos.side === 'buy' ? 1 : -1;
       if ((pos.stop - pos.entry) * dir >= 0) {
         this.lockSent = true;
-        out.push({ kind: 'manage', text: `🔒 The ${this.coin} ${sideWord(pos.side)} is working${this.tag()}. I've moved the stop past my entry, so it should not turn into a loss now. Still watching the order flow every second.` });
+        const r = pos.risk > 0 && Number.isFinite(e.last) ? ((e.last - pos.entry) * dir) / pos.risk : NaN;
+        const locked = (pos.stop - pos.entry) * dir * pos.qty;
+        out.push({
+          kind: 'manage',
+          text: `🔒 The ${this.coin} ${sideWord(pos.side)} is working${this.tag()}\nI've moved the stop past my entry, so it should not turn into a loss now. Still reading the order flow every second — I'll trail it while the push lasts and take it if it stalls.\nStop: ${px(pos.stop0 ?? pos.stop)} → ${px(pos.stop)} (entry ${px(pos.entry)}, locks about ${usd(locked)} before fees)${Number.isFinite(e.last) ? ` · price ${px(e.last)}${Number.isFinite(r) ? `, ${signed(r, 1)}R` : ''}` : ''}`,
+        });
       }
     }
     return out;
   }
 
-  entry(intent) {
+  /** intent: the entry the bot took; price: its fill; balance: the account it sizes from. */
+  entry(intent, price = intent.price, { balance } = {}) {
     this.lockSent = false;
     const w = this.watching;
     this.watching = null;
     const extra = { level: w?.setup === intent.setup ? w.level : undefined };
+    const dir = intent.side === 'buy' ? 1 : -1;
+    const risk = Math.abs(price - intent.stop);
+    const riskUsd = risk * intent.qty;
+    const rr = risk > 0 ? ((intent.target - price) * dir) / risk : NaN;
+    const size = intent.qty * price;
+    const plan = [
+      `stop ${px(intent.stop)} (${pctFrom(price, intent.stop)}, risking ${usd(riskUsd)}${balance > 0 ? ` = ${((riskUsd / balance) * 100).toFixed(1)}% of ${usd(balance)}` : ''})`,
+      `target ${px(intent.target)} (${pctFrom(price, intent.target)}${Number.isFinite(rr) ? `, ${rr.toFixed(1)}R` : ''})`,
+      `size ${usd(size)}${balance > 0 ? ` (${(size / balance).toFixed(1)}× the balance)` : ''}`,
+    ].join(' · ');
     return {
       kind: 'entry',
-      text: `✅ ${intent.side === 'buy' ? 'Bought' : 'Sold'} ${this.coin} — went ${sideWord(intent.side)}${this.tag()}. Why: ${setupWords(intent.setup, intent.side, extra)}. My safety stop is ${stopWords(intent.setup)}. From here I watch the order flow every second and get out early if it turns.`,
+      text: `✅ Entered ${this.coin} ${sideWord(intent.side)} at ${px(price)}${this.tag()}\nWhy: ${setupWords(intent.setup, intent.side, extra)}.\nStop: ${stopWords(intent.setup)}. From here I read the order flow every second and get out early if it turns.\nPlan: ${plan}${intent.reason ? `\nBot's notes: ${intent.reason}` : ''}`,
     };
   }
 
-  /** trade: the engine's closed trade record. */
-  exit(trade, reason) {
+  /** trade: the engine's closed trade record; notes: the trade manager's reasoning at the exit. */
+  exit(trade, reason, { balance, notes } = {}) {
     this.lockSent = false;
     const R = trade.risk > 0 && trade.qty > 0 ? trade.pnl / (trade.risk * trade.qty) : trade.pnl > 0 ? 1 : trade.pnl < 0 ? -1 : 0;
     const outcome = R >= 0.15 ? 'profit' : R > -0.15 ? 'even' : 'loss';
-    const head = outcome === 'profit' ? `💰 Closed the ${this.coin} ${sideWord(trade.side)} in profit` : outcome === 'even' ? `➖ Closed the ${this.coin} ${sideWord(trade.side)} at about breakeven` : `🔻 Closed the ${this.coin} ${sideWord(trade.side)} at a ${R > -0.8 ? 'small ' : ''}loss`;
-    return { kind: 'exit', outcome, text: `${head}${this.tag()} — ${exitWords(reason ?? trade.reason, outcome === 'profit')}.` };
+    const what = outcome === 'profit' ? '💰 Closed in profit' : outcome === 'even' ? '➖ Closed at about breakeven' : `🔻 Closed at a ${R > -0.8 ? 'small ' : ''}loss`;
+    const held = trade.closed > trade.opened ? ` after ${duration(trade.closed - trade.opened)}` : '';
+    const facts = [`entry ${px(trade.entry)} → exit ${px(trade.exit)}`, Number.isFinite(trade.fees) ? `fees ${usd(trade.fees)}` : '', balance > 0 ? `balance now ${usd(balance)}` : ''].filter(Boolean).join(' · ');
+    return {
+      kind: 'exit',
+      outcome,
+      text: `${what}: ${this.coin} ${sideWord(trade.side)}${this.tag()} ${trade.pnl >= 0 ? '+' : '−'}$${Math.abs(trade.pnl).toFixed(2)} (${signed(R, 1)}R)${held}\nWhy I closed: ${exitWords(reason ?? trade.reason, outcome === 'profit')}.\nTrade: ${facts}${notes ? `\nBot's notes: ${notes}` : ''}`,
+    };
   }
 }

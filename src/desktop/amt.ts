@@ -35,9 +35,9 @@ export function startAmtService() {
 const lastProblem = new Map<string, number>();
 
 /**
- * Telegram hears the bot's story only, in plain English: what it is watching
- * and why, the entry, the moment the trade is safe, and how it ended. The
- * numbers stay in the activity log. A problem that needs a look is sent once
+ * Telegram hears the bot's story: what it is watching and why, the entry,
+ * the moment the trade is safe, and how it ended — the decision in plain
+ * words with the numbers behind it. A problem that needs a look is sent once
  * an hour at most.
  */
 function forwardStory(e: AmtEvent) {
@@ -52,7 +52,11 @@ function forwardStory(e: AmtEvent) {
     lastProblem.set(e.text, Date.now());
     text = `⚠️ A bot needs a look: ${e.text}`;
   }
-  if (text) telegram.send(s.telegramSecretId, escapeHtml(text)).catch((err) => console.warn('telegram story', err));
+  if (!text) return;
+  // the decision in bold, the reasoning and numbers under it
+  const [head, ...rest] = text.split('\n');
+  const html = [`<b>${escapeHtml(head)}</b>`, ...rest.map((l) => escapeHtml(l).replace(/^(Why|Why I closed|Plan|Stop|Level|Now|Trade|Detail|Bot's notes):/, '<i>$1:</i>'))].join('\n');
+  telegram.send(s.telegramSecretId, html).catch((err) => console.warn('telegram story', err));
 }
 
 export function onAmtEvent(fn: (e: AmtEvent) => void) {

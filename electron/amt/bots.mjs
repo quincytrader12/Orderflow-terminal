@@ -302,7 +302,7 @@ export class BotManager {
     const e = b.engine;
     if (intent.type === 'enter') {
       this.event(id, 'entry', `${intent.side === 'buy' ? 'LONG' : 'SHORT'} ${tidy(intent.qty)} @ ${tidy(price)} · ${intent.setup} · stop ${tidy(intent.stop)} · target ${tidy(intent.target)} — ${intent.reason}`, { ...intent, price });
-      if (b.narrator) this.story(id, b.narrator.entry(intent));
+      if (b.narrator) this.story(id, b.narrator.entry(intent, price, { balance: e.balance() }));
       return;
     }
     const last = e.trades[e.trades.length - 1];
@@ -318,7 +318,7 @@ export class BotManager {
     const th = e.brain?.thoughts.at(-1);
     const why = th && e.now - th.t <= 2000 && /cutting|losing steam|follow-through|banking|trailing/.test(th.text) ? ` — ${th.text}` : '';
     this.event(id, 'exit', `EXIT ${intent.reason} @ ${tidy(price)} · ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USD${why}`, { ...intent, price, pnl });
-    if (b.narrator && last) this.story(id, b.narrator.exit(last, intent.reason));
+    if (b.narrator && last) this.story(id, b.narrator.exit(last, intent.reason, { balance: e.balance(), notes: why ? th.text : null }));
     void this.refreshBalance(b);
   }
 
@@ -844,7 +844,11 @@ export class BotManager {
     const final = this.snapshot(id);
     this.running.delete(id);
     this.event(id, 'stopped', `Stopped: ${reason}`);
-    if (b.narrator) this.story(id, { kind: 'stopped', text: `⏸ The ${b.narrator.coin} bot has stopped — ${stoppedWords(reason)}.` });
+    if (b.narrator) {
+      const st = b.engine.stats;
+      const tally = st?.trades ? `${st.trades} trade${st.trades === 1 ? '' : 's'}, ${st.pnl >= 0 ? '+' : '−'}$${Math.abs(st.pnl).toFixed(2)} this run · balance $${b.engine.balance().toFixed(2)}` : '';
+      this.story(id, { kind: 'stopped', text: `⏸ The ${b.narrator.coin} bot has stopped — ${stoppedWords(reason)}.\nDetail: ${reason}${tally ? `\n${tally}` : ''}` });
+    }
     this.emit('status', { ...final, running: false });
     return true;
   }

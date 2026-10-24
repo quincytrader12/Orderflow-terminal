@@ -402,23 +402,38 @@ momentum** (returns over past weeks and months tend to continue).
   with a −31 % worst fall. One year is not proof: run the full-history
   backtest before trusting it.
 
-## 5f. Telegram: the bot's story in plain English
+## 5f. Telegram: the bot's story — the decision, then the numbers
 
-Telegram gets the bots' **story** and nothing else by default — no prices,
-ratios or jargon (the activity log keeps those):
+Telegram gets the bots' **story** by default. Every message leads with the
+decision in plain words, then the numbers behind it and the bot's own notes:
 
-- **Watching** — "👀 Watching BTC for a long. Price just ran below a recent low
-  and knocked out the stops parked there. If it climbs back over that level,
-  stays there, and the selling dries up, I'll buy…" (stop runs and absorption,
-  the setups that have a waiting stage; only in the direction the daily trend
-  allows).
-- **Let go** — every announced watch is closed: "✋ Let the BTC long go — the
-  other side never took control."
-- **Entry** — what it did and why, and where the safety stop sits, in words.
-- **Safe** — once, when the stop has moved past the entry.
-- **Exit** — in profit, at about breakeven, or at a loss, and why: target,
-  losing steam, flow turned, stalled, trailing stop, stop.
-- **Stopped** — and why (you, the kill switch, a loss limit, the exchange).
+```
+✅ Entered BTC long at 98,950
+Why: sellers drove price below a recent low to grab the stops parked there,
+then buyers took it straight back and the selling dried up — the traders who
+chased the move are now trapped.
+Stop: just beyond the far end of the stop run. From here I read the order
+flow every second and get out early if it turns.
+Plan: stop 98,800 (−0.15%, risking $0.23 = 0.8% of $30.00) · target 99,250
+(+0.30%, 2.0R) · size $148.43 (4.9× the balance)
+Bot's notes: swept the swing low 98,900 by 4.0 bps … score 2.5
+```
+
+- **Watching** — what it sees and what would make it trade, with the level,
+  how far price ran through it, the force behind the run (× normal volume,
+  liquidations) and the price now. Stop runs and absorption, the setups that
+  have a waiting stage; only in the direction the daily trend allows.
+- **Let go** — every announced watch is closed, with the reason in words and
+  the measurement that decided it ("Detail: reclaim held 3 of 10 s").
+- **Entry** — why, where the stop sits and why there, and the plan: stop,
+  target, R, money at risk as a share of the balance, position size.
+- **Safe** — once, when the stop moves past the entry: old → new stop, what
+  it locks in, price and R now.
+- **Exit** — profit, about breakeven or loss in dollars and R, how long it was
+  held, why it closed (target, losing steam, flow turned, stalled, trailing
+  stop, stop), entry → exit, fees, the balance after, and the trade manager's
+  reasoning at that moment.
+- **Stopped** — why, the raw reason, and the run's trades and result.
 
 The same setup in the same direction is announced at most once every 15
 minutes. A bot error that needs a look is sent at most once an hour. Chart

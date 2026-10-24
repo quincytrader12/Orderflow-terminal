@@ -160,7 +160,7 @@ export function TelegramPanel(_: PanelProps<TelegramConfig>) {
         )}
         <div className="section-title">Instant notifications</div>
         <label className="check">
-          <input type="checkbox" checked={s.telegramBotStory} onChange={(e) => s.set({ telegramBotStory: e.target.checked })} /> Bot updates in plain English: what it is watching and why, when it enters, when the trade is safe, and how it ended
+          <input type="checkbox" checked={s.telegramBotStory} onChange={(e) => s.set({ telegramBotStory: e.target.checked })} /> Bot updates: what it is watching and why, when it enters, when the trade is safe, and how it ended — the decision in plain words with the numbers behind it
         </label>
         <label className="check">
           <input type="checkbox" checked={s.telegramAlerts} onChange={(e) => s.set({ telegramAlerts: e.target.checked })} /> Also forward my chart alerts and the orders I place by hand
