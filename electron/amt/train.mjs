@@ -143,8 +143,9 @@ export function segmentMetrics(trades, startBalance, minTrades) {
 }
 
 /** Replay one candidate over all the data and score the two segments. */
-export async function evaluate(params, cols, splitT, { fill, minTrades = 8, yieldEvery = 0, onProgress } = {}) {
+export async function evaluate(params, cols, splitT, { fill, minTrades = 8, yieldEvery = 0, onProgress, daily } = {}) {
   const e = new AmtEngine(params);
+  if (daily?.length) e.setDaily(daily);
   // the engine keeps only its last 500 trades for display: collect them all
   const all = [];
   const record = e.record.bind(e);
@@ -224,7 +225,7 @@ async function runAll(cands, cols, splitT, opts, onProgress, makeWorker) {
           go();
         });
         w.once('error', reject);
-        w.postMessage({ type: 'data', cols });
+        w.postMessage({ type: 'data', cols, daily: opts.daily ?? null });
         go();
       });
     try {
@@ -242,6 +243,7 @@ async function runAll(cands, cols, splitT, opts, onProgress, makeWorker) {
     results[i] = await evaluate(cands[i], cols, splitT, {
       fill: paperFill,
       minTrades: opts.minTrades,
+      daily: opts.daily,
       yieldEvery: 50_000,
       onProgress: (f) => {
         partial.set('main', f);
@@ -259,14 +261,14 @@ async function runAll(cands, cols, splitT, opts, onProgress, makeWorker) {
  * Train a bot's settings on recorded trades.
  * @returns verdict 'verified' with the parameters to apply, or 'no-edge'
  */
-export async function train({ base, rows, cols, n = 40, split = 0.7, seed = 1, minTrades = 8, workers, onProgress, makeWorker }) {
+export async function train({ base, rows, cols, n = 40, split = 0.7, seed = 1, minTrades = 8, workers, onProgress, makeWorker, daily = null }) {
   cols ??= toColumns(rows);
   const len = cols.t.length;
   if (len < 10_000) throw new Error(`only ${len} recorded trades — training needs a few hours of data (let the terminal record first)`);
   const splitT = cols.t[Math.floor(len * split)];
   const space = searchFor(base);
   const cands = candidates(base, n, seed, space);
-  const results = await runAll(cands, cols, splitT, { workers, minTrades }, onProgress, makeWorker);
+  const results = await runAll(cands, cols, splitT, { workers, minTrades, daily }, onProgress, makeWorker);
   const { leaders, best } = pick(results);
   const baseline = results[0];
   const row = (r) => ({ params: Object.fromEntries(Object.keys(space).map((k) => [k, cands[r.i][k]])), train: r.train, test: r.test, base: r.i === 0 });

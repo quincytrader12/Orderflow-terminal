@@ -5,9 +5,11 @@ import { paperFill } from './engine.mjs';
 import { evaluate } from './train.mjs';
 
 let cols = null;
+let daily = null;
 parentPort.on('message', async (m) => {
   if (m.type === 'data') {
     cols = m.cols;
+    daily = m.daily ?? null;
     return;
   }
   try {
@@ -15,6 +17,7 @@ parentPort.on('message', async (m) => {
     const result = await evaluate(m.params, cols, m.splitT, {
       fill: paperFill,
       minTrades: m.minTrades,
+      daily,
       // progress inside a candidate, a few times per run
       onProgress: (f) => {
         if (f - last >= 0.1 || f === 1) {

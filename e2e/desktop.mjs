@@ -306,6 +306,7 @@ try {
   await page.click('.amt-settings button:text-is("Save")');
   const growthBot = (await page.evaluate(() => window.novus.amt.list()))[0];
   expect(growthBot.params.manageTrades === true, 'growth bot saved with the trade manager on');
+  expect(growthBot.params.trendFilter === true, 'growth bot trades with the daily trend only');
   expect(growthBot.params.sizing === 'balance' && growthBot.params.accountUsd === 27 && growthBot.params.riskPct === 2, 'growth preset saved with balance sizing');
   const seeded = await page.evaluate(() => {
     // repeating auctions: balance, a failed probe above value, then rotation or a rally

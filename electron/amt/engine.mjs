@@ -35,8 +35,10 @@
 
 import { Brain, INITIATIVE, roundTripBps } from './brain.mjs';
 import { OrderFlow } from './orderflow.mjs';
+import { trendSignal } from './trend.mjs';
 
 const MIN = 60_000;
+const DAY = 86_400_000;
 
 export const DEFAULT_AMT = {
   // value
@@ -134,6 +136,9 @@ export const DEFAULT_AMT = {
   maxExposure: 1,
   rebalanceBand: 10,
   trendShort: false,
+  // every intraday style: take only trades that go with the coin's daily
+  // trend (20/60/120-day votes, the trend bot's evidence-based signal)
+  trendFilter: false,
   // trade management
   stopBufferBins: 2,
   minRR: 1.5,
@@ -194,7 +199,7 @@ const PATIENT_EXITS = new Set(['target', 'stalled', 'time']);
 export const TREND_PRESET = { style: 'trend', sizing: 'balance', accountUsd: 55, feeBps: 10, slippageBps: 0, targetVol: 60, maxExposure: 1, rebalanceBand: 10, trendShort: false };
 
 /** The Scalp chip: the defaults, with the trade manager and limit-first execution. */
-export const SCALP_PRESET = { style: 'scalp', manageTrades: true, orderMode: 'maker' };
+export const SCALP_PRESET = { style: 'scalp', manageTrades: true, orderMode: 'maker', trendFilter: true };
 
 /** Starting values when a bot is switched to the intraday style. */
 export const INTRADAY_PRESET = {
@@ -208,6 +213,7 @@ export const INTRADAY_PRESET = {
   cooldownSec: 900,
   maxTradesPerHour: 2,
   breakevenAtR: 1,
+  trendFilter: true,
 };
 
 /**
@@ -240,6 +246,7 @@ export const GROWTH_PRESET = {
   maxSpreadBps: 3,
   orderMode: 'maker',
   manageTrades: true,
+  trendFilter: true,
 };
 
 /**
@@ -272,6 +279,7 @@ export const ORDERFLOW_PRESET = {
   maxSpreadBps: 3,
   orderMode: 'maker',
   manageTrades: true,
+  trendFilter: true,
 };
 
 /**
@@ -305,6 +313,7 @@ export const ADAPTIVE_PRESET = {
   maxSpreadBps: 3,
   orderMode: 'maker',
   manageTrades: true,
+  trendFilter: true,
 };
 
 export function mergeConfig(cfg = {}) {
@@ -476,6 +485,10 @@ export class AmtEngine {
     this.liveBalance = NaN;
     /** paper/backtest: the engine fills its own resting limits; live bots turn this off */
     this.simulateLimits = true;
+    /** daily closes [[dayStart, close]] for the daily-trend filter */
+    this.daily = null;
+    this.htf = null;
+    this.htfDay = -1;
     this.cooldownUntil = 0;
     this.entryTimes = [];
     this.lastSignal = null;
@@ -515,6 +528,32 @@ export class AmtEngine {
     this.book = { bids, asks };
     // stamped with market time, so a skewed local clock cannot make it look stale
     this.of?.onBook(bids, asks, this.now);
+  }
+
+  /** Daily candles {time, close} (oldest first) for the daily-trend filter. */
+  setDaily(rows) {
+    this.daily = (rows ?? []).filter((r) => r && r.close > 0).map((r) => [Math.floor(r.time / DAY) * DAY, r.close]);
+    this.htfDay = -1;
+  }
+
+  /**
+   * The coin's daily trend at time t, from days that had closed by then (no
+   * look-ahead): three lookbacks vote up or down; the majority sets which
+   * side the bot may trade. null without enough daily history.
+   */
+  dailyTrend(t = this.now) {
+    if (!this.daily?.length) return null;
+    // before the first trade the engine has no clock yet: keep what was last worked out
+    if (!(t > 0)) return this.htf;
+    const day = Math.floor(t / DAY);
+    if (day === this.htfDay) return this.htf;
+    this.htfDay = day;
+    const c = this.cfg;
+    const closes = [];
+    for (const [d, close] of this.daily) if (d + DAY <= day * DAY) closes.push(close);
+    const sig = trendSignal(closes, { trendL1: c.trendL1, trendL2: c.trendL2, trendL3: c.trendL3, volDays: c.volDays, trendShort: true, targetVol: 1e9, maxExposure: 1 });
+    this.htf = sig.ready ? { dir: Math.sign(sig.strength), up: sig.votes.filter((v) => v.vote > 0).length, votes: sig.votes } : null;
+    return this.htf;
   }
 
   /** Forced orders {t, p, q, side}; side 'sell' = longs liquidated. */
@@ -862,6 +901,14 @@ export class AmtEngine {
     const wall = plan.wall ?? null;
     const gate = this.gate(side, book);
     if (gate) return this.skip(ev, gate);
+    if (c.trendFilter && c.style !== 'trend') {
+      // trades against the daily trend are where most losses come from
+      const h = this.dailyTrend(t);
+      if (h && h.dir !== dirOf(side)) {
+        const v = h.votes.map((x) => `${x.L}d ${x.ret >= 0 ? '+' : ''}${(x.ret * 100).toFixed(1)}%`).join(', ');
+        return this.skip(ev, `against the daily trend (${h.dir > 0 ? `${h.up}/3 up` : `${3 - h.up}/3 down`}: ${v}) — ${h.dir > 0 ? 'longs' : 'shorts'} only for now`);
+      }
+    }
     if (this.brain) {
       // the trade manager: stop beyond the noise, target that still pays (adaptive: plus the evidence score)
       const v = this.brain.review(this, plan, p, t, book);
@@ -1187,6 +1234,10 @@ export class AmtEngine {
       profile,
       orderflow: this.of ? this.of.snapshot(this.now) : null,
       brain: this.brain ? this.brain.snapshot(this, this.now, this.pos) : null,
+      daily: this.cfg.trendFilter ? (() => {
+        const h = this.dailyTrend(this.now);
+        return h ? { dir: h.dir, up: h.up, votes: h.votes } : { dir: 0, up: 0, votes: [], missing: true };
+      })() : null,
     };
   }
 }

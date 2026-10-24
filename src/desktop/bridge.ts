@@ -240,6 +240,8 @@ export interface AmtParams {
   /** % of the balance the target must move before it trades */
   rebalanceBand: number;
   trendShort: boolean;
+  /** only trades that go with the coin's daily trend (every style but trend) */
+  trendFilter: boolean;
   /** trade manager (every style but intraday; always on for adaptive) */
   manageTrades: boolean;
   steamAtR: number;
@@ -411,6 +413,8 @@ export interface AmtSnapshot {
   brain: AmtBrain | null;
   /** trend bot read-out (trend style only) */
   trend?: AmtTrend;
+  /** the coin's daily trend, when the daily-trend filter is on */
+  daily?: { dir: number; up: number; votes: { L: number; ret: number; vote: number }[]; missing?: boolean } | null;
 }
 
 export interface AmtTrend {
@@ -490,6 +494,8 @@ export interface AmtEvent {
 }
 
 export interface AmtBacktest {
+  /** whether the daily-trend filter ran ('unavailable' when daily candles could not load) */
+  dailyTrend?: 'on' | 'off' | 'unavailable';
   stats: AmtStats;
   trades: AmtTrade[];
   equity: [number, number][];

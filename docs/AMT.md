@@ -284,6 +284,26 @@ early exits that would have worked, and benches a setup that keeps losing.
 The fixed breakeven setting is ignored while the manager is on. Only the
 adaptive style also scores the evidence before entering.
 
+## 5c¾. Daily-trend filter — every futures bot
+
+Every style except the spot trend bot (Scalp, Growth, Order-flow,
+Adaptive, Intraday) can trade **with the coin's daily trend only** — on by
+default, and switched on automatically for bots saved before it existed.
+
+Once a day the bot reads the coin's daily closes on its own futures market
+(no spot wallet, nothing to connect) and takes the same three votes as the
+trend strategy: is the price above where it was 20, 60 and 120 days ago? When
+most say up it takes **longs only** — the order-flow setups then buy dips,
+absorption at support and stop runs below; when most say down, **shorts
+only**. Only days that have closed count (today's candle never does), so
+backtests and training — which fetch the coin's daily candles for the
+recorded period — see exactly what the live bot would have seen.
+
+Why: trends persisting over weeks and months is the best-documented effect
+in crypto (§5e); intraday trades that fight it are the ones that pay fees and
+lose, as in the paper trades that bought into a falling market. The Monitor
+shows the current daily trend and the activity log says when it flips.
+
 ## 5d. Execution — limit orders to cut costs
 
 **Execution → Limit first (maker fee)** is on in the Growth, Order-flow and

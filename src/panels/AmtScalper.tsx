@@ -393,7 +393,7 @@ function Intro({ onCreate }: { onCreate: () => void }) {
         The bot builds a rolling volume profile (POC and the 70% value area), tracks whether price is in <b>balance</b> inside value, <b>probing</b> outside it, or has been <b>accepted</b> outside it, and
         waits for order flow — aggressor delta, volume intensity and the order book — to agree before it trades:
       </p>
-      {(['trend', 'adaptive', 'scalp', 'intraday', 'orderflow'] as Style[]).map((st) => (
+      {(['adaptive', 'scalp', 'intraday', 'orderflow', 'trend'] as Style[]).map((st) => (
         <div key={st}>
           <b>{PRESET_NAME[st]}</b> <span className="muted">— {STYLE_TEXT[st]}</span>
           <ul>
@@ -564,7 +564,7 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
 
       <div className="section-title">Style</div>
       <div className="seg">
-        {(['trend', 'adaptive', 'scalp', 'intraday', 'growth', 'orderflow'] as Preset[]).map((st) => (
+        {(['adaptive', 'scalp', 'intraday', 'growth', 'orderflow', 'trend'] as Preset[]).map((st) => (
           <button
             key={st}
             type="button"
@@ -621,6 +621,15 @@ function Settings({ bot, locked, onSaved }: { bot: AmtBot; locked: boolean; onSa
       ) : (
         <div className="amt-grid">{RISK_FIELDS.map(([k, l, h]) => num(k, l, h))}</div>
       )}
+      <div className="section-title">Daily trend</div>
+      <Check checked={P.trendFilter} onChange={(trendFilter) => setP({ trendFilter })}>
+        <b>Trade with the daily trend only</b>
+      </Check>
+      <div className="muted amt-hint">
+        {P.trendFilter
+          ? 'Each day the bot reads the coin’s 20-, 60- and 120-day trends (the same signal as the research-backed trend strategy). When most point up it takes longs only — buying dips and stop runs below; when most point down, shorts only. Trades against the bigger trend are where most losses come from.'
+          : 'Off: the bot takes longs and shorts whatever the daily trend.'}
+      </div>
       {P.style !== 'intraday' && (
         <>
           <div className="section-title">Trade manager</div>
@@ -792,6 +801,13 @@ function Monitor({ bot, snap, running, events }: { bot: AmtBot; snap: AmtSnapsho
             <Stat label="Intensity" value={s.flow?.intensity ? `${fmtNum(s.flow.intensity, 1)}×` : '—'} />
             <Stat label="Book imb." value={s.book ? fmtNum(s.book.imbalance, 2) : '—'} tone={s.book?.imbalance ?? 0} />
             <Stat label="Prior value" value={s.prior ? `${fmtPrice(s.prior.val)}–${fmtPrice(s.prior.vah)}` : 'after 1 session'} />
+            {s.daily && (
+              <Stat
+                label="Daily trend"
+                value={s.daily.missing ? 'loading…' : `${s.daily.dir > 0 ? '↑ up' : '↓ down'} ${s.daily.dir > 0 ? s.daily.up : 3 - s.daily.up}/3 — ${s.daily.dir > 0 ? 'longs' : 'shorts'} only`}
+                tone={s.daily.dir}
+              />
+            )}
             {s.brain && <BrainStats br={s.brain} p={s.last} />}
             {s.orderflow && <OrderFlowStats of={s.orderflow} />}
             {s.style === 'intraday' && s.session && (
@@ -1250,6 +1266,7 @@ function Backtest({ bot }: { bot: AmtBot }) {
         <>
           <div className="muted amt-hint">
             {fmtNum(res.count, 0)} trades replayed{res.from && res.to ? ` · ${new Date(res.from).toLocaleString()} → ${new Date(res.to).toLocaleString()}` : ''} · bin {res.bin}
+            {res.dailyTrend === 'on' ? ' · daily-trend filter on' : res.dailyTrend === 'unavailable' ? ' · daily-trend filter could not load daily candles — both sides traded' : ''}
           </div>
           <div className="amt-cards">
             <Stat label="Trades" value={String(st.trades)} />

@@ -17,7 +17,21 @@ const KEY = 'amtBots';
  * style but intraday (which ignores it). A bot whose owner switched it off
  * keeps it off.
  */
-export const botParams = (p) => mergeConfig(p && p.manageTrades === undefined ? { ...p, manageTrades: true } : p);
+export const botParams = (p) => {
+  if (!p) return mergeConfig(p);
+  const up = { ...p };
+  if (up.manageTrades === undefined) up.manageTrades = true;
+  // and the daily-trend filter (only trades that go with the coin's daily trend)
+  if (up.trendFilter === undefined) up.trendFilter = true;
+  return mergeConfig(up);
+};
+
+/** The coin of a recorded or exchange symbol: ETHUSDT, ETH/USDT:USDT, ccxt 'binance::ETH/USDT', ETH-USD → ETH. */
+export function coinOf(symbol) {
+  const s = String(symbol).split('::').pop();
+  const head = s.split(/[/:\-_ ]/)[0].toUpperCase();
+  return head.replace(/(USDT|USDC|FDUSD|BUSD|USD|PERP)$/, '') || head;
+}
 /** A post-only order the exchange refused because it would have taken liquidity. */
 const POST_ONLY_REJECT = /post.?only|-5022|GTX|would (immediately )?(match|trigger|take)|as maker|maker only/i;
 const MAX_EVENTS = 200;
@@ -175,6 +189,11 @@ export class BotManager {
     }, 1000);
     const where = `${cfg.symbol} on ${exchangeId}${sandbox ? ' (testnet)' : ''}`;
     this.event(id, 'started', cfg.mode === 'live' ? `LIVE trading started: ${where}` : `Paper trading started: ${where}`);
+    if (params.trendFilter) {
+      // the daily trend decides which side the bot may trade; refreshed every 6 hours
+      void this.loadDaily(b, exchangeId);
+      b.dailyTimer = setInterval(() => void this.loadDaily(b, exchangeId), 6 * 3_600_000);
+    }
     if (params.sizing === 'balance') {
       const bal = b.engine.balance();
       this.event(id, 'info', `Sizing from a ${bal.toFixed(2)} balance: ${params.riskPct}% risk per trade, positions up to ${params.maxLeverage}× ($${(bal * params.maxLeverage).toFixed(2)})${params.minNotionalUsd ? `, exchange minimum $${params.minNotionalUsd.toFixed(2)}` : ''}`);
@@ -220,6 +239,31 @@ export class BotManager {
       else this.report(b, intent, paperFill(e, intent).price);
     }
     if (e.halted && !e.pos && !e.pending && !b.stopping) void this.stop(id, { reason: e.halted });
+  }
+
+  /** Daily candles for the daily-trend filter (public data on the bot's own market). */
+  async loadDaily(b, exchangeId) {
+    const id = b.cfg.id;
+    try {
+      const rows = await this.ccxt.ohlcv(exchangeId, b.cfg.symbol, '1d', 200);
+      b.engine.setDaily(rows);
+      const h = b.engine.dailyTrend(this.now());
+      const first = !b.dailyLoaded;
+      b.dailyLoaded = true;
+      if (!h) this.event(id, 'info', `daily trend: only ${rows.length} days of history — trading both sides until there is enough`);
+      else if (first || h.dir !== b.dailyDir) {
+        const v = h.votes.map((x) => `${x.L}d ${x.ret >= 0 ? '+' : ''}${(x.ret * 100).toFixed(1)}%`).join(', ');
+        this.event(id, 'info', `Daily trend ${h.dir > 0 ? 'UP' : 'DOWN'} (${h.dir > 0 ? h.up : 3 - h.up}/3: ${v}) — taking ${h.dir > 0 ? 'longs' : 'shorts'} only`);
+      }
+      b.dailyDir = h?.dir ?? 0;
+    } catch (err) {
+      if (!b.dailyLoaded) this.event(id, 'warn', `daily trend unavailable (${err?.message ?? err}) — trading both sides until it loads`);
+    }
+  }
+
+  /** Daily candles of the coin around a recorded period (Binance spot has the longest history). */
+  async dailyFor(symbol, from) {
+    return this.ccxt.history('binance', `${coinOf(symbol)}/USDT`, '1d', from - 200 * 86_400_000);
   }
 
   /** Live balance-sized bots re-read the account after each trade and every few minutes. */
@@ -737,6 +781,7 @@ export class BotManager {
     b.stopping = true;
     clearInterval(b.timer);
     if (b.balanceTimer) clearInterval(b.balanceTimer);
+    if (b.dailyTimer) clearInterval(b.dailyTimer);
     if (b.trend) {
       // a trend bot holds coins for weeks: stopping it leaves them where they are
       const final = this.snapshot(id);
@@ -793,12 +838,16 @@ export class BotManager {
     if (rows.length < 1000) throw new Error(`only ${rows.length} recorded trades for ${venue} ${symbol} — let the terminal record for a while first`);
     const trades = rows.map((r) => ({ t: r.time, p: r.price, q: r.qty, s: r.side }));
     const e = new AmtEngine(params);
+    // the same daily-trend filter as live (without the history, both sides trade)
+    let daily = null;
+    if (e.cfg.trendFilter) daily = await this.dailyFor(symbol, trades[0].t).catch(() => null);
+    if (daily?.length) e.setDaily(daily);
     // yield between chunks so the app stays responsive on long histories
     for (let i = 0; i < trades.length; i += 50_000) {
       replay(e, trades, i, Math.min(trades.length, i + 50_000));
       await new Promise((r) => setImmediate(r));
     }
-    return finishBacktest(e, trades);
+    return { ...finishBacktest(e, trades), dailyTrend: !e.cfg.trendFilter ? 'off' : daily?.length ? 'on' : 'unavailable' };
   }
 
   /**
@@ -812,9 +861,11 @@ export class BotManager {
     try {
       const to = this.now();
       const rows = this.db.queryTrades(venue, symbol, to - days * 86_400_000, to, 3_000_000);
+      const daily = mergeConfig(params).trendFilter && rows.length ? await this.dailyFor(symbol, rows[0].time).catch(() => null) : null;
       const res = await train({
         base: params,
         rows,
+        daily,
         n,
         makeWorker: this.makeWorker,
         onProgress: (f) => this.emit('train', { progress: f }),

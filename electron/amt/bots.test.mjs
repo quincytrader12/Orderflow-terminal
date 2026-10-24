@@ -194,6 +194,28 @@ describe('BotManager', () => {
     });
   });
 
+  it('loads the daily trend when a bot starts and backtests with it', async () => {
+    const DAY = 86_400_000;
+    const ccxt = fakeCcxt();
+    const first = Math.floor(T0 / DAY) * DAY - 200 * DAY;
+    const rows = Array.from({ length: 200 }, (_, i) => ({ time: first + i * DAY, open: 1, high: 1, low: 1, close: 100 * Math.exp(0.004 * i + (i % 2 ? 0.01 : -0.01)), volume: 1 }));
+    ccxt.ohlcv = vi.fn(async () => rows);
+    ccxt.history = vi.fn(async () => rows);
+    const m = new BotManager({ ccxt, db, emit: () => {}, now: () => T0 });
+    const id = m.save({ mode: 'paper', exchangeId: 'binance', symbol: 'ETH/USDT:USDT', params: { ...params, trendFilter: true } });
+    await m.start(id);
+    await vi.waitFor(() => expect(m.eventsFor(id).some((e) => /^Daily trend UP \(3\/3: .*\) — taking longs only$/.test(e.text))).toBe(true));
+    expect(ccxt.ohlcv).toHaveBeenCalledWith('binance', 'ETH/USDT:USDT', '1d', 200);
+    expect(m.snapshot(id).daily).toMatchObject({ dir: 1, up: 3 });
+    await m.stop(id, { reason: 'test' });
+    // backtests and training use the same filter, from the coin's daily candles
+    vi.useRealTimers();
+    db.recordTrades('binancef', 'ETHUSDT', breakoutTape().map((x) => ({ t: x.t, p: x.p, q: x.q, s: x.s })));
+    const bt = await m.backtest({ ...params, trendFilter: true }, 'binancef', 'ETHUSDT', 0, Number.MAX_SAFE_INTEGER);
+    expect(ccxt.history).toHaveBeenCalledWith('binance', 'ETH/USDT', '1d', expect.any(Number));
+    expect(bt.dailyTrend).toBe('on');
+  });
+
   it('switches the trade manager on for bots saved before it existed, except intraday', async () => {
     const ccxt = fakeCcxt();
     const m = new BotManager({ ccxt, db, emit: () => undefined, now: () => T0 });
