@@ -435,6 +435,9 @@ describe('BotManager', () => {
     const story = events.filter((e) => e.kind === 'story').map((e) => e.text);
     expect(story[0]).toMatch(/^✅ Entered BTC long at [\d,.]+ \(paper\)\nWhy: price broke above today's fair-value area[^\n]*\nStop: [^\n]*\nPlan: stop [\d,.]+ \(−[\d.]+%, risking \$[\d.]+ = [\d.]+% of \$1000\.00\) · target [\d,.]+ \(\+[\d.]+%, [\d.]+R\) · size \$[\d.]+/);
     expect(story.some((t) => /^(💰|➖|🔻) Closed [^:]*: BTC long \(paper\) [+−]\$[\d.]+ \([+−][\d.]+R\)/.test(t))).toBe(true);
+    // the exit carries the closed trade, with the plan it opened with, for its chart
+    const exit = events.find((e) => e.kind === 'story' && e.data.story === 'exit');
+    expect(exit.data.trade).toMatchObject({ side: 'buy', setup: 'breakout', stop0: expect.any(Number), target0: expect.any(Number), risk: expect.any(Number), opened: expect.any(Number), closed: expect.any(Number) });
     expect(story.at(-1)).toMatch(/^⏸ The BTC bot has stopped — you stopped it and closed its position\.\nDetail: stopped and flattened by you\n1 trade, [+−]\$[\d.]+ this run · balance \$[\d.]+$/);
   });
 

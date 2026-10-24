@@ -437,7 +437,10 @@ Bot's notes: swept the swing low 98,900 by 4.0 bps … score 2.5
 - **Exit** — profit, about breakeven or loss in dollars and R, how long it was
   held, why it closed (target, losing steam, flow turned, stalled, trailing
   stop, stop), entry → exit, fees, the balance after, and the trade manager's
-  reasoning at that moment.
+  reasoning at that moment. It comes with a **chart** too: the entry and the
+  exit marked on the candles and joined, the stop and target the trade opened
+  with, the risk and reward shaded from entry to exit, and the result in one
+  line (move, dollars, R, time held, reason).
 - **Stopped** — why, the raw reason, and the run's trades and result.
 
 The same setup in the same direction is announced at most once every 15

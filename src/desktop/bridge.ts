@@ -356,6 +356,10 @@ export interface AmtTrade {
   closed: number;
   reason: string;
   why: string;
+  /** the stop and target the trade was opened with, and its risk per unit */
+  stop0?: number;
+  target0?: number;
+  risk?: number;
 }
 
 export interface AmtStats {
@@ -493,7 +497,7 @@ export interface AmtEvent {
   t: number;
   kind: 'started' | 'stopped' | 'entry' | 'exit' | 'skip' | 'info' | 'warn' | 'error' | 'think' | 'trade' | 'story';
   text: string;
-  data?: { story?: 'watch' | 'pass' | 'entry' | 'manage' | 'exit' | 'stopped'; outcome?: 'profit' | 'even' | 'loss' } & Record<string, unknown>;
+  data?: { story?: 'watch' | 'pass' | 'entry' | 'manage' | 'exit' | 'stopped'; outcome?: 'profit' | 'even' | 'loss'; trade?: AmtTrade } & Record<string, unknown>;
 }
 
 export interface AmtBacktest {

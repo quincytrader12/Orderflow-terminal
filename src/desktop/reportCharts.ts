@@ -3,7 +3,7 @@ import type { Kline } from '../core/types';
 import type { ValueLevels } from '../shared/report';
 import { font, line } from '../ui/canvas';
 import { palette, rgba, type Palette } from '../ui/theme';
-import type { AmtSnapshot } from './bridge';
+import type { AmtSnapshot, AmtTrade } from './bridge';
 
 /** Report images: drawn off-screen in the current theme and encoded as PNG. */
 
@@ -218,19 +218,35 @@ export async function equityChart(opts: { title: string; subtitle: string; point
 }
 
 /** A bot's entry: profile around price with value area, entry, stop and target. */
+/** A trade drawn on the candles: open (entry only) or closed (entry and exit). */
+export interface TradePlan {
+  side: 'buy' | 'sell';
+  entry: number;
+  stop: number;
+  target: number;
+  /** entry time */
+  t: number;
+  exit?: number;
+  exitT?: number;
+  /** closed in profit (colours the exit) */
+  win?: boolean;
+  /** the one-line summary under the chart */
+  footer: string;
+}
+
 /**
- * The picture sent with a bot entry: the last hour of one-minute candles
- * with the entry marked, the risk (to the stop) and the reward (to the
- * target) shaded from the entry on, the value area and POC, and the volume
- * profile beside it. Before any candles exist, the profile alone.
+ * The picture sent with a bot entry or exit: the last hour of one-minute
+ * candles with the entry (and exit) marked, the risk (to the stop) and the
+ * reward (to the target) shaded from the entry on — up to the exit once the
+ * trade is closed — the value area and POC, and the volume profile beside
+ * it. Before any candles exist, the profile alone.
  */
-export async function botEntryChart(s: AmtSnapshot, title: string): Promise<Uint8Array> {
+async function tradeChart(s: AmtSnapshot, title: string, pos: TradePlan | null): Promise<Uint8Array> {
   const W = 960;
   const H = 600;
   const { c, ctx, pal } = surface(W, H);
   header(ctx, pal, W, title, `${s.symbol} · ${s.exchange}${s.sandbox ? ' (testnet)' : ''}`);
   const ks = s.candles ?? [];
-  const pos = s.position;
   const rows = s.profile;
   const axisW = 92;
   const profW = ks.length ? 150 : 0;
@@ -238,7 +254,7 @@ export async function botEntryChart(s: AmtSnapshot, title: string): Promise<Uint
   const right = W - axisW - profW - 16;
   const top = 64;
   const bottom = H - 64;
-  const levels = [s.last, s.va?.vah, s.va?.val, s.va?.poc, pos?.stop, pos?.target, pos?.entry].filter((p): p is number => p !== undefined && isFinite(p));
+  const levels = [s.last, s.va?.vah, s.va?.val, s.va?.poc, pos?.stop, pos?.target, pos?.entry, pos?.exit].filter((p): p is number => p !== undefined && isFinite(p));
   const prices = [...levels, ...ks.flatMap((k) => [k[2], k[3]])];
   if (!ks.length) prices.push(...rows.filter((r) => r[1] > 0).map((r) => r[0]));
   let lo = Math.min(...prices);
@@ -253,6 +269,8 @@ export async function botEntryChart(s: AmtSnapshot, title: string): Promise<Uint
   const tags: { p: number; color: string; label: string; dash?: number[] }[] = [];
   if (s.va) tags.push({ p: s.va.vah, color: pal.muted, label: 'VAH', dash: [5, 4] }, { p: s.va.val, color: pal.muted, label: 'VAL', dash: [5, 4] }, { p: s.va.poc, color: pal.poc, label: 'POC', dash: [2, 3] });
   if (pos) tags.push({ p: pos.target, color: pal.buy, label: 'TP', dash: [4, 3] }, { p: pos.stop, color: pal.sell, label: 'SL', dash: [4, 3] }, { p: pos.entry, color: pal.accent, label: 'IN' });
+  const outCol = pos?.win ? pal.buy : pal.sell;
+  if (pos?.exit !== undefined) tags.push({ p: pos.exit, color: outCol, label: 'OUT', dash: [1, 3] });
 
   // grid and price axis
   ctx.font = font(11);
@@ -275,6 +293,9 @@ export async function botEntryChart(s: AmtSnapshot, title: string): Promise<Uint
   const cw = (chartR - left) / (n + 4); // room on the right for the plan zones
   const xAt = (i: number) => left + i * cw + cw / 2;
   let entryX = chartR - 4 * cw;
+  let exitX = chartR - 2 * cw;
+  // a trade older than the candles shown starts at the left edge
+  if (pos && ks.length && pos.t < ks[0][0]) entryX = xAt(0);
   ks.forEach((k, i) => {
     const [t, o, h, l, cl] = k;
     const up = cl >= o;
@@ -284,11 +305,12 @@ export async function botEntryChart(s: AmtSnapshot, title: string): Promise<Uint
     ctx.fillStyle = col;
     ctx.fillRect(x - cw * 0.35, Math.min(y(o), y(cl)), Math.max(1, cw * 0.7), Math.max(1, Math.abs(y(o) - y(cl))));
     if (pos && t <= pos.t && pos.t < t + 60_000) entryX = x;
+    if (pos?.exitT !== undefined && t <= pos.exitT && pos.exitT < t + 60_000) exitX = x;
   });
 
   // the plan: risk and reward shaded from the entry on
   if (pos) {
-    const zoneR = W - axisW - profW - 16;
+    const zoneR = pos.exit !== undefined ? Math.max(exitX, entryX + 4) : W - axisW - profW - 16;
     ctx.fillStyle = rgba(pal.sellRgb, 0.14);
     ctx.fillRect(entryX, Math.min(y(pos.entry), y(pos.stop)), zoneR - entryX, Math.abs(y(pos.entry) - y(pos.stop)));
     ctx.fillStyle = rgba(pal.buyRgb, 0.14);
@@ -303,6 +325,18 @@ export async function botEntryChart(s: AmtSnapshot, title: string): Promise<Uint
     ctx.lineTo(entryX + 7, ey + (up ? 18 : -18));
     ctx.closePath();
     ctx.fill();
+    // the exit: a dot where it closed, joined to the entry
+    if (pos.exit !== undefined) {
+      const xy = y(pos.exit);
+      line(ctx, entryX, ey, exitX, xy, outCol, 2, [4, 3]);
+      ctx.fillStyle = outCol;
+      ctx.beginPath();
+      ctx.arc(exitX, xy, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = pal.bg;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
   }
 
   // volume profile beside the candles (or alone, before there are any)
@@ -342,18 +376,47 @@ export async function botEntryChart(s: AmtSnapshot, title: string): Promise<Uint
   const every = Math.max(1, Math.round(n / 6));
   for (let i = 0; i < ks.length; i += every) ctx.fillText(new Date(ks[i][0]).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }), xAt(i), bottom + 8);
 
-  // the plan in one line
+  // the plan (or the result) in one line
   if (pos) {
-    const dir = pos.side === 'buy' ? 1 : -1;
-    const risk = Math.abs(pos.entry - pos.stop);
-    const rr = risk > 0 ? ((pos.target - pos.entry) * dir) / risk : NaN;
-    const pct = (p: number) => `${p >= pos.entry ? '+' : '−'}${((Math.abs(p - pos.entry) / pos.entry) * 100).toFixed(2)}%`;
     ctx.font = font(13, 600, false);
     ctx.fillStyle = pal.text;
     ctx.textAlign = 'right';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText(`Entry ${fmtPrice(pos.entry)} · stop ${pct(pos.stop)} · target ${pct(pos.target)}${isFinite(rr) ? ` · ${rr.toFixed(1)}R` : ''}`, W - 24, H - 12);
+    ctx.fillText(pos.footer, W - 24, H - 12);
   }
   watermark(ctx, pal, H);
   return png(c);
+}
+
+const pctFrom = (from: number, p: number) => `${p >= from ? '+' : '−'}${((Math.abs(p - from) / from) * 100).toFixed(2)}%`;
+
+/** The picture for an entry: the open position on the candles. */
+export function botEntryChart(s: AmtSnapshot, title: string): Promise<Uint8Array> {
+  const p = s.position;
+  if (!p) return tradeChart(s, title, null);
+  const dir = p.side === 'buy' ? 1 : -1;
+  const risk = Math.abs(p.entry - p.stop);
+  const rr = risk > 0 ? ((p.target - p.entry) * dir) / risk : NaN;
+  const footer = `Entry ${fmtPrice(p.entry)} · stop ${pctFrom(p.entry, p.stop)} · target ${pctFrom(p.entry, p.target)}${isFinite(rr) ? ` · ${rr.toFixed(1)}R` : ''}`;
+  return tradeChart(s, title, { side: p.side, entry: p.entry, stop: p.stop, target: p.target, t: p.t, footer });
+}
+
+/** The picture for an exit: entry to exit on the candles, against the plan it opened with. */
+export function botExitChart(s: AmtSnapshot, title: string, tr: AmtTrade): Promise<Uint8Array> {
+  const risk = tr.risk ?? (tr.stop0 !== undefined ? Math.abs(tr.entry - tr.stop0) : NaN);
+  const R = risk > 0 && tr.qty > 0 ? tr.pnl / (risk * tr.qty) : NaN;
+  const mins = Math.max(1, Math.round((tr.closed - tr.opened) / 60_000));
+  const footer = `${fmtPrice(tr.entry)} → ${fmtPrice(tr.exit)} (${pctFrom(tr.entry, tr.exit)}) · ${tr.pnl >= 0 ? '+' : '−'}$${Math.abs(tr.pnl).toFixed(2)}${isFinite(R) ? ` (${R >= 0 ? '+' : '−'}${Math.abs(R).toFixed(1)}R)` : ''} · ${mins} min · ${tr.reason}`;
+  // without the opening plan, the stop and target sit at the entry (nothing shaded)
+  return tradeChart(s, title, {
+    side: tr.side,
+    entry: tr.entry,
+    stop: tr.stop0 ?? tr.entry,
+    target: tr.target0 ?? tr.entry,
+    t: tr.opened,
+    exit: tr.exit,
+    exitT: tr.closed,
+    win: tr.pnl >= 0,
+    footer,
+  });
 }

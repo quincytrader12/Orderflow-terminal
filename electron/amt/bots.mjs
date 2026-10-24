@@ -258,7 +258,7 @@ export class BotManager {
 
   /** One plain-English line of the bot's story (what goes to Telegram). */
   story(id, line) {
-    this.event(id, 'story', line.text, { story: line.kind, outcome: line.outcome });
+    this.event(id, 'story', line.text, { story: line.kind, outcome: line.outcome, trade: line.trade });
   }
 
   /** Daily candles for the daily-trend filter (public data on the bot's own market). */
@@ -318,7 +318,8 @@ export class BotManager {
     const th = e.brain?.thoughts.at(-1);
     const why = th && e.now - th.t <= 2000 && /cutting|losing steam|follow-through|banking|trailing/.test(th.text) ? ` — ${th.text}` : '';
     this.event(id, 'exit', `EXIT ${intent.reason} @ ${tidy(price)} · ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USD${why}`, { ...intent, price, pnl });
-    if (b.narrator && last) this.story(id, b.narrator.exit(last, intent.reason, { balance: e.balance(), notes: why ? th.text : null }));
+    // the closed trade rides along, for the exit picture
+    if (b.narrator && last) this.story(id, { ...b.narrator.exit(last, intent.reason, { balance: e.balance(), notes: why ? th.text : null }), trade: { ...last, reason: intent.reason ?? last.reason } });
     void this.refreshBalance(b);
   }
 
