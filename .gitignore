@@ -10,3 +10,4 @@ dist-electron
 release
 e2e/.ledger-key
 brag-output/
+brag-output-*/
