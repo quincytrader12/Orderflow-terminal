@@ -160,7 +160,10 @@ export function TelegramPanel(_: PanelProps<TelegramConfig>) {
         )}
         <div className="section-title">Instant notifications</div>
         <label className="check">
-          <input type="checkbox" checked={s.telegramAlerts} onChange={(e) => s.set({ telegramAlerts: e.target.checked })} /> Forward fired alerts, placed orders and AMT bot entries (with chart), exits, stops and errors
+          <input type="checkbox" checked={s.telegramBotStory} onChange={(e) => s.set({ telegramBotStory: e.target.checked })} /> Bot updates in plain English: what it is watching and why, when it enters, when the trade is safe, and how it ended
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={s.telegramAlerts} onChange={(e) => s.set({ telegramAlerts: e.target.checked })} /> Also forward my chart alerts and the orders I place by hand
         </label>
         <label className="check">
           <input type="checkbox" checked={s.telegramFeedAlerts} onChange={(e) => s.set({ telegramFeedAlerts: e.target.checked })} /> Tell me when the data feed has been down for 2 minutes, and when it recovers

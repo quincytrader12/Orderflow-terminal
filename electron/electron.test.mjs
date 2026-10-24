@@ -82,6 +82,62 @@ describe('Db', () => {
     expect(db.get('retentionDays')).toBe(7);
   });
 
+  it('keeps per-market counts without counting the table', () => {
+    db.recordTrades('binancef', 'BTCUSDT', [{ p: 1, q: 1, s: 'buy', t: 5000 }]);
+    db.recordTrades('binancef', 'ETHUSDT', [
+      { p: 1, q: 1, s: 'buy', t: 4000 },
+      { p: 1, q: 1, s: 'buy', t: 6000 },
+    ]);
+    db.recordTrades('binancef', 'BTCUSDT', [{ p: 1, q: 1, s: 'sell', t: 2000 }]);
+    expect(db.tradeStats()).toEqual([
+      { venue: 'binancef', symbol: 'BTCUSDT', n: 2, first: 2000, last: 5000 },
+      { venue: 'binancef', symbol: 'ETHUSDT', n: 2, first: 4000, last: 6000 },
+    ]);
+    expect(db.instruments()).toEqual([
+      { venue: 'binancef', symbol: 'BTCUSDT' },
+      { venue: 'binancef', symbol: 'ETHUSDT' },
+    ]);
+    expect(db.deleteInstrument('binancef', 'ETHUSDT')).toBe(2);
+    expect(db.tradeStats().map((s) => s.symbol)).toEqual(['BTCUSDT']);
+    expect(db.info().trades).toBe(2);
+  });
+
+  it('counts a database recorded before the kept counts, a slice at a time, and prunes exactly meanwhile', () => {
+    const H = 3_600_000;
+    const ins = db.db.prepare('INSERT INTO trades (venue, symbol, t, price, qty, side) VALUES (?, ?, ?, 1, 1, 1)');
+    for (let i = 0; i < 50; i++) ins.run('bybit', 'BTCUSDT', i * (H / 10)); // 10 an hour for 5 hours
+    // as a database from before the kept counts looks
+    db.db.exec("DROP TABLE trade_stats; DELETE FROM kv WHERE k = 'tradeStatsReady'");
+    db.close();
+    db = new Db(join(dir, 'test.sqlite'));
+    expect(db.tradeStats()).toEqual([]); // known, not yet counted (n = 0 is hidden)
+    expect(db.backlog.length).toBe(5);
+    expect(db.countBacklog(2)).toBe(true);
+    expect(db.tradeStats()[0].n).toBe(20);
+    // new trades count straight away
+    db.recordTrades('bybit', 'BTCUSDT', [{ p: 1, q: 1, s: 'buy', t: 6 * H }]);
+    expect(db.tradeStats()[0].n).toBe(21);
+    // prune the first 2.5 hours: 20 counted come off; 5 never counted do not
+    expect(db.pruneTrades(2.5 * H)).toBe(25);
+    expect(db.tradeStats()[0]).toMatchObject({ n: 1, first: 2.5 * H });
+    while (db.countBacklog(2));
+    expect(db.tradeStats()[0].n).toBe(26);
+    expect(db.get('tradeStatsReady')).toBe(true);
+  });
+
+  it('reads trades as shared columns, page by page, even across equal timestamps', async () => {
+    const rows = [];
+    for (let i = 0; i < 25; i++) rows.push({ p: 100 + i, q: i, s: i % 2 ? 'buy' : 'sell', t: 1000 + Math.floor(i / 4) });
+    db.recordTrades('binancef', 'BTCUSDT', rows);
+    const c = await db.tradeColumns('binancef', 'BTCUSDT', 1000, 9999, 3_000_000, 3);
+    expect(c.t.length).toBe(25);
+    expect(c.t.buffer).toBeInstanceOf(SharedArrayBuffer);
+    expect([...c.p]).toEqual(rows.map((r) => r.p));
+    expect([...c.s]).toEqual(rows.map((r) => (r.s === 'buy' ? 1 : 0)));
+    expect((await db.tradeColumns('binancef', 'BTCUSDT', 1003, 1004, 3_000_000, 2)).t.length).toBe(8);
+    expect((await db.tradeColumns('binancef', 'BTCUSDT', 1000, 9999, 10, 3)).t.length).toBe(10);
+  });
+
   it('stores wallets and keeps verification sticky', () => {
     db.putWallet('Addr1', 'solana', true);
     db.putWallet('Addr1', 'solana', false);

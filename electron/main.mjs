@@ -530,7 +530,7 @@ app.whenReady().then(() => {
       bots = new BotManager({
         ccxt: ccxtSvc,
         db,
-        makeWorker: () => new Worker(trainWorkerPath),
+        makeWorker: () => new Worker(trainWorkerPath, { resourceLimits: { maxOldGenerationSizeMb: 768 } }),
         emit: (ch, payload) => {
           for (const w of BrowserWindow.getAllWindows()) if (!w.webContents.isDestroyed()) w.webContents.send(`amt:${ch}`, payload);
         },
@@ -551,6 +551,15 @@ app.whenReady().then(() => {
     }
   };
   setTimeout(prune, 20_000);
+  // a database from an older version: count its recorded trades in small slices
+  const backlog = setInterval(() => {
+    try {
+      if (!db.countBacklog(2)) clearInterval(backlog);
+    } catch (e) {
+      log('warn', 'trade count failed', e);
+      clearInterval(backlog);
+    }
+  }, 250);
   setInterval(prune, 3_600_000);
   app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });

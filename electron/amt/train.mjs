@@ -192,9 +192,10 @@ async function runAll(cands, cols, splitT, opts, onProgress, makeWorker) {
     for (const v of partial.values()) p += v;
     onProgress?.(Math.min(1, (done + p) / cands.length));
   };
-  const size = Math.max(1, Math.min(opts.workers ?? Math.min(4, cpus().length - 1), cands.length));
+  // at most two workers, and always two cores left for the charts, the feeds and the GPU
+  const size = Math.max(1, Math.min(opts.workers ?? Math.min(2, cpus().length - 2), cands.length));
   let pool = [];
-  if (makeWorker && size > 1) {
+  if (makeWorker && (size > 1 || opts.workers === undefined)) {
     try {
       pool = Array.from({ length: size }, () => makeWorker());
     } catch {
@@ -231,7 +232,9 @@ async function runAll(cands, cols, splitT, opts, onProgress, makeWorker) {
     try {
       await Promise.all(pool.map((w, slot) => work(w, slot)));
       return results;
-    } catch {
+    } catch (e) {
+      // out of memory: say so rather than retry the same load on the app's own thread
+      if (e?.code === 'ERR_WORKER_OUT_OF_MEMORY') throw new Error('training ran out of memory — choose fewer days and try again');
       // a worker failed (e.g. could not load): finish in this thread
       partial.clear();
     } finally {
@@ -244,7 +247,7 @@ async function runAll(cands, cols, splitT, opts, onProgress, makeWorker) {
       fill: paperFill,
       minTrades: opts.minTrades,
       daily: opts.daily,
-      yieldEvery: 50_000,
+      yieldEvery: 10_000,
       onProgress: (f) => {
         partial.set('main', f);
         report();

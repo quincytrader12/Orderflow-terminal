@@ -489,8 +489,9 @@ export interface AmtOrderFlow {
 export interface AmtEvent {
   id: string;
   t: number;
-  kind: 'started' | 'stopped' | 'entry' | 'exit' | 'skip' | 'info' | 'warn' | 'error' | 'think' | 'trade';
+  kind: 'started' | 'stopped' | 'entry' | 'exit' | 'skip' | 'info' | 'warn' | 'error' | 'think' | 'trade' | 'story';
   text: string;
+  data?: { story?: 'watch' | 'pass' | 'entry' | 'manage' | 'exit' | 'stopped'; outcome?: 'profit' | 'even' | 'loss' } & Record<string, unknown>;
 }
 
 export interface AmtBacktest {

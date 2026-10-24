@@ -410,6 +410,35 @@ describe('BotManager', () => {
     await m.stop(id, { flatten: false });
   });
 
+  it('a small balance: refuses a market it could never trade, and says where Binance futures money must be', async () => {
+    const ccxt = fakeCcxt();
+    ccxt.marketInfo = vi.fn(async () => ({ exchangeId: 'binanceusdm', trading: true, sandbox: false, contract: true, contractSize: 1, minAmount: 0.001, minCost: 100, last: 100_000, taker: 0.0005, settle: 'USDT', limits: { maxOrderUsd: 300 } }));
+    ccxt.accountBalance = vi.fn(async () => 15);
+    ccxt.prepareMargin = vi.fn(async () => []);
+    const m = new BotManager({ ccxt, db, emit: () => {}, now: () => T0 });
+    const id = m.save({ mode: 'live', secretId: 'k1', symbol: 'BTC/USDT:USDT', params: { ...params, sizing: 'balance', riskPct: 1.5, maxLeverage: 5 } });
+    // $100 minimum, 5 × $15 = $75 at most: never placeable
+    await expect(m.start(id)).rejects.toThrow(/smallest order binanceusdm accepts on BTC\/USDT:USDT is \$100\.00, more than this bot may hold with a \$15\.00 balance/);
+    ccxt.accountBalance = vi.fn(async () => 0);
+    await expect(m.start(id)).rejects.toThrow(/move it from Spot to the USDⓈ-M Futures wallet/);
+    expect(m.running.has(id)).toBe(false);
+  });
+
+  it('tells its story in plain English: entry, and how the trade ended', async () => {
+    const events = [];
+    const ccxt = fakeCcxt();
+    const m = new BotManager({ ccxt, db, emit: (ch, e) => ch === 'event' && events.push(e), now: () => T0 });
+    const id = m.save({ mode: 'paper', exchangeId: 'bybit', symbol: 'BTC/USDT:USDT', params });
+    await m.start(id);
+    feed(ccxt, `amt-${id}`, breakoutTape());
+    await m.stop(id, { flatten: true, reason: 'stopped and flattened by you' });
+    const story = events.filter((e) => e.kind === 'story').map((e) => e.text);
+    expect(story[0]).toMatch(/^✅ Bought BTC — went long \(paper\)\. Why: price broke above today's fair-value area/);
+    expect(story.some((t) => /^(💰|➖|🔻) Closed the BTC long/.test(t))).toBe(true);
+    expect(story.at(-1)).toBe('⏸ The BTC bot has stopped — you stopped it and closed its position.');
+    for (const t of story) expect(t).not.toMatch(/\d/);
+  });
+
   it('closes an entry that fills after "Stop & close position"', async () => {
     const ccxt = fakeCcxt();
     let release;

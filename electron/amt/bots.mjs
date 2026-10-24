@@ -8,6 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { ADAPTIVE_PRESET, AmtEngine, DEFAULT_AMT, finishBacktest, GROWTH_PRESET, INTRADAY_PRESET, mergeConfig, ORDERFLOW_PRESET, paperFill, replay, SCALP_PRESET, TREND_PRESET } from './engine.mjs';
 import { backtestTrend, DAY, explainSignal, rebalanceOrder, trendSignal } from './trend.mjs';
+import { Narrator, stoppedWords } from './story.mjs';
 import { train } from './train.mjs';
 
 const KEY = 'amtBots';
@@ -155,9 +156,20 @@ export class BotManager {
       if (params.sizing === 'balance') {
         // size from the real account, within the market's minimum order
         const bal = await this.ccxt.accountBalance(cfg.secretId, cfg.symbol);
-        if (!(bal > 0)) throw new Error(`no ${info.settle ?? info.quote} balance on this account to trade ${cfg.symbol}`);
+        const coin = info.settle ?? info.quote;
+        if (!(bal > 0))
+          throw new Error(
+            `no ${coin} balance on this account to trade ${cfg.symbol}${info.contract && String(exchangeId).startsWith('binance') ? ` — Binance keeps spot and futures in separate wallets: convert your deposit to ${coin}, then move it from Spot to the USDⓈ-M Futures wallet (Wallet → Transfer)` : ''}`,
+          );
         params.accountUsd = bal;
         params.minNotionalUsd = Math.max(info.minCost ?? 0, (info.minAmount ?? 0) * (info.contractSize ?? 1) * (info.last ?? 0));
+        // a small balance: refuse a market whose smallest order the bot could never place,
+        // rather than run and skip every setup
+        const cap = Math.min(bal * params.maxLeverage, params.maxPositionUsd);
+        if (params.minNotionalUsd > cap)
+          throw new Error(
+            `the smallest order ${exchangeId} accepts on ${cfg.symbol} is $${params.minNotionalUsd.toFixed(2)}, more than this bot may hold with a $${bal.toFixed(2)} balance (${params.maxLeverage}× = $${cap.toFixed(2)}) — pick a market with a smaller minimum, or add to the balance`,
+          );
         // spot cannot borrow: a position is at most what the account holds
         if (!info.contract) params.maxLeverage = Math.min(params.maxLeverage, 0.98);
         live.balance = bal;
@@ -179,6 +191,8 @@ export class BotManager {
       stopOrderId: null,
       lastSkip: null,
       stopping: false,
+      // the plain-English story for Telegram: watching, in, safe, out
+      narrator: new Narrator({ symbol: cfg.symbol, mode: cfg.mode }),
     };
     this.running.set(id, b);
     this.ccxt.subscribe(b.sid, exchangeId, cfg.symbol, (m) => this.onMessage(id, m), { sandbox, liquidations: params.style === 'orderflow' || params.style === 'adaptive' });
@@ -238,7 +252,13 @@ export class BotManager {
       } else if (intent.order === 'limit') this.event(id, 'info', restingText(intent));
       else this.report(b, intent, paperFill(e, intent).price);
     }
+    for (const l of b.narrator?.step(e, e.now) ?? []) this.story(id, l);
     if (e.halted && !e.pos && !e.pending && !b.stopping) void this.stop(id, { reason: e.halted });
+  }
+
+  /** One plain-English line of the bot's story (what goes to Telegram). */
+  story(id, line) {
+    this.event(id, 'story', line.text, { story: line.kind, outcome: line.outcome });
   }
 
   /** Daily candles for the daily-trend filter (public data on the bot's own market). */
@@ -282,6 +302,7 @@ export class BotManager {
     const e = b.engine;
     if (intent.type === 'enter') {
       this.event(id, 'entry', `${intent.side === 'buy' ? 'LONG' : 'SHORT'} ${tidy(intent.qty)} @ ${tidy(price)} · ${intent.setup} · stop ${tidy(intent.stop)} · target ${tidy(intent.target)} — ${intent.reason}`, { ...intent, price });
+      if (b.narrator) this.story(id, b.narrator.entry(intent));
       return;
     }
     const last = e.trades[e.trades.length - 1];
@@ -297,6 +318,7 @@ export class BotManager {
     const th = e.brain?.thoughts.at(-1);
     const why = th && e.now - th.t <= 2000 && /cutting|losing steam|follow-through|banking|trailing/.test(th.text) ? ` — ${th.text}` : '';
     this.event(id, 'exit', `EXIT ${intent.reason} @ ${tidy(price)} · ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USD${why}`, { ...intent, price, pnl });
+    if (b.narrator && last) this.story(id, b.narrator.exit(last, intent.reason));
     void this.refreshBalance(b);
   }
 
@@ -822,6 +844,7 @@ export class BotManager {
     const final = this.snapshot(id);
     this.running.delete(id);
     this.event(id, 'stopped', `Stopped: ${reason}`);
+    if (b.narrator) this.story(id, { kind: 'stopped', text: `⏸ The ${b.narrator.coin} bot has stopped — ${stoppedWords(reason)}.` });
     this.emit('status', { ...final, running: false });
     return true;
   }
@@ -850,6 +873,27 @@ export class BotManager {
     return { ...finishBacktest(e, trades), dailyTrend: !e.cfg.trendFilter ? 'off' : daily?.length ? 'on' : 'unavailable' };
   }
 
+  /** Recorded trades as shared columns, read in a worker when there is one. */
+  async loadColumns(venue, symbol, from, to, limit) {
+    if (this.makeWorker && this.db.file) {
+      let w;
+      try {
+        w = this.makeWorker();
+        const m = await new Promise((resolve, reject) => {
+          w.once('message', resolve);
+          w.once('error', reject);
+          w.postMessage({ type: 'load', file: this.db.file, venue, symbol, from, to, limit });
+        });
+        if (m.cols) return m.cols;
+      } catch {
+        /* no worker: read on this thread, page by page */
+      } finally {
+        void w?.terminate();
+      }
+    }
+    return this.db.tradeColumns ? this.db.tradeColumns(venue, symbol, from, to, limit) : undefined;
+  }
+
   /**
    * Walk-forward training on the last `days` of recorded trades: ranks
    * variations of `params` on the earlier 70 % and accepts one only if it
@@ -860,15 +904,27 @@ export class BotManager {
     this.training = true;
     try {
       const to = this.now();
-      const rows = this.db.queryTrades(venue, symbol, to - days * 86_400_000, to, 3_000_000);
-      const daily = mergeConfig(params).trendFilter && rows.length ? await this.dailyFor(symbol, rows[0].time).catch(() => null) : null;
+      // typed columns in shared memory, read page by page: no millions of row
+      // objects on the main thread, and the workers share one copy
+      const cols = await this.loadColumns(venue, symbol, to - days * 86_400_000, to, 3_000_000);
+      const rows = cols ? undefined : this.db.queryTrades(venue, symbol, to - days * 86_400_000, to, 3_000_000);
+      const firstT = cols ? cols.t[0] : rows[0]?.time;
+      const daily = mergeConfig(params).trendFilter && firstT !== undefined ? await this.dailyFor(symbol, firstT).catch(() => null) : null;
+      // progress a few times a second at most, however many workers report
+      let sent = 0;
       const res = await train({
         base: params,
         rows,
+        cols,
         daily,
         n,
         makeWorker: this.makeWorker,
-        onProgress: (f) => this.emit('train', { progress: f }),
+        onProgress: (f) => {
+          const now = Date.now();
+          if (f < 1 && now - sent < 250) return;
+          sent = now;
+          this.emit('train', { progress: f });
+        },
       });
       return { ...res, venue, symbol };
     } finally {

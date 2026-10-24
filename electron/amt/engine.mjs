@@ -196,7 +196,7 @@ const PATIENT_EXITS = new Set(['target', 'stalled', 'time']);
  * The 60 % volatility target is set in advance (about Bitcoin's long-run
  * average), not fitted to a backtest. Spot taker fee 0.1 %.
  */
-export const TREND_PRESET = { style: 'trend', sizing: 'balance', accountUsd: 55, feeBps: 10, slippageBps: 0, targetVol: 60, maxExposure: 1, rebalanceBand: 10, trendShort: false };
+export const TREND_PRESET = { style: 'trend', sizing: 'balance', accountUsd: 30, feeBps: 10, slippageBps: 0, targetVol: 60, maxExposure: 1, rebalanceBand: 10, trendShort: false };
 
 /** The Scalp chip: the defaults, with the trade manager and limit-first execution. */
 export const SCALP_PRESET = { style: 'scalp', manageTrades: true, orderMode: 'maker', trendFilter: true };
@@ -258,7 +258,7 @@ export const GROWTH_PRESET = {
 export const ORDERFLOW_PRESET = {
   style: 'orderflow',
   sizing: 'balance',
-  accountUsd: 55,
+  accountUsd: 30,
   riskPct: 1.5,
   maxLeverage: 5,
   dailyLossPct: 6,
@@ -291,7 +291,7 @@ export const ORDERFLOW_PRESET = {
 export const ADAPTIVE_PRESET = {
   style: 'adaptive',
   sizing: 'balance',
-  accountUsd: 55,
+  accountUsd: 30,
   riskPct: 1.5,
   maxLeverage: 5,
   dailyLossPct: 6,

@@ -28,6 +28,14 @@ CREATE TABLE IF NOT EXISTS trades (
   side INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS trades_vst ON trades(venue, symbol, t);
+CREATE TABLE IF NOT EXISTS trade_stats (
+  venue TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  n INTEGER NOT NULL,
+  first INTEGER,
+  last INTEGER,
+  PRIMARY KEY (venue, symbol)
+);
 CREATE TABLE IF NOT EXISTS wallets (
   address TEXT PRIMARY KEY,
   chain TEXT NOT NULL,
@@ -74,6 +82,59 @@ CREATE TABLE IF NOT EXISTS amt_trades (
 CREATE INDEX IF NOT EXISTS amt_trades_closed ON amt_trades(closed);
 `;
 
+/**
+ * Trades as typed columns in shared memory, read a page at a time with a
+ * yield between pages, so no thread holds millions of row objects or stalls
+ * for seconds, and training workers all read the same memory. Takes a raw
+ * DatabaseSync so a worker can run it on its own read-only connection.
+ */
+export async function readColumns(sql, venue, symbol, from, to, limit = 3_000_000, page = 20_000) {
+  const stmt = sql.prepare(
+    'SELECT rowid AS id, t, price, qty, side FROM trades WHERE venue = ? AND symbol = ? AND (t > ? OR (t = ? AND rowid > ?)) AND t <= ? ORDER BY t, rowid LIMIT ?',
+  );
+  const chunks = [];
+  let n = 0;
+  // start just before `from`: (t = from − 1, any rowid) is never matched
+  let lastT = from - 1;
+  let lastId = Number.MAX_SAFE_INTEGER;
+  while (n < limit) {
+    const rows = stmt.all(venue, symbol, lastT, lastT, lastId, to, Math.min(page, limit - n));
+    if (!rows.length) break;
+    const c = { t: new Float64Array(rows.length), p: new Float64Array(rows.length), q: new Float64Array(rows.length), s: new Uint8Array(rows.length) };
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      c.t[i] = r.t;
+      c.p[i] = r.price;
+      c.q[i] = r.qty;
+      c.s[i] = r.side;
+    }
+    chunks.push(c);
+    n += rows.length;
+    lastT = rows[rows.length - 1].t;
+    lastId = rows[rows.length - 1].id;
+    if (rows.length < page) break;
+    await new Promise((r) => setImmediate(r));
+  }
+  const shared = (Ctor) => new Ctor(new SharedArrayBuffer(Math.max(1, n) * Ctor.BYTES_PER_ELEMENT), 0, n);
+  const cols = { t: shared(Float64Array), p: shared(Float64Array), q: shared(Float64Array), s: shared(Uint8Array) };
+  let at = 0;
+  for (const c of chunks) {
+    for (const k of ['t', 'p', 'q', 's']) cols[k].set(c[k], at);
+    at += c.t.length;
+  }
+  return cols;
+}
+
+/** Read trade columns from the database file on a read-only connection of this thread's own. */
+export async function readColumnsFromFile(file, venue, symbol, from, to, limit) {
+  const sql = new DatabaseSync(file, { readOnly: true });
+  try {
+    return await readColumns(sql, venue, symbol, from, to, limit, 100_000);
+  } finally {
+    sql.close();
+  }
+}
+
 export class Db {
   constructor(file) {
     this.file = file;
@@ -81,6 +142,14 @@ export class Db {
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
     this.db.exec(SCHEMA);
     this.insertTrade = this.db.prepare('INSERT INTO trades (venue, symbol, t, price, qty, side) VALUES (?, ?, ?, ?, ?, ?)');
+    this.bumpStats = this.db.prepare(
+      `INSERT INTO trade_stats (venue, symbol, n, first, last) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(venue, symbol) DO UPDATE SET n = n + excluded.n, first = MIN(COALESCE(first, excluded.first), excluded.first), last = MAX(COALESCE(last, excluded.last), excluded.last)`,
+    );
+    // counts kept per market so the Database panel and the trainer never count
+    // millions of rows on the main thread; databases from before are counted once,
+    // a slice at a time, in the background (see countBacklog)
+    this.backlog = this.get('tradeStatsReady') ? [] : this.seedStats();
   }
 
   close() {
@@ -122,13 +191,25 @@ export class Db {
     if (!rows.length) return 0;
     this.db.exec('BEGIN');
     try {
-      for (const r of rows) this.insertTrade.run(venue, symbol, Math.round(r.t), r.p, r.q, r.s === 'buy' ? 1 : 0);
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (const r of rows) {
+        const t = Math.round(r.t);
+        if (t < lo) lo = t;
+        if (t > hi) hi = t;
+        this.insertTrade.run(venue, symbol, t, r.p, r.q, r.s === 'buy' ? 1 : 0);
+      }
+      this.bumpStats.run(venue, symbol, rows.length, lo, hi);
       this.db.exec('COMMIT');
     } catch (e) {
       this.db.exec('ROLLBACK');
       throw e;
     }
     return rows.length;
+  }
+  /** Trades as typed columns in shared memory (see readColumns). */
+  tradeColumns(venue, symbol, from, to, limit = 3_000_000, page = 20_000) {
+    return readColumns(this.db, venue, symbol, from, to, limit, page);
   }
   queryTrades(venue, symbol, from, to, limit = 2_000_000) {
     return this.db
@@ -138,13 +219,71 @@ export class Db {
   }
   tradeStats() {
     return this.db
-      .prepare('SELECT venue, symbol, COUNT(*) AS n, MIN(t) AS first, MAX(t) AS last FROM trades GROUP BY venue, symbol ORDER BY n DESC')
-      .all();
+      .prepare('SELECT venue, symbol, n, first, last FROM trade_stats WHERE n > 0 ORDER BY n DESC, venue, symbol')
+      .all()
+      .map((r) => ({ ...r, n: Number(r.n) }));
   }
+  /** Every recorded market, found by hopping along the index (no full scan). */
+  instruments() {
+    const next = this.db.prepare('SELECT venue, symbol FROM trades WHERE (venue, symbol) > (?, ?) ORDER BY venue, symbol LIMIT 1');
+    const out = [];
+    for (let r = next.get('', ''); r; r = next.get(r.venue, r.symbol)) out.push({ venue: r.venue, symbol: r.symbol });
+    return out;
+  }
+  /**
+   * First run on a database recorded before trade_stats existed: one row per
+   * market with its first and last time (index lookups, instant) and n = 0,
+   * plus a list of hour slices still to count. New trades count from now on.
+   */
+  seedStats() {
+    const work = [];
+    const range = this.db.prepare('SELECT MIN(t) AS first, MAX(t) AS last FROM trades WHERE venue = ? AND symbol = ?');
+    const put = this.db.prepare('INSERT OR REPLACE INTO trade_stats (venue, symbol, n, first, last) VALUES (?, ?, 0, ?, ?)');
+    for (const { venue, symbol } of this.instruments()) {
+      const { first, last } = range.get(venue, symbol);
+      if (first == null) continue;
+      put.run(venue, symbol, first, last);
+      for (let a = first; a <= last; a += 3_600_000) work.push({ venue, symbol, a, b: Math.min(last, a + 3_600_000 - 1) });
+    }
+    if (!work.length) this.set('tradeStatsReady', true);
+    return work;
+  }
+  /** Count a few hour slices of the backlog; true while there is more. Call it from a timer. */
+  countBacklog(slices = 4) {
+    if (!this.backlog.length) return false;
+    const count = this.db.prepare('SELECT COUNT(*) AS n FROM trades WHERE venue = ? AND symbol = ? AND t >= ? AND t <= ?');
+    const add = this.db.prepare('UPDATE trade_stats SET n = n + ? WHERE venue = ? AND symbol = ?');
+    for (let i = 0; i < slices && this.backlog.length; i++) {
+      const w = this.backlog.shift();
+      add.run(Number(count.get(w.venue, w.symbol, w.a, w.b).n), w.venue, w.symbol);
+    }
+    if (!this.backlog.length) this.set('tradeStatsReady', true);
+    return this.backlog.length > 0;
+  }
+  /** Delete trades older than a time, market by market along the index; the counts follow. */
   pruneTrades(olderThan) {
-    return Number(this.db.prepare('DELETE FROM trades WHERE t < ?').run(olderThan).changes);
+    let total = 0;
+    const del = this.db.prepare('DELETE FROM trades WHERE venue = ? AND symbol = ? AND t < ?');
+    const first = this.db.prepare('SELECT MIN(t) AS t FROM trades WHERE venue = ? AND symbol = ?');
+    const upd = this.db.prepare('UPDATE trade_stats SET n = MAX(0, n - ?), first = ? WHERE venue = ? AND symbol = ?');
+    const counted = this.db.prepare('SELECT COUNT(*) AS n FROM trades WHERE venue = ? AND symbol = ? AND t < ?');
+    for (const { venue, symbol } of this.instruments()) {
+      // while a market is still being counted (oldest hours first), only the
+      // deleted trades it has already counted come off its total
+      const pending = this.backlog.find((w) => w.venue === venue && w.symbol === symbol);
+      const kc = pending ? Number(counted.get(venue, symbol, Math.min(olderThan, pending.a)).n) : null;
+      const k = Number(del.run(venue, symbol, olderThan).changes);
+      if (!k) continue;
+      total += k;
+      upd.run(kc ?? k, first.get(venue, symbol).t, venue, symbol);
+    }
+    this.backlog = this.backlog.filter((w) => w.b >= olderThan);
+    this.db.prepare('DELETE FROM trade_stats WHERE first IS NULL').run();
+    return total;
   }
   deleteInstrument(venue, symbol) {
+    this.backlog = this.backlog.filter((w) => w.venue !== venue || w.symbol !== symbol);
+    this.db.prepare('DELETE FROM trade_stats WHERE venue = ? AND symbol = ?').run(venue, symbol);
     return Number(this.db.prepare('DELETE FROM trades WHERE venue = ? AND symbol = ?').run(venue, symbol).changes);
   }
   vacuum() {
@@ -220,6 +359,8 @@ export class Db {
       }
     }
     const count = (t) => Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n);
-    return { file: this.file, size, trades: count('trades'), secrets: count('secrets'), wallets: count('wallets') };
+    // trades from the kept counts: COUNT(*) over millions of rows would stall the app
+    const trades = Number(this.db.prepare('SELECT COALESCE(SUM(n), 0) AS n FROM trade_stats').get().n);
+    return { file: this.file, size, trades, secrets: count('secrets'), wallets: count('wallets') };
   }
 }

@@ -137,6 +137,13 @@ goes to work, what is risked and what the fees take — in dollars and rand.
 low minimum (ETH/USDT, SOL/USDT) over BTC/USDT, whose minimum forces leverage
 on a small account.
 
+A live bot **refuses to start** on a market whose smallest order is bigger
+than it may hold (balance × `maxLeverage`), and says so, instead of running and
+skipping every setup. With no balance in the futures wallet it explains that
+Binance keeps spot and futures apart: convert the deposit to USDT and move it
+from Spot to the USDⓈ-M Futures wallet (Wallet → Transfer). The small-account
+presets start paper trading from $30 (about R550).
+
 ### Training
 
 **Train** (bot toolbar) is a walk-forward parameter search on the trades the
@@ -155,6 +162,22 @@ Searching many settings on one stretch of data always finds something that
 looks good on that stretch; the unseen part is what tells whether it was
 real. Even a verified result is evidence from a few days of one market, not a
 promise: paper-trade it before going live, and keep the drawdown stop on.
+
+Training stays off the app's main thread, so the charts and feeds keep
+running while it works:
+
+- The recorded trades are read **inside a worker thread**, on its own
+  read-only database connection, a page at a time, into typed columns in
+  shared memory. The other workers read the same memory; nothing is copied.
+- At most **two workers** run, and two CPU cores are always left for the
+  charts, the feeds and the GPU. Each worker has a memory ceiling; if a run
+  would exceed it, training stops with "choose fewer days" instead of taking
+  the app down.
+- Progress reaches the window at most four times a second.
+- The Database panel and the Train tab read **kept per-market counts**
+  (updated as trades are recorded and pruned) instead of counting millions of
+  rows. A database from an older version is counted once, an hour of data at a
+  time, in the background; its counts fill in over the first minutes.
 
 ## 5b. Order-flow hybrid — tape, footprint, book and liquidity map
 
@@ -378,6 +401,35 @@ momentum** (returns over past weeks and months tend to continue).
   −20 %, against +487 % and −66 % for holding; at 80 % they returned +569 %
   with a −31 % worst fall. One year is not proof: run the full-history
   backtest before trusting it.
+
+## 5f. Telegram: the bot's story in plain English
+
+Telegram gets the bots' **story** and nothing else by default — no prices,
+ratios or jargon (the activity log keeps those):
+
+- **Watching** — "👀 Watching BTC for a long. Price just ran below a recent low
+  and knocked out the stops parked there. If it climbs back over that level,
+  stays there, and the selling dries up, I'll buy…" (stop runs and absorption,
+  the setups that have a waiting stage; only in the direction the daily trend
+  allows).
+- **Let go** — every announced watch is closed: "✋ Let the BTC long go — the
+  other side never took control."
+- **Entry** — what it did and why, and where the safety stop sits, in words.
+- **Safe** — once, when the stop has moved past the entry.
+- **Exit** — in profit, at about breakeven, or at a loss, and why: target,
+  losing steam, flow turned, stalled, trailing stop, stop.
+- **Stopped** — and why (you, the kill switch, a loss limit, the exchange).
+
+The same setup in the same direction is announced at most once every 15
+minutes. A bot error that needs a look is sent at most once an hour. Chart
+alerts and hand-placed orders are no longer forwarded unless "Also forward my
+chart alerts and the orders I place by hand" is ticked in the Telegram panel;
+daily and weekly reports and the data-feed warning are unchanged.
+
+Stop-outs still happen. The trade manager cuts most losing trades before the
+stop when the order flow turns, so the losses that remain are smaller, but no
+rule set removes them: a stop is the price at which the reason for the trade
+is proven wrong, and it is what keeps one bad trade from becoming a big loss.
 
 ## 6. Safety behaviour of live bots
 

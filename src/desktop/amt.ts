@@ -4,8 +4,7 @@ import type { AmtBot, AmtEvent, AmtSnapshot } from './bridge';
 import { desktop } from './bridge';
 import { escapeHtml } from '../shared/telegram';
 import { getSettings } from '../store/settings';
-import { botEntryChart } from './reportCharts';
-import { forwardAlert, telegram } from './telegram';
+import { telegram } from './telegram';
 
 /** Latest status of every running bot, for the top-bar kill switch and panels. */
 export const useAmtLive = create<{ snaps: Record<string, AmtSnapshot>; put(s: AmtSnapshot): void }>((set) => ({
@@ -29,25 +28,31 @@ export function startAmtService() {
   desktop.amt.onStatus((s) => s && useAmtLive.getState().put(s));
   desktop.amt.onEvent((e) => {
     eventListeners.forEach((fn) => fn(e));
-    if (e.kind === 'entry') void entryWithChart(e);
-    else if (e.kind === 'exit' || e.kind === 'stopped' || e.kind === 'error') forwardAlert(`AMT bot · ${e.kind}`, e.text);
-    else if (e.kind === 'trade') forwardAlert('Trend bot · trade', e.text);
+    forwardStory(e);
   });
 }
 
-/** Entries go to Telegram as a picture of the profile with entry, stop and target. */
-async function entryWithChart(e: AmtEvent) {
+const lastProblem = new Map<string, number>();
+
+/**
+ * Telegram hears the bot's story only, in plain English: what it is watching
+ * and why, the entry, the moment the trade is safe, and how it ended. The
+ * numbers stay in the activity log. A problem that needs a look is sent once
+ * an hour at most.
+ */
+function forwardStory(e: AmtEvent) {
   const s = getSettings();
-  if (!s.telegramAlerts || !s.telegramSecretId) return;
-  try {
-    const snap = await desktop!.amt.snapshot(e.id);
-    if (!snap?.position || !snap.profile.length) throw new Error('no snapshot');
-    const side = snap.position.side === 'buy' ? 'LONG' : 'SHORT';
-    const png = await botEntryChart(snap, `${snap.mode === 'live' ? '' : 'PAPER · '}${side} · ${snap.position.setup}`);
-    await telegram.sendPhoto(s.telegramSecretId, png, `🤖 <b>AMT bot entry</b>\n${escapeHtml(e.text)}`);
-  } catch {
-    forwardAlert('AMT bot · entry', e.text);
+  if (!s.telegramBotStory || !s.telegramSecretId) return;
+  let text: string | null = null;
+  if (e.kind === 'story') text = e.text;
+  else if (e.kind === 'trade') text = `📈 Trend bot: ${e.text}`;
+  else if (e.kind === 'error') {
+    const last = lastProblem.get(e.text) ?? 0;
+    if (Date.now() - last < 3_600_000) return;
+    lastProblem.set(e.text, Date.now());
+    text = `⚠️ A bot needs a look: ${e.text}`;
   }
+  if (text) telegram.send(s.telegramSecretId, escapeHtml(text)).catch((err) => console.warn('telegram story', err));
 }
 
 export function onAmtEvent(fn: (e: AmtEvent) => void) {

@@ -106,6 +106,8 @@ export interface Settings {
   /** Telegram bot (vault key id), alert forwarding and command replies */
   telegramSecretId: string;
   telegramAlerts: boolean;
+  /** the bots' plain-English story: watching, entry, safe, exit */
+  telegramBotStory: boolean;
   telegramCommands: boolean;
   /** ask before sending each order from the ticket */
   confirmOrders: boolean;
@@ -171,7 +173,8 @@ const initial: Settings = {
   recordScope: 'primary',
   wallets: [],
   telegramSecretId: '',
-  telegramAlerts: true,
+  telegramAlerts: false,
+  telegramBotStory: true,
   telegramCommands: false,
   confirmOrders: true,
   telegramDaily: true,
@@ -233,13 +236,18 @@ export const useSettings = create<Settings & Actions>()(
     }),
     {
       name: 'oft-settings',
-      version: 3,
+      version: 4,
       // v1 had dark/light themes only
       migrate: (persisted, version) => {
         const p = (persisted ?? {}) as Record<string, unknown>;
         if (version < 2) p.theme = p.theme === 'light' ? 'white' : 'grey';
         // v3: alerts follow the market on the chart, not every venue of the coin
         if (version < 3 && Array.isArray(p.alerts)) p.alerts = (p.alerts as AlertRule[]).map((r) => ({ ...r, scope: 'primary' }));
+        // too many messages: Telegram now carries the bots' plain-English story; chart alerts and orders are opt-in
+        if (version < 4) {
+          p.telegramAlerts = false;
+          p.telegramBotStory = true;
+        }
         return p as unknown as Settings & Actions;
       },
       storage: createJSONStorage(() => safeStorage),

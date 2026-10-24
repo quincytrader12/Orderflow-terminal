@@ -1703,6 +1703,10 @@ ol.steps li.done::marker {
   color: var(--accent);
   opacity: 0.85;
 }
+/* the plain-English line Telegram gets */
+.tag.ev-tag-story {
+  color: var(--text);
+}
 .amt-thoughts {
   margin: 6px 0;
 }
