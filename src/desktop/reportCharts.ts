@@ -218,49 +218,141 @@ export async function equityChart(opts: { title: string; subtitle: string; point
 }
 
 /** A bot's entry: profile around price with value area, entry, stop and target. */
+/**
+ * The picture sent with a bot entry: the last hour of one-minute candles
+ * with the entry marked, the risk (to the stop) and the reward (to the
+ * target) shaded from the entry on, the value area and POC, and the volume
+ * profile beside it. Before any candles exist, the profile alone.
+ */
 export async function botEntryChart(s: AmtSnapshot, title: string): Promise<Uint8Array> {
   const W = 960;
-  const H = 540;
+  const H = 600;
   const { c, ctx, pal } = surface(W, H);
   header(ctx, pal, W, title, `${s.symbol} · ${s.exchange}${s.sandbox ? ' (testnet)' : ''}`);
+  const ks = s.candles ?? [];
+  const pos = s.position;
   const rows = s.profile;
-  const levels = [s.last, s.va?.vah, s.va?.val, s.position?.stop, s.position?.target].filter((p): p is number => p !== undefined && isFinite(p));
-  const lo = Math.min(rows[0]?.[0] ?? s.last, ...levels);
-  const hi = Math.max(rows[rows.length - 1]?.[0] ?? s.last, ...levels);
-  const pad = (hi - lo) * 0.06 || 1;
+  const axisW = 92;
+  const profW = ks.length ? 150 : 0;
+  const left = 24;
+  const right = W - axisW - profW - 16;
   const top = 64;
-  const bottom = H - 40;
-  const y = (p: number) => bottom - ((p - (lo - pad)) / (hi - lo + 2 * pad)) * (bottom - top);
-  const left = 150;
-  const right = W - 24;
+  const bottom = H - 64;
+  const levels = [s.last, s.va?.vah, s.va?.val, s.va?.poc, pos?.stop, pos?.target, pos?.entry].filter((p): p is number => p !== undefined && isFinite(p));
+  const prices = [...levels, ...ks.flatMap((k) => [k[2], k[3]])];
+  if (!ks.length) prices.push(...rows.filter((r) => r[1] > 0).map((r) => r[0]));
+  let lo = Math.min(...prices);
+  let hi = Math.max(...prices);
+  const pad = (hi - lo) * 0.06 || hi * 0.001 || 1;
+  lo -= pad;
+  hi += pad;
+  const y = (p: number) => bottom - ((p - lo) / (hi - lo)) * (bottom - top);
+  const chartR = ks.length ? right : W - axisW - 16;
+
+  // the levels labelled on the axis; grid labels keep clear of them
+  const tags: { p: number; color: string; label: string; dash?: number[] }[] = [];
+  if (s.va) tags.push({ p: s.va.vah, color: pal.muted, label: 'VAH', dash: [5, 4] }, { p: s.va.val, color: pal.muted, label: 'VAL', dash: [5, 4] }, { p: s.va.poc, color: pal.poc, label: 'POC', dash: [2, 3] });
+  if (pos) tags.push({ p: pos.target, color: pal.buy, label: 'TP', dash: [4, 3] }, { p: pos.stop, color: pal.sell, label: 'SL', dash: [4, 3] }, { p: pos.entry, color: pal.accent, label: 'IN' });
+
+  // grid and price axis
+  ctx.font = font(11);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i <= 6; i++) {
+    const p = lo + ((hi - lo) * i) / 6;
+    line(ctx, left, y(p), W - axisW - 8, y(p), pal.grid);
+    if (tags.some((g) => Math.abs(y(g.p) - y(p)) < 14)) continue;
+    ctx.fillStyle = pal.muted;
+    ctx.fillText(fmtPrice(p), W - axisW, y(p));
+  }
   if (s.va) {
-    ctx.fillStyle = rgba(pal.buyRgb, 0.07);
-    ctx.fillRect(left, y(s.va.vah), right - left, y(s.va.val) - y(s.va.vah));
+    ctx.fillStyle = rgba(pal.buyRgb, 0.06);
+    ctx.fillRect(left, y(s.va.vah), W - axisW - 8 - left, y(s.va.val) - y(s.va.vah));
   }
-  const max = Math.max(...rows.map((r) => r[1]), 1e-12);
-  const rowH = Math.max(1, (bottom - top) / Math.max(rows.length, 1) - 1);
-  for (const [p, v, d] of rows) {
-    ctx.fillStyle = rgba(d >= 0 ? pal.buyRgb : pal.sellRgb, s.va && p <= s.va.vah && p >= s.va.val ? 0.65 : 0.3);
-    ctx.fillRect(left, y(p) - rowH / 2, (v / max) * (right - left) * 0.85, rowH);
+
+  // candles, with the entry candle found by time
+  const n = Math.max(ks.length, 1);
+  const cw = (chartR - left) / (n + 4); // room on the right for the plan zones
+  const xAt = (i: number) => left + i * cw + cw / 2;
+  let entryX = chartR - 4 * cw;
+  ks.forEach((k, i) => {
+    const [t, o, h, l, cl] = k;
+    const up = cl >= o;
+    const col = up ? pal.buy : pal.sell;
+    const x = xAt(i);
+    line(ctx, x, y(h), x, y(l), col);
+    ctx.fillStyle = col;
+    ctx.fillRect(x - cw * 0.35, Math.min(y(o), y(cl)), Math.max(1, cw * 0.7), Math.max(1, Math.abs(y(o) - y(cl))));
+    if (pos && t <= pos.t && pos.t < t + 60_000) entryX = x;
+  });
+
+  // the plan: risk and reward shaded from the entry on
+  if (pos) {
+    const zoneR = W - axisW - profW - 16;
+    ctx.fillStyle = rgba(pal.sellRgb, 0.14);
+    ctx.fillRect(entryX, Math.min(y(pos.entry), y(pos.stop)), zoneR - entryX, Math.abs(y(pos.entry) - y(pos.stop)));
+    ctx.fillStyle = rgba(pal.buyRgb, 0.14);
+    ctx.fillRect(entryX, Math.min(y(pos.entry), y(pos.target)), zoneR - entryX, Math.abs(y(pos.entry) - y(pos.target)));
+    // entry marker
+    const up = pos.side === 'buy';
+    const ey = y(pos.entry);
+    ctx.fillStyle = pal.accent;
+    ctx.beginPath();
+    ctx.moveTo(entryX, ey + (up ? 6 : -6));
+    ctx.lineTo(entryX - 7, ey + (up ? 18 : -18));
+    ctx.lineTo(entryX + 7, ey + (up ? 18 : -18));
+    ctx.closePath();
+    ctx.fill();
   }
-  const mark = (p: number | undefined, color: string, label: string, dash?: number[]) => {
-    if (p === undefined || !isFinite(p)) return;
-    line(ctx, left - 4, y(p), right, y(p), color, 1.5, dash);
-    ctx.fillStyle = color;
-    ctx.font = font(13, 700);
+
+  // volume profile beside the candles (or alone, before there are any)
+  if (rows.length) {
+    const pl = ks.length ? right + 8 : left;
+    const pw = ks.length ? profW - 8 : chartR - left;
+    const max = Math.max(...rows.map((r) => r[1]), 1e-12);
+    const rowH = Math.max(1, Math.abs(y(rows[0][0]) - y(rows[Math.min(1, rows.length - 1)][0])) - 1);
+    for (const [p, v, d] of rows) {
+      if (p < lo || p > hi) continue;
+      ctx.fillStyle = rgba(d >= 0 ? pal.buyRgb : pal.sellRgb, s.va && p <= s.va.vah && p >= s.va.val ? 0.55 : 0.25);
+      ctx.fillRect(pl, y(p) - rowH / 2, (v / max) * pw * 0.9, rowH);
+    }
+  }
+
+  // levels: lines across, labels on the axis pushed apart so none hides another
+  for (const g of tags) if (isFinite(g.p)) line(ctx, left, y(g.p), W - axisW - 8, y(g.p), g.color, 1.4, g.dash);
+  const placed = tags.filter((g) => isFinite(g.p)).map((g) => ({ ...g, ly: y(g.p) })).sort((a, b) => a.ly - b.ly);
+  for (let i = 1; i < placed.length; i++) placed[i].ly = Math.max(placed[i].ly, placed[i - 1].ly + 20);
+  ctx.font = font(11, 700);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  for (const g of placed) {
+    const text = `${g.label} ${fmtPrice(g.p)}`;
+    if (Math.abs(g.ly - y(g.p)) > 1) line(ctx, W - axisW - 8, y(g.p), W - axisW - 6, g.ly, g.color, 1);
+    ctx.fillStyle = g.color;
+    ctx.fillRect(W - axisW - 6, g.ly - 9, Math.min(axisW + 4, ctx.measureText(text).width + 8), 18);
+    ctx.fillStyle = pal.bg;
+    ctx.fillText(text, W - axisW - 2, g.ly);
+  }
+
+  // time axis
+  ctx.fillStyle = pal.muted;
+  ctx.font = font(11);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  const every = Math.max(1, Math.round(n / 6));
+  for (let i = 0; i < ks.length; i += every) ctx.fillText(new Date(ks[i][0]).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }), xAt(i), bottom + 8);
+
+  // the plan in one line
+  if (pos) {
+    const dir = pos.side === 'buy' ? 1 : -1;
+    const risk = Math.abs(pos.entry - pos.stop);
+    const rr = risk > 0 ? ((pos.target - pos.entry) * dir) / risk : NaN;
+    const pct = (p: number) => `${p >= pos.entry ? '+' : '−'}${((Math.abs(p - pos.entry) / pos.entry) * 100).toFixed(2)}%`;
+    ctx.font = font(13, 600, false);
+    ctx.fillStyle = pal.text;
     ctx.textAlign = 'right';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(`${label} ${fmtPrice(p)}`, left - 10, y(p));
-  };
-  if (s.va) {
-    mark(s.va.vah, pal.muted, 'VAH', [5, 4]);
-    mark(s.va.val, pal.muted, 'VAL', [5, 4]);
-    mark(s.va.poc, pal.poc, 'POC');
-  }
-  if (s.position) {
-    mark(s.position.target, pal.buy, 'TP', [3, 3]);
-    mark(s.position.stop, pal.sell, 'SL', [3, 3]);
-    mark(s.position.entry, pal.accent, 'IN');
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(`Entry ${fmtPrice(pos.entry)} · stop ${pct(pos.stop)} · target ${pct(pos.target)}${isFinite(rr) ? ` · ${rr.toFixed(1)}R` : ''}`, W - 24, H - 12);
   }
   watermark(ctx, pal, H);
   return png(c);

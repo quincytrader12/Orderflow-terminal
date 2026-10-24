@@ -496,6 +496,8 @@ export class AmtEngine {
     this.trades = [];
     this.equity = [];
     this.stats = { trades: 0, wins: 0, losses: 0, pnl: 0, fees: 0, grossWin: 0, grossLoss: 0, peak: 0, maxDrawdown: 0, day: -1, pnlToday: 0 };
+    /** one-minute candles [t, open, high, low, close, volume], the last 90 — the entry picture on Telegram */
+    this.candles = [];
   }
 
   // ---------- inputs ----------
@@ -511,6 +513,17 @@ export class AmtEngine {
     this.now = Math.max(this.now, t);
     this.last = p;
     this.lastTradeT = this.now;
+    const m = Math.floor(t / MIN) * MIN;
+    const k = this.candles[this.candles.length - 1];
+    if (k && k[0] === m) {
+      if (p > k[2]) k[2] = p;
+      if (p < k[3]) k[3] = p;
+      k[4] = p;
+      k[5] += q;
+    } else if (!k || m > k[0]) {
+      this.candles.push([m, p, p, p, p, q]);
+      if (this.candles.length > 90) this.candles.shift();
+    }
     this.rollSession(this.now, p);
     this.trackSession(this.now, p);
     this.profile.add(t, idx, q, buy);
@@ -1232,6 +1245,7 @@ export class AmtEngine {
       lastSkip: this.lastSkip,
       trades: this.trades.slice(-20),
       profile,
+      candles: this.candles.slice(-60),
       orderflow: this.of ? this.of.snapshot(this.now) : null,
       brain: this.brain ? this.brain.snapshot(this, this.now, this.pos) : null,
       daily: this.cfg.trendFilter ? (() => {

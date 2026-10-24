@@ -432,3 +432,21 @@ describe('small-account growth sizing', () => {
     expect(e.gate('buy', null)).toMatch(/drawdown/); // not cleared by a new day
   });
 });
+
+describe('entry picture', () => {
+  it('keeps one-minute candles for the snapshot, the last 90 at most', () => {
+    const e = new AmtEngine({});
+    const t0 = Date.UTC(2026, 0, 1);
+    e.onTrade({ t: t0 + 1000, p: 100, q: 1, s: 'buy' });
+    e.onTrade({ t: t0 + 20_000, p: 102, q: 2, s: 'buy' });
+    e.onTrade({ t: t0 + 40_000, p: 99, q: 1, s: 'sell' });
+    e.onTrade({ t: t0 + 61_000, p: 101, q: 3, s: 'buy' });
+    expect(e.snapshot().candles).toEqual([
+      [t0, 100, 102, 99, 99, 4],
+      [t0 + 60_000, 101, 101, 101, 101, 3],
+    ]);
+    for (let i = 2; i < 120; i++) e.onTrade({ t: t0 + i * 60_000, p: 100, q: 1, s: 'buy' });
+    expect(e.candles.length).toBe(90);
+    expect(e.snapshot().candles.length).toBe(60);
+  });
+});

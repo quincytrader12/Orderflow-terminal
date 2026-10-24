@@ -4,6 +4,7 @@ import type { AmtBot, AmtEvent, AmtSnapshot } from './bridge';
 import { desktop } from './bridge';
 import { escapeHtml } from '../shared/telegram';
 import { getSettings } from '../store/settings';
+import { botEntryChart } from './reportCharts';
 import { telegram } from './telegram';
 
 /** Latest status of every running bot, for the top-bar kill switch and panels. */
@@ -56,7 +57,30 @@ function forwardStory(e: AmtEvent) {
   // the decision in bold, the reasoning and numbers under it
   const [head, ...rest] = text.split('\n');
   const html = [`<b>${escapeHtml(head)}</b>`, ...rest.map((l) => escapeHtml(l).replace(/^(Why|Why I closed|Plan|Stop|Level|Now|Trade|Detail|Bot's notes):/, '<i>$1:</i>'))].join('\n');
-  telegram.send(s.telegramSecretId, html).catch((err) => console.warn('telegram story', err));
+  if (e.kind === 'story' && e.data?.story === 'entry') void entryWithChart(e, s.telegramSecretId, html, head);
+  else telegram.send(s.telegramSecretId, html).catch((err) => console.warn('telegram story', err));
+}
+
+/** Telegram's limit for a photo caption. */
+const CAPTION_MAX = 1024;
+
+/**
+ * Entries also send a picture: the volume profile with value area, entry,
+ * stop and target. The story is the caption when it fits; a longer one
+ * follows the picture as its own message. Without a chart, the text alone.
+ */
+async function entryWithChart(e: AmtEvent, secretId: string, html: string, head: string) {
+  try {
+    const snap = await desktop!.amt.snapshot(e.id);
+    if (!snap?.position || !snap.profile.length) throw new Error('no snapshot');
+    const side = snap.position.side === 'buy' ? 'LONG' : 'SHORT';
+    const png = await botEntryChart(snap, `${snap.mode === 'live' ? '' : 'PAPER · '}${side} · ${snap.position.setup}`);
+    if (html.length <= CAPTION_MAX) return await telegram.sendPhoto(secretId, png, html);
+    await telegram.sendPhoto(secretId, png, `<b>${escapeHtml(head)}</b>`);
+  } catch (err) {
+    console.warn('telegram entry chart', err);
+  }
+  await telegram.send(secretId, html).catch((err) => console.warn('telegram story', err));
 }
 
 export function onAmtEvent(fn: (e: AmtEvent) => void) {

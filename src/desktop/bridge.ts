@@ -407,6 +407,8 @@ export interface AmtSnapshot {
   trades: AmtTrade[];
   /** [price, volume, delta] around the last price */
   profile: [number, number, number][];
+  /** one-minute candles [time, open, high, low, close, volume], oldest first */
+  candles?: [number, number, number, number, number, number][];
   /** order-flow hybrid read-out (orderflow style only) */
   orderflow: AmtOrderFlow | null;
   /** the adaptive scalper's state of mind (adaptive style only) */

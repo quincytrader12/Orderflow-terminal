@@ -426,7 +426,12 @@ Bot's notes: swept the swing low 98,900 by 4.0 bps … score 2.5
 - **Let go** — every announced watch is closed, with the reason in words and
   the measurement that decided it ("Detail: reclaim held 3 of 10 s").
 - **Entry** — why, where the stop sits and why there, and the plan: stop,
-  target, R, money at risk as a share of the balance, position size.
+  target, R, money at risk as a share of the balance, position size. It comes
+  with a **chart**: the last hour of one-minute candles with the entry marked,
+  the risk (to the stop) and reward (to the target) shaded from the entry on,
+  the value area and POC, and the volume profile beside it. The story is the
+  photo's caption when it fits Telegram's 1,024 characters; a longer one
+  follows the photo as its own message.
 - **Safe** — once, when the stop moves past the entry: old → new stop, what
   it locks in, price and R now.
 - **Exit** — profit, about breakeven or loss in dollars and R, how long it was
