@@ -193,7 +193,11 @@ const ORDERFLOW_FIELDS: [string, [NumKey, string, string][]][] = [
       ['sweepMinBps', 'Sweep at least (bps)', 'Beyond the level'],
       ['sweepMaxBps', 'Sweep at most (bps)', 'Further than this is a breakout, not a stop run'],
       ['sweepReclaimSec', 'Reclaim within (s)', ''],
-      ['sweepBurstX', 'Burst ×', 'Aggressive volume vs normal during the run (or liquidations)'],
+      ['sweepBurstX', 'Burst ×', 'Aggressive volume vs normal during the run'],
+      ['sweepLiqShare', 'Liquidations alone (× normal)', 'Without a burst, liquidations must be this share of a normal 10 s of volume'],
+      ['sweepHoldSec', 'Reclaim must hold (s)', 'Price back across the level this long — a poke back is not a reclaim'],
+      ['sweepQuietSec', 'Cascade quiet (s)', 'No liquidations in the sweep’s direction for this long before fading it'],
+      ['sweepCooloffMin', 'Sit out after a losing sweep (min)', 'No more sweeps that way for this long after one lost'],
     ],
   ],
   [

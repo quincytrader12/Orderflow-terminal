@@ -246,7 +246,10 @@ export class BotManager {
         console.warn('amt trade log', err?.message ?? err);
       }
     }
-    this.event(id, 'exit', `EXIT ${intent.reason} @ ${tidy(price)} · ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USD`, { ...intent, price, pnl });
+    // the trade manager's reason for this exit, when it made the call (it thinks just before it exits)
+    const th = e.brain?.thoughts.at(-1);
+    const why = th && e.now - th.t <= 2000 && /cutting|losing steam|follow-through|banking|trailing/.test(th.text) ? ` — ${th.text}` : '';
+    this.event(id, 'exit', `EXIT ${intent.reason} @ ${tidy(price)} · ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USD${why}`, { ...intent, price, pnl });
     void this.refreshBalance(b);
   }
 

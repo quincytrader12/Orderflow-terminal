@@ -53,17 +53,17 @@ function long(e, entry, stop, target, setup = 'sweep') {
 
 describe('adaptive scalper — entries', () => {
   it('scores the evidence and puts the stop beyond the one-minute noise', () => {
-    const e = warm({ stopNoiseX: 1.5 });
+    const e = warm({ stopNoiseX: 2.5 });
     const t1 = T0 + 10 * MIN;
     run(e, path(t1, 8, 100.15, 99.9, 'sell', 2));
-    const intents = run(e, path(t1 + 8000, 8, 99.9, 100.12, 'buy', 1));
+    const intents = [...run(e, path(t1 + 8000, 8, 99.9, 100.12, 'buy', 1)), ...run(e, path(t1 + 16_000, 12, 100.12, 100.14, 'buy', 0.5))];
     expect(intents).toHaveLength(1);
     const i = intents[0];
     expect(i).toMatchObject({ type: 'enter', side: 'buy', setup: 'sweep' });
     const noise = e.brain.cache.noise;
     expect(noise).toBeGreaterThan(0);
-    // the structure stop (beyond the 99.90 wick) was inside 1.5× the noise: moved out
-    expect(i.price - i.stop).toBeCloseTo(1.5 * noise, 6);
+    // the structure stop (beyond the 99.90 wick) was inside 2.5× the noise: moved out
+    expect(i.price - i.stop).toBeCloseTo(2.5 * noise, 6);
     expect(i.stop).toBeLessThan(99.88);
     expect(i.reason).toMatch(/score \d/);
     expect(i.reason).toMatch(/rotating market/);
@@ -75,7 +75,7 @@ describe('adaptive scalper — entries', () => {
     const e = warm({ minScore: 9 });
     const t1 = T0 + 10 * MIN;
     run(e, path(t1, 8, 100.15, 99.9, 'sell', 2));
-    expect(run(e, path(t1 + 8000, 8, 99.9, 100.12, 'buy', 1))).toEqual([]);
+    expect([...run(e, path(t1 + 8000, 8, 99.9, 100.12, 'buy', 1)), ...run(e, path(t1 + 16_000, 12, 100.12, 100.14, 'buy', 0.5))]).toEqual([]);
     expect(e.lastSkip.reason).toMatch(/not enough agreement \(score .*need 9\)/);
   });
 
@@ -83,7 +83,7 @@ describe('adaptive scalper — entries', () => {
     const e = warm({ feeBps: 20, stopCostX: 4 });
     const t1 = T0 + 10 * MIN;
     run(e, path(t1, 8, 100.15, 99.9, 'sell', 2));
-    expect(run(e, path(t1 + 8000, 8, 99.9, 100.12, 'buy', 1))).toEqual([]);
+    expect([...run(e, path(t1 + 8000, 8, 99.9, 100.12, 'buy', 1)), ...run(e, path(t1 + 16_000, 12, 100.12, 100.14, 'buy', 0.5))]).toEqual([]);
     expect(e.lastSkip.reason).toMatch(/market too quiet/);
   });
 });

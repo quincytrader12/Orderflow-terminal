@@ -217,6 +217,10 @@ export interface AmtParams {
   sweepMaxBps: number;
   sweepReclaimSec: number;
   sweepBurstX: number;
+  sweepHoldSec: number;
+  sweepQuietSec: number;
+  sweepLiqShare: number;
+  sweepCooloffMin: number;
   ofiSec: number;
   ofiMin: number;
   queueMin: number;

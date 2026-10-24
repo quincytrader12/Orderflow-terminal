@@ -93,6 +93,11 @@ export const DEFAULT_AMT = {
   sweepMaxBps: 25,
   sweepReclaimSec: 90,
   sweepBurstX: 2,
+  // the run must be over before it is faded
+  sweepHoldSec: 10,
+  sweepQuietSec: 10,
+  sweepLiqShare: 0.25,
+  sweepCooloffMin: 20,
   ofiSec: 10,
   ofiMin: 0.1,
   queueMin: 0.3,
@@ -1060,6 +1065,7 @@ export class AmtEngine {
     this.pos = null;
     this.record(trade);
     this.brain?.closed(trade);
+    this.of?.onClosed(trade);
   }
 
   /** The executor could not fill the pending intent. */

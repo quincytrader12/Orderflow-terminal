@@ -384,6 +384,32 @@ export class OrderFlow {
     this.sweep = null;
     /** levels swept recently, so the same level does not sweep twice */
     this.used = [];
+    /** when a losing sweep trade last closed, per direction (+1 long, −1 short) */
+    this.sweepLoss = new Map();
+  }
+
+  /** A trade closed: a losing sweep makes the bot sit out sweeps that way for a while. */
+  onClosed(trade) {
+    if (trade.setup === 'sweep' && trade.pnl < 0) this.sweepLoss.set(trade.side === 'buy' ? 1 : -1, trade.closed);
+  }
+
+  /** Median range of the last 20 closed footprint bars (the one-minute noise). */
+  noise() {
+    const bars = this.fp.bars;
+    const closed = bars.slice(Math.max(0, bars.length - 21), -1);
+    if (closed.length < 5) return NaN;
+    const r = closed.map((b) => b.hi - b.lo).sort((a, b) => a - b);
+    return r[r.length >> 1];
+  }
+
+  /** Kaufman efficiency ratio of the last 15 closed bars, with its direction: {er, dir}. */
+  trend() {
+    const bars = this.fp.bars.slice(Math.max(0, this.fp.bars.length - 16), -1);
+    if (bars.length < 8) return { er: 0, dir: 0 };
+    let path = 0;
+    for (let i = 1; i < bars.length; i++) path += Math.abs(bars[i].close - bars[i - 1].close);
+    const net = bars[bars.length - 1].close - bars[0].close;
+    return { er: path > 0 ? Math.abs(net) / path : 0, dir: Math.sign(net) };
   }
 
   onTrade(t, p, q, buy) {
@@ -507,17 +533,38 @@ export class OrderFlow {
       }
       if (t - s.t > c.sweepReclaimSec * SEC) {
         this.sweep = null;
+        if (s.why) e.skip('sweep', `${s.level.kind} ${px(s.level.price)}: never confirmed in ${c.sweepReclaimSec} s — ${s.why}`);
         return null;
       }
       const back = s.dir > 0 ? p < s.level.price - e.bin : p > s.level.price + e.bin;
-      if (!back) return null;
+      if (!back) {
+        // a poke back over the level is not a reclaim: the clock restarts
+        s.backSince = null;
+        return null;
+      }
+      s.backSince ??= t;
       const dir = -s.dir;
-      const flip = this.tape.window(t, c.flipSec);
-      if (dir * flip.delta < c.flipDelta) return null;
+      // the run has to be over before it is faded:
+      // 1. the reclaim holds
+      const held = (t - s.backSince) / SEC;
+      if (held < c.sweepHoldSec) return this.waitSweep(s, `reclaim held ${fx(held, 0)} of ${c.sweepHoldSec} s`);
+      // 2. the cascade has stopped: no forced orders in the sweep's direction lately
+      const quiet = this.tape.window(t, c.sweepQuietSec);
+      const liqNow = s.dir > 0 ? quiet.liqBuy : quiet.liqSell;
+      if (liqNow > 0.02 * ctx.base * c.sweepQuietSec) return this.waitSweep(s, `$${Math.round(liqNow).toLocaleString('en-US')} of ${s.dir > 0 ? 'shorts' : 'longs'} still being liquidated — the cascade is not over`);
+      // 3. the aggression that drove the run has dried up
+      const fl = this.tape.window(t, c.flipSec);
+      const pushRate = (s.dir > 0 ? fl.buy : fl.sell) / c.flipSec;
+      if (pushRate > Math.max(0.5 * s.burstRate, ctx.base)) return this.waitSweep(s, `${s.dir > 0 ? 'buyers' : 'sellers'} still pushing at ${fx(pushRate / ctx.base, 1)}× normal`);
+      // 4. the other side has taken over
+      const flip = fl;
+      if (dir * flip.delta < c.flipDelta) return this.waitSweep(s, `delta ${fx(flip.delta)} has not turned`);
       const no = this.bookAgrees(ctx, dir);
-      if (no) return null;
+      if (no) return this.waitSweep(s, no);
       this.sweep = null;
-      const stop = s.extreme + s.dir * ctx.buf;
+      // beyond the wick by part of the one-minute range: the second test of a low should not take it out
+      const nz = this.noise();
+      const stop = s.extreme + s.dir * Math.max(ctx.buf, Number.isFinite(nz) ? 0.5 * nz : 0);
       const poc = e.va?.poc;
       const { price: target, kind: targetKind } = this.targetFor(ctx, dir, p, stop, poc);
       const liq = s.liq;
@@ -528,7 +575,7 @@ export class OrderFlow {
         stop,
         target,
         targetKind,
-        why: `swept the ${s.level.kind} ${px(s.level.price)} by ${fx(run, 1)} bps on a ${fx(s.burst, 1)}× tape burst${liq > 0 ? ` with $${Math.round(liq).toLocaleString('en-US')} liquidations` : ''}, reclaimed — ${dir > 0 ? 'sellers' : 'buyers'} trapped (Δ ${fx(flip.delta)})`,
+        why: `swept the ${s.level.kind} ${px(s.level.price)} by ${fx(run, 1)} bps on a ${fx(s.burst, 1)}× tape burst${liq > 0 ? ` with $${Math.round(liq).toLocaleString('en-US')} liquidations` : ''}; reclaim held ${fx(held, 0)} s, ${s.dir > 0 ? 'buying' : 'selling'} back to ${fx(pushRate / ctx.base, 1)}× normal, no liquidations for ${c.sweepQuietSec} s — ${dir > 0 ? 'sellers' : 'buyers'} trapped (Δ ${fx(flip.delta)})`,
       };
     }
     const recent = this.tape.window(t, 2);
@@ -547,12 +594,35 @@ export class OrderFlow {
       const aggr = up ? burstW.buy : burstW.sell;
       const burst = aggr / (ctx.base * c.flipSec * 2);
       const liq = up ? burstW.liqBuy : burstW.liqSell;
-      if (burst < c.sweepBurstX && !(liq > 0)) continue;
+      // liquidations alone only count when they are a real share of normal volume
+      if (burst < c.sweepBurstX && liq < c.sweepLiqShare * ctx.base * c.flipSec * 2) continue;
+      const sdir = up ? 1 : -1;
       this.used.push({ side: lv.side, price: lv.price, t });
       if (!lv.fixed) this.pools.remove(lv);
-      this.sweep = { dir: up ? 1 : -1, level: lv, extreme: up ? recent.hi : recent.lo, t, burst, liq };
+      // do not fade a run that goes with the market's direction
+      const tr = this.trend();
+      if (c.ofRegime && tr.dir === sdir && tr.er >= c.erTrend) {
+        e.skip('sweep', `${lv.kind} ${px(lv.price)} run in the direction of a ${sdir > 0 ? 'rising' : 'falling'} market (efficiency ${fx(tr.er)}) — continuation is more likely than a reversal`);
+        break;
+      }
+      if (c.ofRegime && e.state === (sdir > 0 ? 'accepted-up' : 'accepted-down')) {
+        e.skip('sweep', `${lv.kind} ${px(lv.price)} run while value is being accepted ${sdir > 0 ? 'higher' : 'lower'} — not fading it`);
+        break;
+      }
+      const lost = this.sweepLoss.get(-sdir);
+      if (lost !== undefined && t - lost < c.sweepCooloffMin * MIN) {
+        e.skip('sweep', `the last ${sdir > 0 ? 'short' : 'long'} sweep trade lost ${Math.round((t - lost) / MIN)} min ago — stop runs that way are not reversing right now`);
+        break;
+      }
+      this.sweep = { dir: sdir, level: lv, extreme: up ? recent.hi : recent.lo, t, burst, liq, burstRate: aggr / (c.flipSec * 2), backSince: null, why: '' };
       break;
     }
+    return null;
+  }
+
+  /** Still waiting on a sweep: remember why (reported if it never confirms). */
+  waitSweep(s, why) {
+    s.why = why;
     return null;
   }
 

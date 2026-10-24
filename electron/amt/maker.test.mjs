@@ -36,8 +36,13 @@ function toSignal(extra) {
   const t1 = T0 + 10 * MIN;
   run(e, balance(T0, 600, 100.2, 0.1, rng(3)));
   run(e, path(t1, 8, 100.15, 99.9, 'sell', 2));
-  const intents = run(e, path(t1 + 8000, 5, 99.9, 100.06, 'buy', 1));
-  return { e, intents, t: t1 + 13_000 };
+  run(e, path(t1 + 8000, 5, 99.9, 100.06, 'buy', 1));
+  // the reclaim holds; the signal comes once it has for sweepHoldSec
+  const hold = path(t1 + 13_000, 14, 100.05, 100.07, 'buy', 0.5);
+  const intents = [];
+  let i = 0;
+  for (; i < hold.length && !intents.length; i++) intents.push(...run(e, [hold[i]]));
+  return { e, intents, t: hold[i - 1].t + 500 };
 }
 
 describe('maker (limit) execution', () => {

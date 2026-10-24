@@ -161,6 +161,13 @@ describe('BotManager', () => {
     e.brain.think(T0, 'widening stops: test thought');
     ccxt.streams.get(`amt-${id}`).emit({ kind: 'trades', trades: [{ t: T0, p: 100, q: 1, s: 'buy' }] });
     expect(m.eventsFor(id).filter((x) => x.kind === 'think').map((x) => x.text)).toEqual(['widening stops: test thought']);
+    // an exit the manager decided carries its reason (Telegram shows it too)
+    const e2 = m.running.get(id).engine;
+    e2.pos = { side: 'buy', entry: 100, qty: 1, stop: 99, target: 102, stop0: 99, target0: 102, setup: 'sweep', why: 'x', t: T0, fees: 0, risk: 1, be: false };
+    e2.brain.think(T0, 'sweep: flow turned against the trade (momentum -0.80 for 5 s) at -0.30R — cutting it before the stop');
+    e2.pending = { kind: 'exit', reason: 'flow turned' };
+    m.handle(id, [{ type: 'exit', side: 'sell', qty: 1, price: 99.7, reason: 'flow turned' }]);
+    expect(m.eventsFor(id).find((x) => x.kind === 'exit').text).toMatch(/^EXIT flow turned @ 99\.\d+ · -0\.\d+ USD — sweep: flow turned against the trade/);
     expect(m.snapshot(id).brain).toMatchObject({ noiseX: 1, patience: 1 });
     await m.stop(id, { reason: 'test' });
   });

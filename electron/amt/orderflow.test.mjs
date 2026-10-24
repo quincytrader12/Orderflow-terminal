@@ -145,13 +145,93 @@ describe('order-flow hybrid setups', () => {
     expect(run(e, path(t1, 8, 100.15, 99.9, 'sell', 2))).toEqual([]);
     expect(e.of.sweep).toMatchObject({ dir: -1, level: { price: 100, kind: 'round number' } });
     // and price is back above it within seconds, buyers in control
-    const intents = run(e, path(t1 + 8000, 8, 99.9, 100.12, 'buy', 1));
+    // a poke back above the level is not enough: the reclaim has to hold
+    expect(run(e, path(t1 + 8000, 8, 99.9, 100.12, 'buy', 1))).toEqual([]);
+    expect(e.of.sweep.backSince).not.toBeNull();
+    const intents = run(e, path(t1 + 16_000, 12, 100.12, 100.14, 'buy', 0.5));
     expect(intents).toHaveLength(1);
     const i = intents[0];
     expect(i).toMatchObject({ type: 'enter', side: 'buy', setup: 'sweep' });
-    expect(i.stop).toBeCloseTo(99.9 - 2 * e.bin, 6); // beyond the sweep's extreme
+    // beyond the wick by at least half the one-minute range
+    expect(i.stop).toBeLessThanOrEqual(99.9 - Math.max(2 * e.bin, 0.5 * e.of.noise()) + 1e-9);
     expect(i.target).toBeGreaterThan(i.price);
-    expect(i.reason).toMatch(/swept the round number 100/);
+    expect(i.reason).toMatch(/swept the round number 100 .*reclaim held 1\d s, selling back to 0\.\d× normal, no liquidations for 10 s/);
+  });
+
+  describe('sweep: the run has to be over before it is faded (the Oct 23–24 trades)', () => {
+    const setUp = (extra = {}) => {
+      const e = new AmtEngine(base('sweep', extra));
+      run(e, balance(T0, 10, 100.2, 0.1, rng(3)));
+      return { e, t1: T0 + 10 * MIN };
+    };
+    /** run trades, with forced sells (long liquidations) of `liqUsd` every second */
+    const runWithLiqs = (e, trades, liqUsd) => {
+      const out = [];
+      let lastLiq = 0;
+      for (const tr of trades) {
+        if (liqUsd && tr.t - lastLiq >= 1000) {
+          lastLiq = tr.t;
+          e.now = Math.max(e.now, tr.t);
+          e.onLiquidations([{ t: tr.t, p: tr.p, q: liqUsd / tr.p, side: 'sell' }]);
+        }
+        out.push(...run(e, [tr]));
+      }
+      return out;
+    };
+
+    it('does not buy while longs are still being liquidated (the 00:48 long)', () => {
+      const { e, t1 } = setUp();
+      run(e, path(t1, 8, 100.15, 99.9, 'sell', 2));
+      // price pokes back above 100 and holds, but the cascade keeps going
+      const out = runWithLiqs(e, [...path(t1 + 8000, 8, 99.9, 100.12, 'buy', 1), ...path(t1 + 16_000, 12, 100.12, 100.14, 'buy', 0.5)], 5000);
+      expect(out).toEqual([]);
+      expect(e.of.sweep.why).toMatch(/longs still being liquidated — the cascade is not over/);
+      // once it stops, and the reclaim still holds, it is a trade
+      const later = run(e, path(t1 + 28_000, 14, 100.13, 100.15, 'buy', 0.5));
+      expect(later).toHaveLength(1);
+      expect(later[0]).toMatchObject({ side: 'buy', setup: 'sweep' });
+    });
+
+    it('a brief poke back over the level is not a reclaim', () => {
+      const { e, t1 } = setUp();
+      run(e, path(t1, 8, 100.15, 99.9, 'sell', 2));
+      run(e, path(t1 + 8000, 4, 99.9, 100.06, 'buy', 1));
+      expect(run(e, path(t1 + 12_000, 6, 100.05, 99.95, 'sell', 0.5))).toEqual([]);
+      expect(e.of.sweep.backSince).toBeNull();
+    });
+
+    it('needs real force behind the run: a $271 liquidation with no tape burst does not count (the 14:26 short)', () => {
+      const { e, t1 } = setUp();
+      // drifts through the round number on ordinary volume
+      const drift = path(t1, 10, 100.12, 99.95, 'sell', 0.15);
+      e.now = t1;
+      // $271 next to ETH's ~$100k a second of normal volume; this test market trades ~$40 a second
+      const liqUsd = 271 * (e.of.tape.baseline() / 100_000);
+      e.onLiquidations([{ t: t1 + 9000, p: 99.96, q: liqUsd / 99.96, side: 'sell' }]);
+      run(e, drift);
+      expect(e.of.sweep).toBeNull();
+    });
+
+    it('does not fade a run that goes with a falling market (the 11:32 long)', () => {
+      const e = new AmtEngine(base('sweep'));
+      const rand = rng(5);
+      // 20 minutes of steady selling, one step lower every minute
+      const trend = [];
+      for (let k = 0; k < 20; k++) trend.push(...balance(T0 + k * MIN, 1, 101 - k * 0.05, 0.02, rand).map((x) => ({ ...x, s: rand() < 0.7 ? 'sell' : 'buy' })));
+      run(e, trend);
+      const t1 = T0 + 20 * MIN;
+      run(e, path(t1, 8, 100.08, 99.9, 'sell', 2));
+      expect(e.of.sweep).toBeNull();
+      expect(e.lastSkip.reason).toMatch(/run in the direction of a falling market .* continuation is more likely than a reversal/);
+    });
+
+    it('sits out sweeps the way the last losing sweep went', () => {
+      const { e, t1 } = setUp();
+      e.of.onClosed({ setup: 'sweep', side: 'buy', pnl: -0.85, closed: t1 - 4 * MIN });
+      run(e, path(t1, 8, 100.15, 99.9, 'sell', 2));
+      expect(e.of.sweep).toBeNull();
+      expect(e.lastSkip.reason).toMatch(/the last long sweep trade lost 4 min ago/);
+    });
   });
 
   it('sweep that keeps going is a breakout, not a stop run', () => {

@@ -168,12 +168,17 @@ one fires.
 |---|---|---|---|---|
 | **Absorption reversal** | tape aggression, a liquidity level (a standing **wall** in the book, VAL/VAH, prior value, swing or round-number pool) | aggressive volume ≥ 2× normal and ≥ 0.3 one-sided hits the level and makes ≤ 1 bin of progress, then the aggressors fade: delta over 5 s flips ≥ 0.2, price lifts a bin off the extreme, order-flow imbalance (OFI) turns | beyond the extreme (and the wall) + buffer; **exits at once if the wall is pulled** | POC when it is ≥ min R:R away, else 2R |
 | **Imbalance continuation** | footprint: ≥ 3 stacked diagonal imbalances (3:1) in a bar with initiative delta and ≥ 1.5× volume | price leaves the stack, comes back into it, holds; delta since the retest ≥ 0.2 with the move, OFI with it, no absorbing wall in the way | beyond the far side of the stack | the nearest untouched liquidity pool ≥ min R:R away, else 2R |
-| **Sweep & reclaim** | liquidity pools (swing highs/lows from footprint bars, prior session high/low, round numbers), tape bursts, **liquidations** | price runs a pool by ≥ 3 bps on a ≥ 2× burst or forced orders, then reclaims the level within 90 s with delta and OFI turning | beyond the sweep's extreme | POC or 2R |
+| **Sweep & reclaim** | liquidity pools (swing highs/lows from footprint bars, prior session high/low, round numbers), tape bursts, **liquidations** | price runs a pool by ≥ 3 bps on a ≥ 2× burst (or liquidations worth ≥ ¼ of a normal 10 s of volume), then — within 90 s — the run has to be **over**: the reclaim holds 10 s, no liquidations in the sweep's direction for 10 s, the aggression that drove it is back to normal, delta and OFI have turned | beyond the sweep's extreme by ≥ half the one-minute range | POC or 2R |
 
 **Regime filter** (on by default): absorption is never faded while value is
 being accepted in the aggressors' direction, and continuation only joins
 moves on the initiative side of the POC. A sweep that runs further than
-25 bps is treated as a breakout and left alone.
+25 bps is treated as a breakout and left alone. A sweep that goes with a trending
+market (efficiency ratio ≥ 0.5 in its direction over 15 minutes), or with
+value being accepted that way, is not faded either; and after a sweep trade
+loses, sweeps in that direction sit out 20 minutes. (These came from live
+paper trades on ETH: longs bought into a running liquidation cascade or a
+steady sell-off, and a "sweep" on no volume with a $271 liquidation.)
 
 **The order book** (5 snapshots a second, 500 levels):
 

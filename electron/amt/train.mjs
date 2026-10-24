@@ -31,6 +31,7 @@ export const ORDERFLOW_SEARCH = {
   stackMin: [2, 3, 4],
   sweepMinBps: [2, 3, 5],
   sweepBurstX: [1.5, 2, 3],
+  sweepHoldSec: [5, 10, 20],
   stopBufferBins: [1, 2, 3],
   ofTargetR: [1.5, 2, 3],
   breakevenAtR: [0, 1, 1.5],
@@ -46,6 +47,7 @@ export const ADAPTIVE_SEARCH = {
   deltaThreshold: [0.2, 0.3, 0.4],
   absorbX: [1.5, 2, 3],
   sweepBurstX: [1.5, 2, 3],
+  sweepHoldSec: [5, 10, 20],
   minRR: [1.2, 1.5, 2],
 };
 
