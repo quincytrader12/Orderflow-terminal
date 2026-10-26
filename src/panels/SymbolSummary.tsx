@@ -86,7 +86,12 @@ export function SymbolSummary(_: PanelProps<SummaryConfig>) {
               />
             </>
           )}
-          <Stat k="Feed" v={f.status.state} s={`${f.status.latencyMs !== undefined ? f.status.latencyMs.toFixed(0) + 'ms · ' : ''}${f.store.length.toLocaleString()} trades held`} cls={f.status.state === 'open' ? 'up' : 'down'} />
+          <Stat
+            k="Feed"
+            v={f.status.state}
+            s={f.status.state !== 'open' && f.status.error ? f.status.error : `${f.status.latencyMs !== undefined ? f.status.latencyMs.toFixed(0) + 'ms · ' : ''}${f.store.length.toLocaleString()} trades held`}
+            cls={f.status.state === 'open' ? 'up' : 'down'}
+          />
         </div>
       </div>
     </div>

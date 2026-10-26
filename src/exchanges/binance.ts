@@ -128,21 +128,26 @@ function makeBinance(futures: boolean): VenueAdapter {
         snapshotAbort = ctrl;
         // give the socket a moment to buffer events that straddle the snapshot
         await sleep(400);
-        for (let attempt = 0; attempt < 5 && !ctrl.signal.aborted; attempt++) {
+        // keep trying (backing off to 30 s): the book cannot sync without a snapshot
+        for (let attempt = 0; !ctrl.signal.aborted; attempt++) {
           try {
             const snap = await fetchJson(`${rest}/depth?symbol=${symbol}&limit=${futures ? 1000 : 5000}`, { signal: ctrl.signal });
             if (ctrl.signal.aborted) return;
+            // a snapshot that failed earlier no longer marks the feed; reported
+            // before the snapshot is applied, since going open clears the book
+            report('snapshot', 'open');
             sync.onSnapshot(snap);
             return;
           } catch (e) {
             if (ctrl.signal.aborted) return;
-            h.onStatus('error', `depth snapshot: ${String(e)}`);
-            await sleep(1000 * (attempt + 1));
+            report('snapshot', 'error', `order-book snapshot failed (${String(e)}) — retrying`);
+            await sleep(Math.min(30_000, 1000 * (attempt + 1)));
           }
         }
       }
 
-      // futures: one socket per route; the feed counts as open only when both are
+      // futures: one socket per route; the feed counts as open only when every
+      // socket is, and the order-book snapshot has loaded
       const states: Record<string, { st: ConnState; err?: string }> = {};
       const report = (name: string, st: ConnState, err?: string) => {
         states[name] = { st, err };
@@ -208,7 +213,8 @@ function makeBinance(futures: boolean): VenueAdapter {
           new ManagedSocket({ url: wsBase + streams.join('/'), staleMs: 30_000, onState: (st, err) => report('market', st, err), onMessage }),
         );
       } else {
-        socks.push(new ManagedSocket({ url: wsBase + streams.join('/'), staleMs: 30_000, onState: (st, err) => h.onStatus(st, err), onOpen: depthOpen, onMessage }));
+        states.main = { st: 'connecting' };
+        socks.push(new ManagedSocket({ url: wsBase + streams.join('/'), staleMs: 30_000, onState: (st, err) => report('main', st, err), onOpen: depthOpen, onMessage }));
       }
       for (const k of socks) void k.connect();
       return {

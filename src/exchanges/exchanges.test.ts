@@ -144,6 +144,27 @@ describe('Binance futures adapter', () => {
   });
 });
 
+describe('Binance feed status', () => {
+  it('a failed order-book snapshot marks the feed, and the retry that succeeds clears it', async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        if (++calls === 1) return { ok: false, status: 429, statusText: 'Too Many Requests', json: async () => ({}) };
+        return { ok: true, json: async () => ({ lastUpdateId: 1, bids: [['100', '1']], asks: [['101', '1']] }) };
+      }),
+    );
+    const { out, conn } = await open(binanceFutures, 'ETHUSDT');
+    // the first snapshot fails: the feed shows it…
+    await vi.waitFor(() => expect(out.states).toContain('error'), { timeout: 3000 });
+    // …and once the retry loads the book, the feed is open again (it used to stay "error")
+    await vi.waitFor(() => expect(out.books.some((b) => b.snapshot)).toBe(true), { timeout: 5000 });
+    expect(out.states.at(-1)).toBe('open');
+    expect(calls).toBe(2);
+    conn.close();
+  });
+});
+
 describe('Bybit adapter', () => {
   it('subscribes and parses trades, book, tickers and liquidations', async () => {
     const { out, ws, conn } = await open(bybit, 'BTCUSDT');
