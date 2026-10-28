@@ -133,7 +133,11 @@ in the **Void Chrome** theme (now the default; the other themes still work):
   strongest read) with its buys and sells on the chart; the feeds — pump.fun
   messages per second, DexScreener and RPC response times, how long since each
   last answered; capital at risk per open coin with its multiple.
-- **Centre — the swarm core**: the inputs on the left (new coins a minute,
+- **Centre — the swarm core**, in 3D (WebGL with bloom; the flat version is
+  used in safe mode or where the graphics card has no WebGL). **Drag** to orbit,
+  **scroll** to zoom, **double-click** to reset; it drifts slowly when left
+  alone. **Hover** a coin for its conviction, viability and virality; **click**
+  it to open it. The inputs on the left (new coins a minute,
   the pump.fun feed, the Sentinel's pass rate, viral coins, the hottest
   narrative, SOL) flow along curves into a lens-shaped membrane that swells
   and ripples with the activity, and out to the results on the right (picks,
@@ -146,7 +150,9 @@ in the **Void Chrome** theme (now the default; the other themes still work):
   rate, Herald viral share, the daily loss limit used, budget spent), and the
   bots' live log.
 
-Click any coin, fill or log line to open it in the Meme Token panel. Motion
+The cards tilt slightly towards the pointer, and the charts show a crosshair
+with the value and time under it. Click any coin, fill or log line to open it
+in the Meme Token panel. Motion
 slows right down when the system asks for reduced motion.
 
 ### What the rules are built on

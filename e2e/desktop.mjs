@@ -510,6 +510,18 @@ try {
   expect(await page.evaluate(() => window.__sameSession === true), 'unlocking returns to the same running session (no reload)');
 
   expect((await page.locator('text=crashed').count()) === 0, 'no panel crashed');
+
+  step('Command Center');
+  const errorsBefore = errors.length;
+  await page.click('.cc-toggle');
+  await page.waitForSelector('.cc-core canvas', { timeout: 15_000 });
+  await page.waitForTimeout(2500);
+  const mode = await page.evaluate(() => (document.querySelector('.cc3d canvas') ? '3D' : 'flat'));
+  await page.screenshot({ path: `${OUT}desktop-command.png` });
+  expect(errors.length === errorsBefore, `the Command Center draws (${mode}) without errors`);
+  await page.click('.cc-toggle');
+  await page.waitForSelector('.flexlayout__layout', { state: 'visible' });
+  expect(true, 'back to the terminal layout');
 } catch (e) {
   ok = false;
   console.error(e);

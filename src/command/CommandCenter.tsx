@@ -10,10 +10,12 @@ import { fmtNum, fmtTime, fmtUsd } from '../core/format';
 import { meters, scanner, useMeme } from '../meme/scanner';
 import { useSwarm } from '../meme/swarm/swarm';
 import type { MemeToken } from '../meme/token';
-import { Canvas, font } from '../ui/canvas';
+import { useBoot } from '../app/boot';
+import { Canvas, font, type PointerState } from '../ui/canvas';
 import { rgba, type Palette } from '../ui/theme';
 import { useTicker } from '../ui/controls';
 import { coreMemory, drawCore, type CoreInput } from './core';
+import { Core3D, webglAvailable } from './core3d';
 import { commandStats, Rate, type CommandStats } from './stats';
 
 const sol = (x: number, d = 3) => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(d)}`;
@@ -46,9 +48,26 @@ function Num({ value, format }: { value: number; format: (v: number) => string }
   return <>{Number.isFinite(shown) ? format(shown) : '—'}</>;
 }
 
+/** Tilt a card a few degrees towards the pointer, with a light that follows it. */
+function tilt(e: React.PointerEvent<HTMLElement>) {
+  const el = e.currentTarget;
+  const r = el.getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width;
+  const y = (e.clientY - r.top) / r.height;
+  el.style.setProperty('--mx', `${(x * 100).toFixed(1)}%`);
+  el.style.setProperty('--my', `${(y * 100).toFixed(1)}%`);
+  if (reduced) return;
+  el.style.setProperty('--ry', `${((x - 0.5) * 4).toFixed(2)}deg`);
+  el.style.setProperty('--rx', `${((0.5 - y) * 3).toFixed(2)}deg`);
+}
+function untilt(e: React.PointerEvent<HTMLElement>) {
+  e.currentTarget.style.setProperty('--rx', '0deg');
+  e.currentTarget.style.setProperty('--ry', '0deg');
+}
+
 function Card({ n, title, right, className = '', children }: { n: string; title: string; right?: React.ReactNode; className?: string; children: React.ReactNode }) {
   return (
-    <section className={`cc-card ${className}`} style={{ animationDelay: `${Number(n) * 60}ms` }}>
+    <section className={`cc-card ${className}`} style={{ animationDelay: `${Number(n) * 60}ms` }} onPointerMove={tilt} onPointerLeave={untilt}>
       <header className="cc-card-head">
         <span className="cc-idx">{n}</span>
         <span className="cc-title">{title}</span>
@@ -73,7 +92,7 @@ function startSampling() {
 }
 
 /** A small area chart. */
-function drawArea(ctx: CanvasRenderingContext2D, w: number, h: number, pal: Palette, pts: { t: number; v: number }[], o: { color: [number, number, number]; cap?: number; zero?: boolean; t0?: number; t1?: number; marks?: { t: number; side: 'buy' | 'sell' }[]; label?: (v: number) => string }) {
+function drawArea(ctx: CanvasRenderingContext2D, w: number, h: number, pal: Palette, pts: { t: number; v: number }[], o: { color: [number, number, number]; cap?: number; zero?: boolean; t0?: number; t1?: number; marks?: { t: number; side: 'buy' | 'sell' }[]; label?: (v: number) => string; hover?: PointerState | null; fmt?: (v: number) => string }) {
   if (pts.length < 2) {
     ctx.fillStyle = pal.muted;
     ctx.font = font(11, 500, false);
@@ -146,6 +165,41 @@ function drawArea(ctx: CanvasRenderingContext2D, w: number, h: number, pal: Pale
     ctx.fillStyle = m.side === 'buy' ? pal.accent : pal.buy;
     ctx.fill();
   }
+  // crosshair: the nearest point to the pointer, its value and time
+  const hp = o.hover;
+  if (hp?.inside && hp.x >= 0 && hp.x <= w - padR) {
+    const p = pts.reduce((a, b) => (Math.abs(X(b.t) - hp.x) < Math.abs(X(a.t) - hp.x) ? b : a), pts[0]);
+    const px = X(p.t);
+    const py = Y(p.v);
+    ctx.strokeStyle = rgba(pal.textRgb, 0.35);
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.moveTo(px, 0);
+    ctx.lineTo(px, h);
+    ctx.moveTo(0, py);
+    ctx.lineTo(w - padR, py);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(px, py, 4, 0, Math.PI * 2);
+    ctx.fillStyle = pal.text;
+    ctx.fill();
+    const text = `${(o.fmt ?? o.label ?? ((v: number) => v.toFixed(3)))(p.v)}  ${fmtTime(p.t)}`;
+    ctx.font = font(10, 600);
+    const tw = ctx.measureText(text).width + 12;
+    const bx = Math.min(w - tw - 2, Math.max(2, px - tw / 2));
+    const by = py > 26 ? py - 24 : py + 8;
+    ctx.fillStyle = pal.tooltip;
+    ctx.strokeStyle = pal.border;
+    ctx.beginPath();
+    ctx.roundRect(bx, by, tw, 17, 4);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = pal.text;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, bx + 6, by + 9);
+  }
   if (o.label) {
     ctx.font = font(10);
     ctx.fillStyle = pal.muted;
@@ -156,6 +210,35 @@ function drawArea(ctx: CanvasRenderingContext2D, w: number, h: number, pal: Pale
   }
 }
 
+/** A canvas chart that follows the pointer (crosshair and value). */
+function Chart({ draw, fps = 20, cursor = 'crosshair' }: { draw: (ctx: CanvasRenderingContext2D, w: number, h: number, pal: Palette, hover: PointerState | null) => void; fps?: number; cursor?: string }) {
+  const ptr = useRef<PointerState | null>(null);
+  return <Canvas fps={fps} cursor={cursor} pointerRef={ptr} draw={({ ctx, w, h, pal }) => draw(ctx, w, h, pal, ptr.current)} />;
+}
+
+/** The swarm core: 3D when the machine draws WebGL (not in safe mode), else the flat version. */
+function CoreView({ input, onSelect }: { input: React.MutableRefObject<CoreInput>; onSelect: (id: string) => void }) {
+  const safe = useBoot((s) => s.safeMode);
+  const host = useRef<HTMLDivElement>(null);
+  const [flat, setFlat] = useState(() => safe || !webglAvailable());
+  const flatMem = useRef(coreMemory());
+  const select = useRef(onSelect);
+  select.current = onSelect;
+  useEffect(() => {
+    if (flat || !host.current) return;
+    let core: Core3D | null = null;
+    try {
+      core = new Core3D(host.current, () => input.current, (id) => select.current(id));
+    } catch (e) {
+      console.warn('3D core unavailable, using the flat one', e);
+      setFlat(true);
+    }
+    return () => core?.dispose();
+  }, [flat, input]);
+  if (flat) return <Canvas fps={reduced ? 20 : 60} cursor="default" draw={({ ctx, w, h, pal }) => drawCore(ctx, w, h, pal, input.current, flatMem.current, performance.now(), reduced ? 0.3 : 1)} />;
+  return <div className="cc3d" ref={host} />;
+}
+
 function Gauge({ value, label, sub, tone }: { value: number | null; label: string; sub: string; tone: 'cyan' | 'magenta' | 'chrome' }) {
   const v = value === null || !Number.isFinite(value) ? 0 : Math.max(0, Math.min(1, value));
   const r = 30;
@@ -163,6 +246,13 @@ function Gauge({ value, label, sub, tone }: { value: number | null; label: strin
   return (
     <div className={`cc-gauge ${tone}`}>
       <svg viewBox="0 0 80 80" width="80" height="80" aria-hidden>
+        <circle cx="40" cy="40" r="38" className="cc-gauge-bezel" />
+        {Array.from({ length: 40 }, (_, i) => {
+          const an = (i / 40) * Math.PI * 2 - Math.PI / 2;
+          const lit = i / 40 < v;
+          const r1 = i % 5 ? 34.5 : 33.5;
+          return <line key={i} x1={40 + Math.cos(an) * r1} y1={40 + Math.sin(an) * r1} x2={40 + Math.cos(an) * 36} y2={40 + Math.sin(an) * 36} className={`cc-gauge-tick${lit ? ' lit' : ''}`} />;
+        })}
         <circle cx="40" cy="40" r={r} className="cc-gauge-track" />
         <circle cx="40" cy="40" r={r} className="cc-gauge-arc" strokeDasharray={`${c * v} ${c}`} transform="rotate(-90 40 40)" />
       </svg>
@@ -196,7 +286,6 @@ export function CommandCenter() {
   const age = (t: number) => (t ? `${Math.max(0, Math.round((now - t) / 1000))} s ago` : '—');
   const ok = (s: string) => (s === 'open' ? 'open' : s.startsWith('error') ? 'error' : s === 'idle' ? 'idle' : 'connecting');
 
-  const core = useRef(coreMemory());
   const input = useRef<CoreInput>(null!);
   const ss = sw.stats;
   const passRate = ss.sentinel.checked ? ss.sentinel.pass / ss.sentinel.checked : null;
@@ -269,7 +358,7 @@ export function CommandCenter() {
             {solUsd > 0 ? <Num value={st.pnlSol * solUsd} format={(v) => `${v >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v), 2)}`} /> : '—'} · banked {sol(st.realizedSol)} · open {sol(st.unrealizedSol)}
           </div>
           <div className="cc-spark">
-            <Canvas fps={20} cursor="default" draw={({ ctx, w, h, pal }) => drawArea(ctx, w, h, pal, st.equity.length === 1 ? [{ t: st.equity[0].t - 60_000, v: 0 }, ...st.equity] : st.equity, { color: st.pnlSol >= 0 ? pal.buyRgb : pal.sellRgb, zero: true })} />
+            <Chart draw={(ctx, w, h, pal, hover) => drawArea(ctx, w, h, pal, st.equity.length === 1 ? [{ t: st.equity[0].t - 60_000, v: 0 }, ...st.equity] : st.equity, { color: st.pnlSol >= 0 ? pal.buyRgb : pal.sellRgb, zero: true, hover, fmt: (v) => `${sol(v)} SOL` })} />
           </div>
           <div className="cc-row mono">
             <span>
@@ -285,17 +374,16 @@ export function CommandCenter() {
 
         <Card n="02" title={focus ? `Focus · ${focus.symbol}` : 'Focus'} right={focus && <span className="mono">{fmtUsd(focus.dex?.mcapUsd && focus.migrated ? focus.dex.mcapUsd : focus.mcapSol * solUsd, 1)}</span>} className="cc-focus">
           <div className="cc-chart" onClick={() => focus && select(focus.mint)}>
-            <Canvas
-              fps={20}
+            <Chart
               cursor="pointer"
-              draw={({ ctx, w, h, pal }) =>
+              draw={(ctx, w, h, pal, hover) =>
                 drawArea(
                   ctx,
                   w,
                   h,
                   pal,
                   (focus?.trades ?? []).slice(-300).map((x) => ({ t: x.t, v: x.mcapSol * (solUsd || 1) })),
-                  { color: pal.accentRgb, marks: focusPos?.fills.map((f) => ({ t: f.t, side: f.side })), label: (v) => (solUsd ? `$${fmtNum(v, 1)}` : `${fmtNum(v, 1)}◎`) },
+                  { color: pal.accentRgb, marks: focusPos?.fills.map((f) => ({ t: f.t, side: f.side })), label: (v) => (solUsd ? `$${fmtNum(v, 1)}` : `${fmtNum(v, 1)}◎`), hover },
                 )
               }
             />
@@ -349,7 +437,7 @@ export function CommandCenter() {
       </div>
 
       <section className="cc-core cc-card" aria-label="Swarm core">
-        <Canvas fps={reduced ? 20 : 60} cursor="default" draw={({ ctx, w, h, pal }) => drawCore(ctx, w, h, pal, input.current, core.current, performance.now(), reduced ? 0.3 : 1)} />
+        <CoreView input={input} onSelect={select} />
         <div className="cc-core-agents">
           {(['scout', 'sentinel', 'herald', 'strategist', 'manager'] as const).map((a) => (
             <span key={a} className={`cc-agent ${sw.enabled ? 'on' : ''}`}>
@@ -406,7 +494,7 @@ export function CommandCenter() {
       <div className="cc-bottom">
         <Card n="07" title="Daily budget" right={<span className="mono">{spentToday.toFixed(2)} / {budget} SOL</span>}>
           <div className="cc-spark tall">
-            <Canvas fps={10} cursor="default" draw={({ ctx, w, h, pal }) => drawArea(ctx, w, h, pal, st.spend, { color: pal.accentRgb, cap: budget, zero: true, t0: new Date(now).setHours(0, 0, 0, 0), t1: new Date(now).setHours(24, 0, 0, 0) })} />
+            <Chart fps={10} draw={(ctx, w, h, pal, hover) => drawArea(ctx, w, h, pal, st.spend, { color: pal.accentRgb, cap: budget, zero: true, t0: new Date(now).setHours(0, 0, 0, 0), t1: new Date(now).setHours(24, 0, 0, 0), hover, fmt: (v) => `${v.toFixed(3)} SOL spent` })} />
           </div>
         </Card>
         <Card n="08" title="Swarm gauges">

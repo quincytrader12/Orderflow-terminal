@@ -3410,7 +3410,31 @@ table.grid.meme-tape td {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.022), rgba(255, 255, 255, 0) 40%), var(--glass);
   box-shadow: var(--glass-shadow);
   overflow: hidden;
-  animation: cc-in 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: cc-in 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+  transform: perspective(1000px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
+  transition:
+    transform 0.35s cubic-bezier(0.2, 0.7, 0.2, 1),
+    box-shadow 0.35s;
+  will-change: transform;
+}
+/* a light that follows the pointer */
+.cc-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 0%), color-mix(in srgb, var(--chrome-1) 7%, transparent), transparent 60%);
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
+.cc-card:hover::after {
+  opacity: 1;
+}
+.cc-card:hover {
+  box-shadow:
+    var(--glass-shadow),
+    0 18px 40px -18px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 .cc-card::before {
   content: '';
@@ -3822,6 +3846,263 @@ table.grid.meme-tape td {
   .cc-ticker-track,
   .cc-fill,
   .cc-logline {
+    animation: none;
+  }
+}
+
+/* the 3D core */
+.cc3d {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+.cc3d-canvas {
+  display: block;
+  touch-action: none;
+}
+.cc3d-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.cc3d-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  white-space: nowrap;
+  will-change: transform;
+}
+.cc3d-label > span,
+.cc3d-label > b {
+  position: relative;
+}
+.cc3d-label.in > span,
+.cc3d-label.in > b {
+  right: 20px;
+  transform: translate(-100%, -50%);
+  text-align: right;
+}
+.cc3d-label.out > span,
+.cc3d-label.out > b {
+  left: 20px;
+  transform: translate(0, -50%);
+}
+.cc3d-label > span {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.cc3d-label > b {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.cc3d-label.up > b {
+  color: var(--buy);
+}
+.cc3d-label.down > b {
+  color: var(--sell);
+}
+.cc3d-label.warn > b {
+  color: var(--warn);
+}
+.cc3d-tip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: none;
+  min-width: 170px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  background: color-mix(in srgb, #000 78%, transparent);
+  border: 1px solid color-mix(in srgb, var(--chrome-1) 22%, transparent);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 18px color-mix(in srgb, var(--accent) 20%, transparent);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+  z-index: 2;
+}
+.cc3d-tip b {
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+.cc3d-tip .held,
+.cc3d-tip .pick {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 4px;
+  color: var(--bg);
+  background: var(--chrome-2);
+}
+.cc3d-tip .pick {
+  background: var(--buy);
+}
+.cc3d-tip div {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 3px;
+  color: var(--muted);
+}
+.cc3d-tip i {
+  font-style: normal;
+  font-family: var(--mono);
+  color: var(--text);
+}
+.cc3d-tip i.c {
+  color: var(--accent);
+}
+.cc3d-tip i.m {
+  color: var(--sell);
+}
+.cc3d-tip em {
+  display: block;
+  margin-top: 5px;
+  font-size: 9px;
+  color: var(--faint);
+  font-style: normal;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.cc3d-hud {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: var(--faint);
+  pointer-events: none;
+}
+.cc3d-caption {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 30px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.cc3d-hint {
+  position: absolute;
+  top: 12px;
+  left: 16px;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+  pointer-events: none;
+}
+/* corner brackets: an instrument frame around the core */
+.cc3d-corners i {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border-color: color-mix(in srgb, var(--chrome-1) 35%, transparent);
+  border-style: solid;
+  border-width: 0;
+  pointer-events: none;
+}
+.cc3d-corners i:nth-child(1) {
+  top: 30px;
+  left: 10px;
+  border-top-width: 1px;
+  border-left-width: 1px;
+}
+.cc3d-corners i:nth-child(2) {
+  top: 30px;
+  right: 10px;
+  border-top-width: 1px;
+  border-right-width: 1px;
+}
+.cc3d-corners i:nth-child(3) {
+  bottom: 10px;
+  left: 10px;
+  border-bottom-width: 1px;
+  border-left-width: 1px;
+}
+.cc3d-corners i:nth-child(4) {
+  bottom: 10px;
+  right: 10px;
+  border-bottom-width: 1px;
+  border-right-width: 1px;
+}
+@media (max-width: 700px) {
+  .cc3d-hint,
+  .cc3d-hud {
+    display: none;
+  }
+}
+.cc3d-tag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--text) 85%, transparent);
+  white-space: nowrap;
+  transition: opacity 0.3s;
+  text-shadow: 0 0 8px #000;
+}
+.cc3d-tag i {
+  font-style: normal;
+  font-size: 9px;
+  padding: 0 4px;
+  border-radius: 3px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.cc3d-tag.pick i {
+  color: var(--buy);
+  border-color: color-mix(in srgb, var(--buy) 50%, transparent);
+}
+.cc3d-tag.held i {
+  color: var(--bg);
+  background: var(--chrome-2);
+  border-color: var(--chrome-2);
+}
+.cc-gauge-bezel {
+  fill: none;
+  stroke: color-mix(in srgb, var(--chrome-1) 22%, transparent);
+  stroke-width: 0.6;
+  stroke-dasharray: 2 4;
+  transform-origin: 40px 40px;
+  animation: cc-spin 40s linear infinite;
+}
+.cc-gauge-tick {
+  stroke: var(--faint);
+  stroke-width: 0.8;
+}
+.cc-gauge.cyan .cc-gauge-tick.lit {
+  stroke: var(--accent);
+}
+.cc-gauge.magenta .cc-gauge-tick.lit {
+  stroke: var(--sell);
+}
+.cc-gauge.chrome .cc-gauge-tick.lit {
+  stroke: var(--chrome-2);
+}
+@keyframes cc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-gauge-bezel {
     animation: none;
   }
 }
