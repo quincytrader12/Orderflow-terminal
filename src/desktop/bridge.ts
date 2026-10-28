@@ -591,6 +591,10 @@ export interface NovusApi {
     setRetention(days: number): Promise<void>;
     exportCsv(venue: string, symbol: string): Promise<{ path: string; rows: number } | null>;
   };
+  solana: {
+    /** read-only JSON-RPC (getAccountInfo, getTokenLargestAccounts, getMultipleAccounts, …) */
+    rpc(method: string, params: unknown[], rpcSecretId?: string): Promise<any>;
+  };
   wallet: {
     connectPhantom(): Promise<{ address: string; verified: boolean }>;
     watch(address: string): Promise<boolean>;

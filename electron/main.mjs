@@ -438,6 +438,24 @@ function registerIpc() {
     return recentActivity(address, httpsOnly(url ?? DEFAULT_RPC));
   });
 
+  // meme scanner: read-only Solana RPC (the RPC url may hold an API key, so it stays here)
+  const READ_RPC = new Set(['getAccountInfo', 'getTokenLargestAccounts', 'getMultipleAccounts', 'getTokenSupply', 'getBalance', 'getSignaturesForAddress']);
+  handle('solana:rpc', async (_e, method, params, rpcSecretId) => {
+    if (!READ_RPC.has(method)) throw new Error(`RPC method not allowed: ${method}`);
+    const url = httpsOnly((rpcSecretId ? vault.reveal(rpcSecretId).fields.url : DEFAULT_RPC) ?? DEFAULT_RPC);
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 20_000);
+    try {
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: Array.isArray(params) ? params : [] }), signal: ctrl.signal });
+      if (!res.ok) throw new Error(`RPC ${res.status} ${res.statusText}`);
+      const j = await res.json();
+      if (j.error) throw new Error(j.error.message ?? 'RPC error');
+      return j.result;
+    } finally {
+      clearTimeout(t);
+    }
+  });
+
   // telegram: the bot token never leaves the main process
   const tg = (id) => {
     const s = vault.reveal(id);

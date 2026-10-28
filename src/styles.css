@@ -2787,3 +2787,275 @@ table.amt-train tr.best td {
     animation: none;
   }
 }
+
+/* ---------- meme scanner & token ---------- */
+.meme-feeds {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+.meme-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+  margin-left: 4px;
+}
+.meme-dot.ok {
+  background: var(--buy);
+  box-shadow: 0 0 6px var(--buy);
+}
+.meme-dot.bad {
+  background: var(--sell);
+}
+.meme-pulse {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--gap);
+  padding: var(--gap);
+}
+.meme-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--tabbar);
+}
+.meme-col-head {
+  padding: 6px 8px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--border);
+}
+.meme-card {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--row-line);
+  cursor: pointer;
+}
+.meme-card:hover {
+  background: var(--accent-soft);
+}
+.meme-card.active {
+  background: var(--focus);
+}
+.meme-card-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.meme-id {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.meme-id .mono {
+  font-size: 10px;
+}
+.meme-img {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex: none;
+}
+.meme-img.ph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--raised);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.meme-img.big {
+  width: 44px;
+  height: 44px;
+}
+.meme-heat {
+  min-width: 26px;
+  text-align: center;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 11px;
+  border-radius: 5px;
+  padding: 1px 4px;
+  background: var(--raised);
+  color: var(--muted);
+}
+.meme-heat.warm {
+  color: var(--warn);
+}
+.meme-heat.hot {
+  color: var(--bg);
+  background: var(--buy);
+}
+.meme-heat.big {
+  font-size: 18px;
+  padding: 4px 8px;
+}
+.meme-curve {
+  height: 3px;
+  margin: 4px 0 2px;
+  border-radius: 2px;
+  background: var(--raised);
+  overflow: hidden;
+}
+.meme-curve.big {
+  height: 6px;
+  margin: 6px 0;
+}
+.meme-curve i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--buy));
+}
+.meme-card-bot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.meme-tag {
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.meme-tag.dev {
+  background: rgba(255, 107, 107, 0.15);
+  color: var(--sell);
+}
+.meme-flag.danger {
+  color: var(--sell);
+}
+.meme-flag.warn {
+  color: var(--warn);
+}
+.meme-table tr {
+  cursor: pointer;
+}
+.meme-table th:first-child,
+.meme-table td:first-child,
+.meme-table th:nth-child(2),
+.meme-table td:nth-child(2),
+.meme-table th:last-child,
+.meme-table td:last-child {
+  text-align: left;
+}
+.meme-table tr.sel {
+  background: var(--focus);
+}
+.meme-read {
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.meme-detail {
+  padding: 8px 10px;
+}
+.meme-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.meme-title {
+  font-size: 15px;
+}
+.meme-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 11px;
+}
+.meme-links a {
+  color: var(--accent);
+  cursor: pointer;
+}
+.meme-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--gap);
+}
+.meme-summary {
+  margin: 6px 0;
+  color: var(--text);
+}
+.meme-flags {
+  margin: 6px 0;
+}
+.meme-flagline {
+  font-size: 12px;
+  padding: 2px 0;
+}
+.meme-flagline.danger {
+  color: var(--sell);
+}
+.meme-flagline.warn {
+  color: var(--warn);
+}
+.meme-flagline.info {
+  color: var(--muted);
+}
+.meme-grid2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin: 8px 0;
+}
+.meme-check {
+  font-size: 12px;
+  padding: 1px 0;
+}
+.meme-flowbar {
+  display: grid;
+  grid-template-columns: 44px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  margin: 3px 0;
+}
+.meme-flowbar .bar-split {
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--raised);
+}
+.meme-flowbar .bar-split i.buy {
+  background: var(--buy);
+}
+.meme-flowbar .bar-split i.sell {
+  background: var(--sell);
+}
+.meme-chart {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 180px;
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.meme-tape {
+  width: auto;
+}
+.meme-tape td {
+  font-size: 11px;
+  padding: 1px 10px 1px 0;
+  text-align: left;
+}
+.meme-trade-soon {
+  margin: 10px 0;
+  font-size: 11px;
+}

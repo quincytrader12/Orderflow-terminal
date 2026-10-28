@@ -121,6 +121,8 @@ export interface Settings {
   lastWeeklyReport: string;
   /** instant Telegram notice when the primary data feed goes down / recovers */
   telegramFeedAlerts: boolean;
+  /** meme scanner: Solana RPC (vault key id; '' = public RPC) */
+  memeRpcSecretId: string;
   byodUrl: string;
   byodToken: string;
   backfillMinutes: number;
@@ -184,6 +186,7 @@ const initial: Settings = {
   lastDailyReport: '',
   lastWeeklyReport: '',
   telegramFeedAlerts: true,
+  memeRpcSecretId: '',
   byodUrl: 'http://localhost:8080',
   byodToken: '',
   backfillMinutes: 30,

@@ -274,7 +274,7 @@ export function LayoutsModal({ onClose, onApply, current }: { onClose: () => voi
   );
 }
 
-const CATS: Category[] = ['Charts', 'Orderflow', 'Order book', 'Derivatives', 'Market', 'Account', 'Algo', 'Tools'];
+const CATS: Category[] = ['Meme', 'Charts', 'Orderflow', 'Order book', 'Derivatives', 'Market', 'Account', 'Algo', 'Tools'];
 
 export type Placement = 'active' | 'left' | 'right' | 'bottom' | 'dock-left' | 'dock-right' | 'dock-bottom';
 

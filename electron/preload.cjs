@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('novus', {
     status: () => call('app:status'),
     onSealed: (fn) => listen(sealListeners, fn) },
   net: { fetchJson: (url, init) => call('net:fetchJson', url, init) },
+  solana: { rpc: (method, params, rpcSecretId) => call('solana:rpc', method, params, rpcSecretId) },
   vault: {
     list: () => call('vault:list'),
     save: (rec) => call('vault:save', rec),

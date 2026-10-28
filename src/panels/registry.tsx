@@ -4,6 +4,8 @@ import { AccountsPanel, ACCOUNTS_DEFAULTS } from './AccountsPanel';
 import { AlertsPanel, ALERTS_DEFAULTS } from './AlertsPanel';
 import { AmtScalper, AMT_DEFAULTS } from './AmtScalper';
 import { DatabasePanel, DATABASE_DEFAULTS } from './DatabasePanel';
+import { MemeScanner, MEME_SCANNER_DEFAULTS } from './MemeScanner';
+import { MemeToken, MEME_TOKEN_DEFAULTS } from './MemeToken';
 import { OrderTicket, TICKET_DEFAULTS } from './OrderTicket';
 import { WalletPanel, WALLET_DEFAULTS } from './WalletPanel';
 import { YahooPanel, YAHOO_DEFAULTS } from './YahooPanel';
@@ -32,7 +34,7 @@ import { VolumeProfilePanel, VPROFILE_DEFAULTS } from './VolumeProfilePanel';
 import { Watchlist, WATCHLIST_DEFAULTS } from './Watchlist';
 import { WhaleTracker, WHALES_DEFAULTS } from './WhaleTracker';
 
-export type Category = 'Charts' | 'Orderflow' | 'Order book' | 'Derivatives' | 'Market' | 'Account' | 'Algo' | 'Tools';
+export type Category = 'Meme' | 'Charts' | 'Orderflow' | 'Order book' | 'Derivatives' | 'Market' | 'Account' | 'Algo' | 'Tools';
 
 export interface PanelDef {
   id: string;
@@ -46,6 +48,8 @@ export interface PanelDef {
 }
 
 export const PANELS: PanelDef[] = [
+  { id: 'memescan', title: 'Meme Scanner', category: 'Meme', component: MemeScanner, defaults: { ...MEME_SCANNER_DEFAULTS }, description: 'Live Solana meme coins: every pump.fun launch, coins near graduation, migrated and DexScreener-listed coins — heat, flow, room to your target and rug flags.' },
+  { id: 'memetoken', title: 'Meme Token', category: 'Meme', component: MemeToken, defaults: { ...MEME_TOKEN_DEFAULTS }, description: 'One meme coin: bonding curve, market cap, on-chain safety checks, buy/sell flow, creator activity, live trades and chart.' },
   { id: 'footprint', title: 'Footprint Chart', category: 'Charts', component: FootprintChart, defaults: { ...FOOTPRINT_DEFAULTS }, description: 'Bid×ask clusters, delta, imbalances, POC, heatmap/CVD/VP/bubble overlays, time/tick/volume/range bars.' },
   { id: 'heatmap', title: 'Liquidity Heatmap', category: 'Charts', component: LiquidityHeatmap, defaults: { ...HEATMAP_DEFAULTS }, aggregated: true, description: 'Historical depth-of-market heatmap with trade bubbles and live book profile.' },
   { id: 'historical', title: 'Historical Chart', category: 'Charts', component: HistoricalChart, defaults: { ...HISTORICAL_DEFAULTS }, description: 'Candlesticks or TPO market profile with VWAP, session volume profile, MAs and EMA clouds.' },
