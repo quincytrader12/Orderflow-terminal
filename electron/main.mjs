@@ -12,7 +12,7 @@ import { reportData } from './reports.mjs';
 import { AttemptGate, isLedgerRecord, ledgerMatches, makeLedger, PUBLIC_CHANNELS } from '../src/shared/ledger.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { Vault } from './vault.mjs';
-import { LIMIT_DEFAULTS, MemeTrader } from './memetrade.mjs';
+import { LIMIT_DEFAULTS, MemeTrader, MIN_SWEEP } from './memetrade.mjs';
 import { exportSecret, newKeypair, parseSecret } from './solana-tx.mjs';
 import { Worker } from 'node:worker_threads';
 import { initLog, log, logFile } from './log.mjs';
@@ -251,7 +251,7 @@ const NEEDS_SERVICES = /^(ccxt|trade|amt|report):|^vault:test$/;
 
 function registerIpc() {
   // the swarm keeps trading behind the lock screen: its own trades, balances and Telegram updates only
-  const SWARM_WHILE_SEALED = new Set(['swarm:buy', 'swarm:sell', 'swarm:balance', 'swarm:notify', 'swarm:notifyPhoto', 'solana:rpc', 'net:fetchImage']);
+  const SWARM_WHILE_SEALED = new Set(['swarm:buy', 'swarm:sell', 'swarm:sweep', 'swarm:balance', 'swarm:notify', 'swarm:notifyPhoto', 'solana:rpc', 'net:fetchImage']);
   const handle = (ch, fn) =>
     ipcMain.handle(ch, async (e, ...args) => {
       try {
@@ -507,6 +507,50 @@ function registerIpc() {
       addSpend: (sol) => db.set('swarmSpent', { day: today(), sol: swarmSpent() + sol }),
       log: (m) => log('info', `swarm: ${m}`),
     });
+  /** The owner's Phantom wallet: the only address the swarm wallet ever sends SOL to. */
+  const swarmHome = () => {
+    const a = db.get('swarmHome');
+    return a && db.listWallets().some((w) => w.address === a && w.verified) ? a : null;
+  };
+  handle('swarm:setHome', async (_e, address) => {
+    if (address === null) {
+      db.set('swarmHome', null);
+      db.set('swarmLimits', { ...swarmLimits(), sweepAboveSol: 0 });
+      return null;
+    }
+    if (!db.listWallets().some((w) => w.address === address && w.verified)) throw new Error('connect and verify this Phantom wallet first (Wallet panel → Connect Phantom)');
+    const r = await dialog.showMessageBox(win, {
+      type: 'question',
+      buttons: ['Cancel', 'Use as home'],
+      defaultId: 0,
+      cancelId: 0,
+      title: 'Home wallet',
+      message: 'Send the swarm wallet’s withdrawals and profits to this Phantom wallet?',
+      detail: `${address}\n\nThe swarm wallet can send SOL to this address only.`,
+    });
+    if (r.response !== 1) return swarmHome();
+    db.set('swarmHome', address);
+    return address;
+  });
+  // by hand: an amount, or 'all' (the wallet emptied, fee reserve included)
+  handle('swarm:withdraw', async (_e, sol, rpcSecretId) => {
+    const home = swarmHome();
+    if (!home) throw new Error('choose your Phantom wallet as home first');
+    const what = sol === 'all' ? 'everything' : `${Number(sol)} SOL`;
+    const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Cancel', 'Send'], defaultId: 0, cancelId: 0, title: 'Send to Phantom', message: `Send ${what} from the swarm wallet to your Phantom?`, detail: home });
+    if (r.response !== 1) return null;
+    const res = await trader(rpcSecretId).send(home, sol === 'all' ? 'all' : Number(sol));
+    log('info', `swarm sent ${res.sol} SOL home: ${res.signature}`);
+    return res;
+  });
+  // automatic: profits over the amount kept, when switched on (works behind the lock screen)
+  handle('swarm:sweep', async (_e, rpcSecretId) => {
+    const home = swarmHome();
+    if (!home) return null;
+    const res = await trader(rpcSecretId).sweep(home);
+    if (res) log('info', `swarm swept ${res.sol} SOL home: ${res.signature}`);
+    return res;
+  });
   const saveSwarmWallet = (kp, label) => {
     const id = vault.save({ id: swarmWalletId() ?? undefined, label, kind: 'solana-hot', exchange: null, fields: { secret: exportSecret(kp), address: kp.address } });
     db.set('swarmWallet', id);
@@ -516,7 +560,7 @@ function registerIpc() {
     const id = swarmWalletId();
     if (!id) return null;
     try {
-      return { address: vault.reveal(id).fields.address, limits: swarmLimits(), spentToday: swarmSpent() };
+      return { address: vault.reveal(id).fields.address, limits: swarmLimits(), spentToday: swarmSpent(), home: swarmHome() };
     } catch {
       return null;
     }
@@ -568,6 +612,29 @@ function registerIpc() {
     const cur = swarmLimits();
     const next = { ...cur };
     for (const k of ['maxBuySol', 'dailySpendSol', 'reserveSol', 'slippageBps', 'priorityLamports']) if (Number.isFinite(Number(p?.[k])) && Number(p[k]) >= 0) next[k] = Number(p[k]);
+    // profits home: off at 0; switching it on (or raising nothing to something) asks first
+    if (p && 'sweepAboveSol' in p) {
+      const v = Number(p.sweepAboveSol);
+      if (!(v > 0)) next.sweepAboveSol = 0;
+      else {
+        const home = swarmHome();
+        if (!home) throw new Error('choose your Phantom wallet as home first');
+        const keep = Math.max(v, next.reserveSol);
+        if (!(cur.sweepAboveSol > 0)) {
+          const r = await dialog.showMessageBox(win, {
+            type: 'question',
+            buttons: ['Cancel', 'Send profits home'],
+            defaultId: 0,
+            cancelId: 0,
+            title: 'Profits to Phantom',
+            message: `Send everything over ${keep} SOL in the swarm wallet to your Phantom automatically?`,
+            detail: `To ${home} only — your Phantom wallet, verified when you connected it. Checked every half minute; at least ${MIN_SWEEP} SOL at a time.`,
+          });
+          if (r.response !== 1) return cur;
+        }
+        next.sweepAboveSol = keep;
+      }
+    }
     if (p?.armed === false) next.armed = false;
     if (p?.armed === true && !cur.armed) {
       const address = swarmKeypair().address;

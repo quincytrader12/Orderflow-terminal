@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { fmtAgo, fmtTime, fmtUsd } from '../core/format';
-import { desktop, type SecretRecord } from '../desktop/bridge';
+import { desktop, type SecretRecord, type WalletRecord } from '../desktop/bridge';
 import { vault } from '../desktop/vault';
 import { useSettings } from '../store/settings';
 import { useMeme } from '../meme/scanner';
@@ -339,9 +339,23 @@ function Wallet() {
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
   const rpcId = useSettings((s) => s.memeRpcSecretId);
+  const swarmRpc = () => rpcId || undefined;
   const setSettings = useSettings((s) => s.set);
   const [rpcs, setRpcs] = useState<SecretRecord[]>([]);
   const [rpcTest, setRpcTest] = useState('');
+  const [phantoms, setPhantoms] = useState<WalletRecord[]>([]);
+  const [homePick, setHomePick] = useState('');
+  const [sendAmt, setSendAmt] = useState(0.1);
+  const loadPhantoms = () =>
+    desktop?.wallet
+      .list()
+      .then((l) => {
+        const v = l.filter((x) => x.verified);
+        setPhantoms(v);
+        setHomePick((h) => h || v[0]?.address || '');
+      })
+      .catch(() => undefined);
+  useEffect(() => void loadPhantoms(), []);
   useEffect(() => {
     vault
       .list()
@@ -456,6 +470,53 @@ function Wallet() {
             'Priority fee',
             <NumberInput value={w.limits.priorityLamports / 1e9} onChange={(v) => run('limits', () => desktop!.swarm.setLimits({ priorityLamports: Math.round(v * 1e9) }))} min={0} step={0.0001} suffix="SOL" />,
             'most it pays to land a trade quickly',
+          )}
+          <div className="section-title">Home wallet — your Phantom</div>
+          {w.home ? (
+            <>
+              <div className="swarm-arm">
+                <span className="mono">
+                  ✓ {w.home.slice(0, 4)}…{w.home.slice(-4)}
+                </span>
+                <span className="muted">withdrawals and profits go here, and nowhere else</span>
+                <button className="chip" disabled={!!busy} onClick={() => run('home', () => desktop!.swarm.setHome(null))}>
+                  Change…
+                </button>
+              </div>
+              <div className="swarm-arm">
+                <NumberInput value={sendAmt} onChange={setSendAmt} min={0.001} step={0.05} suffix="SOL" />
+                <button className="chip" disabled={!!busy} onClick={() => run('send', () => desktop!.swarm.withdraw(sendAmt, swarmRpc()))}>
+                  Send to Phantom…
+                </button>
+                <button className="chip" disabled={!!busy} onClick={() => run('send', () => desktop!.swarm.withdraw('all', swarmRpc()))}>
+                  Send everything…
+                </button>
+              </div>
+              {row(
+                'Profits home',
+                <NumberInput value={w.limits.sweepAboveSol} onChange={(v) => run('limits', () => desktop!.swarm.setLimits({ sweepAboveSol: v }))} min={0} step={0.1} suffix="SOL" />,
+                w.limits.sweepAboveSol > 0 ? `keep ${w.limits.sweepAboveSol} SOL for trading; anything over it goes to your Phantom automatically` : 'off — set how much SOL to keep for trading, and the rest goes to your Phantom automatically',
+              )}
+            </>
+          ) : (
+            <div className="swarm-arm">
+              {phantoms.length ? (
+                <>
+                  <Select value={homePick} options={phantoms.map((x) => ({ value: x.address, label: `${x.address.slice(0, 4)}…${x.address.slice(-4)}` }))} onChange={setHomePick} width={130} />
+                  <button className="chip swarm-arm-btn" disabled={!!busy || !homePick} onClick={() => run('home', () => desktop!.swarm.setHome(homePick))}>
+                    Use as home…
+                  </button>
+                  <span className="muted">The swarm will send withdrawals and profits to this wallet only.</span>
+                </>
+              ) : (
+                <>
+                  <button className="chip swarm-arm-btn" disabled={!!busy} onClick={() => run('connect', async () => (await desktop!.wallet.connectPhantom(), await loadPhantoms()))}>
+                    Connect Phantom…
+                  </button>
+                  <span className="muted">Sign the connect message in Phantom (it opens in your browser); the swarm can then send its profits home to it.</span>
+                </>
+              )}
+            </div>
           )}
           <div className="swarm-arm">
             <button className="chip" disabled={!!busy} onClick={() => run('export', () => desktop!.swarm.exportKey())}>

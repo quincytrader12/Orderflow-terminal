@@ -500,6 +500,8 @@ export interface SwarmLimits {
   reserveSol: number;
   slippageBps: number;
   priorityLamports: number;
+  /** profits home: SOL kept in the swarm wallet, the rest sent to Phantom (0 = off) */
+  sweepAboveSol: number;
 }
 
 /** A confirmed swap: the real SOL and token changes (raw units) in the wallet. */
@@ -611,12 +613,16 @@ export interface NovusApi {
     exportCsv(venue: string, symbol: string): Promise<{ path: string; rows: number } | null>;
   };
   swarm: {
-    wallet(): Promise<{ address: string; limits: SwarmLimits; spentToday: number } | null>;
+    wallet(): Promise<{ address: string; limits: SwarmLimits; spentToday: number; home: string | null } | null>;
     create(): Promise<string>;
     importKey(secret: string): Promise<string>;
     exportKey(): Promise<boolean>;
     remove(): Promise<boolean>;
     setLimits(p: Partial<SwarmLimits>): Promise<SwarmLimits>;
+    /** the owner's verified Phantom wallet as home (null to clear) */
+    setHome(address: string | null): Promise<string | null>;
+    withdraw(sol: number | 'all', rpcSecretId?: string): Promise<(SwarmFill & { sol: number }) | null>;
+    sweep(rpcSecretId?: string): Promise<(SwarmFill & { sol: number }) | null>;
     balance(rpcSecretId?: string): Promise<{ sol: number; spentToday: number; limits: SwarmLimits }>;
     buy(mint: string, sol: number, rpcSecretId?: string): Promise<SwarmFill>;
     sell(mint: string, raw: string, rpcSecretId?: string): Promise<SwarmFill>;

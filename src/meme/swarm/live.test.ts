@@ -15,7 +15,7 @@ vi.mock('../../desktop/bridge', () => ({ desktop: { swarm: fake } }));
 
 const { mergeSwarm, swarm, useSwarm } = await import('./swarm');
 
-const LIMITS: SwarmLimits = { armed: true, maxBuySol: 0.05, dailySpendSol: 0.5, reserveSol: 0.02, slippageBps: 1500, priorityLamports: 300_000 };
+const LIMITS: SwarmLimits = { armed: true, maxBuySol: 0.05, dailySpendSol: 0.5, reserveSol: 0.02, slippageBps: 1500, priorityLamports: 300_000, sweepAboveSol: 0 };
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 function setup(armed = true) {

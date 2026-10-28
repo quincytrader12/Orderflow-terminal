@@ -49,6 +49,8 @@ export interface SwarmWallet {
   limits: SwarmLimits;
   spentToday: number;
   sol: number | null;
+  /** the owner's Phantom wallet: withdrawals and profits go there, nowhere else */
+  home?: string | null;
 }
 
 interface SwarmState {
@@ -176,9 +178,32 @@ class Swarm {
       const w = await desktop.swarm.wallet();
       if (!w) return useSwarm.setState({ wallet: null });
       const b = await desktop.swarm.balance(this.rpcId()).catch(() => null);
-      useSwarm.setState({ wallet: { address: w.address, limits: b?.limits ?? w.limits, spentToday: b?.spentToday ?? w.spentToday, sol: b ? b.sol : null } });
+      const wallet = { address: w.address, limits: b?.limits ?? w.limits, spentToday: b?.spentToday ?? w.spentToday, sol: b ? b.sol : null, home: w.home ?? null };
+      useSwarm.setState({ wallet });
+      void this.sweepHome(wallet);
     } catch {
       /* keep the last state */
+    }
+  }
+
+  private sweeping = false;
+
+  /** Profits home: when switched on, SOL over the amount kept goes to the owner's Phantom (main checks the address and the amounts). */
+  private async sweepHome(w: SwarmWallet) {
+    if (!desktop || this.sweeping || this.buying.size || !w.home || !(w.limits.sweepAboveSol > 0) || w.sol === null) return;
+    if (w.sol < w.limits.sweepAboveSol + 0.05) return;
+    this.sweeping = true;
+    try {
+      const r = await desktop.swarm.sweep(this.rpcId());
+      if (r) {
+        this.say('manager', `sent ${r.sol.toFixed(4)} SOL of profit to your Phantom (kept ${w.limits.sweepAboveSol} SOL for trading)`);
+        void tellWithCard(undefined, null, '', `💸 Swarm sent ${r.sol.toFixed(4)} SOL to your Phantom\nKept ${w.limits.sweepAboveSol} SOL in the swarm wallet for trading\nTx: https://solscan.io/tx/${r.signature}`, 0);
+        void this.refreshWallet();
+      }
+    } catch (e) {
+      this.say('manager', `could not send profits to Phantom — ${String((e as Error)?.message ?? e)}`);
+    } finally {
+      this.sweeping = false;
     }
   }
 

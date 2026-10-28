@@ -93,6 +93,23 @@ swarm has **a wallet of its own** (Meme Swarm → **Wallet**):
    confirm. From then on the Strategist's picks are bought, managed and sold
    with no approval clicks, also while the terminal is locked.
 
+**Phantom stays your main wallet.** Under Wallet → **Home wallet — your
+Phantom**: **Connect Phantom…** (sign the connect message in Phantom), then
+**Use as home…** (a system dialog confirms it). From then on the swarm wallet
+can send SOL to that address only — checked in the main process, so not even
+the window can point it anywhere else:
+- **Send to Phantom…** moves an amount (the fee reserve stays), or **Send
+  everything…** empties it;
+- **Profits home**: set how much SOL to keep for trading (say 0.5) and anything
+  over it is sent to your Phantom automatically, at least 0.05 SOL at a time,
+  checked every half minute — also while the terminal is locked. Telegram gets a
+  note for each one. 0 switches it off. Nothing is sent while a buy is in flight.
+
+Fund the swarm wallet from Phantom, let it trade with what it keeps, and the
+profits come back to Phantom on their own. Don't import your main Phantom key
+into the swarm: a separate wallet means the bot can only ever lose what you
+put in it.
+
 **A private RPC** (strongly recommended for live trading): sign up at
 [helius.dev](https://www.helius.dev) (the free plan is enough to start), open
 your project and copy its **Mainnet RPC URL**

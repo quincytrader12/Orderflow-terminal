@@ -1,6 +1,6 @@
 import { createPublicKey, verify } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { LIMIT_DEFAULTS, MemeTrader, SOL_MINT } from './memetrade.mjs';
+import { LIMIT_DEFAULTS, MemeTrader, MIN_SWEEP, SOL_MINT } from './memetrade.mjs';
 import { base58Decode, base58Encode } from './phantom.mjs';
 import { exportSecret, keypairFromSeed, newKeypair, parseSecret, parseTx, signTx, txSignature } from './solana-tx.mjs';
 
@@ -57,6 +57,7 @@ describe('the executor', () => {
 
   function rig(over = {}) {
     const calls = [];
+    const sentTx = [];
     let spent = 0;
     let held = 5_000_000 - (over.grow ?? 0);
     let clock = 0;
@@ -64,7 +65,11 @@ describe('the executor', () => {
     const rpc = async (method, params) => {
       calls.push(method);
       if (method === 'getBalance') return { value: (over.balance ?? 1) * 1e9 };
-      if (method === 'sendTransaction') return txSignature(Buffer.from(params[0], 'base64'));
+      if (method === 'getLatestBlockhash') return { value: { blockhash: base58Encode(Buffer.alloc(32, 5)), lastValidBlockHeight: 1 } };
+      if (method === 'sendTransaction') {
+        sentTx.push(Buffer.from(params[0], 'base64'));
+        return txSignature(sentTx.at(-1));
+      }
       if (method === 'getSignatureStatuses') return { value: [over.slow ? null : { confirmationStatus: 'confirmed', err: over.chainErr ?? null }] };
       if (method === 'getTokenAccountsByOwner') {
         held += over.grow ?? 0;
@@ -92,7 +97,7 @@ describe('the executor', () => {
       throw new Error(url);
     };
     const t = new MemeTrader({ wallet: () => kp, rpc, http, limits: () => limits, spent: () => spent, addSpend: (s) => (spent += s), flight: over.flight, now: () => (clock += 5_000), sleep: async () => {} });
-    return { t, calls, spentNow: () => spent };
+    return { t, calls, sentTx, spentNow: () => spent };
   }
 
   it('buys through Jupiter: quote, swap, sign, send, confirm, and settles the real amounts', async () => {
@@ -142,6 +147,39 @@ describe('the executor', () => {
     const failed = rig({ chainErr: { InstructionError: [0, 'Custom'] } });
     await expect(failed.t.buy(MINT, 0.1)).rejects.toThrow(/failed on chain/);
     expect(failed.spentNow()).toBe(0);
+  });
+
+  const HOME = newKeypair().address;
+  /** lamports and destination of a signed transfer */
+  const transferOf = (tx) => {
+    const p = parseTx(tx);
+    const data = tx.subarray(tx.length - 12);
+    return { to: p.keys[1], from: p.keys[0], lamports: Number(data.readBigUInt64LE(4)), program: p.keys[2] };
+  };
+
+  it('sends SOL home as a signed System Program transfer, keeping the fee reserve', async () => {
+    const r = rig({ balance: 1 });
+    const res = await r.t.send(HOME, 0.5);
+    expect(res.sol).toBe(0.5);
+    expect(transferOf(r.sentTx[0])).toEqual({ from: kp.address, to: HOME, lamports: 500_000_000, program: '11111111111111111111111111111111' });
+    await expect(rig({ balance: 0.5 }).t.send(HOME, 0.49)).rejects.toThrow(/kept for fees/);
+    const all = rig({ balance: 0.3 });
+    await all.t.send(HOME, 'all');
+    expect(transferOf(all.sentTx[0]).lamports).toBe(299_990_000);
+    await expect(rig().t.send(kp.address, 0.1)).rejects.toThrow(/swarm wallet itself/);
+    await expect(rig().t.send('not-an-address', 0.1)).rejects.toThrow();
+    // nothing leaves while a buy is in flight
+    await expect(rig({ flight: { sol: 0.1 } }).t.send(HOME, 0.1)).rejects.toThrow(/buy is in flight/);
+  });
+
+  it('sweeps profits home: only when on, only over the amount kept, at least the minimum', async () => {
+    expect(await rig({ balance: 5 }).t.sweep(HOME)).toBeNull();
+    expect(await rig({ balance: 1.03, limits: { sweepAboveSol: 1 } }).t.sweep(HOME)).toBeNull();
+    const r = rig({ balance: 1.5, limits: { sweepAboveSol: 1 } });
+    const res = await r.t.sweep(HOME);
+    expect(res.sol).toBeCloseTo(0.49999, 5);
+    expect(transferOf(r.sentTx[0])).toMatchObject({ to: HOME, lamports: 499_990_000 });
+    expect(MIN_SWEEP).toBe(0.05);
   });
 
   it('reads the tokens from the wallet when the RPC does not serve the transaction yet', async () => {

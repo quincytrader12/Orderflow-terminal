@@ -96,3 +96,36 @@ export function txSignature(signed) {
   const tx = parseTx(signed);
   return base58Encode(tx.buf.subarray(tx.sigStart, tx.sigStart + 64));
 }
+
+export const SYSTEM_PROGRAM = '11111111111111111111111111111111';
+
+/** A 32-byte public key from a base58 address, or an error. */
+export function pubkeyBytes(address) {
+  const b = base58Decode(String(address ?? ''));
+  if (b.length !== 32) throw new Error(`not a Solana address: ${address}`);
+  return b;
+}
+
+/**
+ * An unsigned legacy transaction moving `lamports` SOL from `from` to `to`
+ * (System Program transfer), with the fee paid by `from`.
+ */
+export function buildTransfer(from, to, lamports, blockhash) {
+  if (from === to) throw new Error('cannot send to the same wallet');
+  const amount = BigInt(lamports);
+  if (amount <= 0n) throw new Error('nothing to send');
+  const u64 = Buffer.alloc(8);
+  u64.writeBigUInt64LE(amount);
+  const data = Buffer.concat([Buffer.from([2, 0, 0, 0]), u64]); // instruction 2: transfer
+  const msg = Buffer.concat([
+    Buffer.from([1, 0, 1]), // one signer (the payer), the System Program read-only
+    Buffer.from([3]),
+    pubkeyBytes(from),
+    pubkeyBytes(to),
+    pubkeyBytes(SYSTEM_PROGRAM),
+    pubkeyBytes(blockhash),
+    Buffer.from([1, 2, 2, 0, 1, data.length]), // one instruction: program 2, accounts [0 → 1]
+    data,
+  ]);
+  return Buffer.concat([Buffer.from([1]), Buffer.alloc(64), msg]);
+}

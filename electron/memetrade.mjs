@@ -12,14 +12,18 @@
 // Hard limits live here, not in the window: a cap per buy, a cap on SOL spent
 // per day, and SOL kept back for fees. Nothing is bought unless the wallet
 // has been armed for live trading.
-import { signTx, txSignature } from './solana-tx.mjs';
+import { buildTransfer, pubkeyBytes, signTx, txSignature } from './solana-tx.mjs';
 
 export const SOL_MINT = 'So11111111111111111111111111111111111111112';
 export const JUP = 'https://lite-api.jup.ag/swap/v1';
 export const PUMPPORTAL_TRADE = 'https://pumpportal.fun/api/trade-local';
 const LAMPORTS = 1e9;
 
-export const LIMIT_DEFAULTS = { armed: false, maxBuySol: 0.1, dailySpendSol: 0.5, reserveSol: 0.02, slippageBps: 1500, priorityLamports: 300_000 };
+export const LIMIT_DEFAULTS = { armed: false, maxBuySol: 0.1, dailySpendSol: 0.5, reserveSol: 0.02, slippageBps: 1500, priorityLamports: 300_000, sweepAboveSol: 0 };
+/** a plain transfer's fee, 5000 lamports, with room to spare */
+const TRANSFER_FEE = 0.00001;
+/** profits are only sent home once there is at least this much over the amount kept */
+export const MIN_SWEEP = 0.05;
 
 export class MemeTrader {
   /**
@@ -112,6 +116,39 @@ export class MemeTrader {
       if (after) Object.assign(res, { tokenDelta: (after.raw - held.raw).toString(), decimals: after.decimals });
     }
     return res;
+  }
+
+  /**
+   * Send SOL from the swarm wallet to `to` (the owner's home wallet; main checks
+   * which address that may be). `sol` is an amount or 'all'. The fee reserve
+   * stays behind unless everything is sent; nothing is sent while a buy is in flight.
+   */
+  async send(to, sol) {
+    const kp = this.wallet();
+    pubkeyBytes(to);
+    if (to === kp.address) throw new Error('cannot send to the swarm wallet itself');
+    if (this.flight.sol > 0) throw new Error('a buy is in flight — try again in a moment');
+    const L = this.limits();
+    const bal = await this.solBalance();
+    const amount = sol === 'all' ? bal - TRANSFER_FEE : Number(sol);
+    if (!(amount > 0)) throw new Error('nothing to send');
+    const keep = sol === 'all' ? 0 : L.reserveSol;
+    if (bal - amount - TRANSFER_FEE < keep - 1e-9) throw new Error(`not enough SOL: ${bal.toFixed(4)} in the wallet, ${keep} kept for fees`);
+    const { value } = await this.rpc('getLatestBlockhash', [{ commitment: 'confirmed' }]);
+    const tx = buildTransfer(kp.address, to, Math.floor(amount * LAMPORTS), value.blockhash);
+    const res = await this.execute({ bytes: tx, via: 'transfer' }, null);
+    return { ...res, sol: amount };
+  }
+
+  /** Profits home: everything over `sweepAboveSol` (when on, and at least MIN_SWEEP), else null. */
+  async sweep(to) {
+    const L = this.limits();
+    if (!(L.sweepAboveSol > 0)) return null;
+    if (this.flight.sol > 0) return null;
+    const bal = await this.solBalance();
+    const amount = bal - Math.max(L.sweepAboveSol, L.reserveSol) - TRANSFER_FEE;
+    if (amount < MIN_SWEEP) return null;
+    return this.send(to, Math.floor(amount * 1e6) / 1e6);
   }
 
   /** The swap transaction, unsigned: Jupiter first, PumpPortal for what it cannot route. */
