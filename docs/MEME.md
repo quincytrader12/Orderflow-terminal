@@ -93,10 +93,20 @@ swarm has **a wallet of its own** (Meme Swarm → **Wallet**):
    confirm. From then on the Strategist's picks are bought, managed and sold
    with no approval clicks, also while the terminal is locked.
 
+**A private RPC** (strongly recommended for live trading): sign up at
+[helius.dev](https://www.helius.dev) (the free plan is enough to start), open
+your project and copy its **Mainnet RPC URL**
+(`https://mainnet.helius-rpc.com/?api-key=…`). In Novus Ordo: 🔌 **Connect →
+Solana RPC**, paste the whole URL, label it, **Save encrypted**. The first RPC
+you save is used straight away by the scanner's on-chain checks and every swarm
+trade; Meme Swarm → Wallet → **Solana RPC** shows which one is in use, switches
+between them, and **Test RPC** checks it answers (and how fast). The key stays in
+the vault; only the main process sees the URL.
+
 Each buy goes to Jupiter (which routes pump.fun curves and pools), with
 PumpPortal's transaction API as the fallback; it is signed in the main
-process, sent with preflight simulation through the Solana RPC (a Helius or
-QuickNode URL in the vault lands faster than the public one), confirmed, and
+process, sent with preflight simulation through the Solana RPC (the one chosen under
+Wallet), confirmed, and
 booked with the real SOL paid and tokens received from the confirmed
 transaction. Exits follow the same Manager rules; a failed sell is retried
 after 15 s. **Disarm** stops buying at once; open positions keep being

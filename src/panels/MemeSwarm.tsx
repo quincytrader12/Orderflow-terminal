@@ -1,11 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { fmtAgo, fmtTime, fmtUsd } from '../core/format';
-import { desktop } from '../desktop/bridge';
+import { desktop, type SecretRecord } from '../desktop/bridge';
+import { vault } from '../desktop/vault';
+import { useSettings } from '../store/settings';
 import { useMeme } from '../meme/scanner';
 import { multiple, pnlSol } from '../meme/swarm/book';
 import { calibrate } from '../meme/swarm/outcomes';
 import { swarm, useSwarm, type AgentId } from '../meme/swarm/swarm';
-import { Chip, Empty, NumberInput, Spacer, Toolbar, useTicker, type PanelProps } from '../ui/controls';
+import { Chip, Empty, NumberInput, Select, Spacer, Toolbar, useTicker, type PanelProps } from '../ui/controls';
 
 export interface MemeSwarmConfig {
   tab: 'live' | 'trades' | 'results' | 'rules' | 'wallet';
@@ -336,6 +338,16 @@ function Wallet() {
   const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
+  const rpcId = useSettings((s) => s.memeRpcSecretId);
+  const setSettings = useSettings((s) => s.set);
+  const [rpcs, setRpcs] = useState<SecretRecord[]>([]);
+  const [rpcTest, setRpcTest] = useState('');
+  useEffect(() => {
+    vault
+      .list()
+      .then((l) => setRpcs(l.filter((r) => r.kind === 'solana-rpc')))
+      .catch(() => undefined);
+  }, []);
   const run = async (what: string, f: () => Promise<unknown>) => {
     setBusy(what);
     setErr('');
@@ -375,6 +387,29 @@ function Wallet() {
               : 'Live, but not armed: picks are logged and nothing is bought until you arm the wallet below.'}
         </span>
       </div>
+
+      <div className="section-title">Solana RPC</div>
+      <div className="swarm-arm">
+        <Select value={rpcs.some((r) => r.id === rpcId) ? rpcId : ''} options={[{ value: '', label: 'Public RPC (slow, rate-limited)' }, ...rpcs.map((r) => ({ value: r.id, label: r.label }))]} onChange={(memeRpcSecretId) => setSettings({ memeRpcSecretId })} title="The RPC the scanner's on-chain checks and the swarm's trades go through" width={240} />
+        <button
+          className="chip"
+          disabled={!!busy}
+          onClick={async () => {
+            setRpcTest('testing…');
+            const t0 = performance.now();
+            try {
+              const slot = await desktop!.solana.rpc('getSlot', [{ commitment: 'confirmed' }], rpcId || undefined);
+              setRpcTest(`✓ working · slot ${Number(slot).toLocaleString('en-US')} · ${Math.round(performance.now() - t0)} ms`);
+            } catch (e) {
+              setRpcTest(`✗ ${String((e as Error)?.message ?? e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`);
+            }
+          }}
+        >
+          Test RPC
+        </button>
+        {rpcTest && <span className={`mono ${rpcTest.startsWith('✓') ? 'up' : rpcTest.startsWith('✗') ? 'down' : 'muted'}`}>{rpcTest}</span>}
+      </div>
+      <div className="muted swarm-note">{rpcs.length ? 'Used for the on-chain safety checks, balances and every live trade.' : 'Add a private RPC (Helius, QuickNode) in 🔌 Connect → Solana RPC: trades land faster and checks are not rate-limited.'}</div>
 
       <div className="section-title">Swarm wallet</div>
       {w ? (
@@ -451,7 +486,7 @@ function Wallet() {
       {busy && <div className="muted swarm-note">Working…</div>}
       {err && <div className="down swarm-note">{err}</div>}
       <div className="muted swarm-note">
-        Trades go through Jupiter (pump.fun coins included), with pump.fun's own API as the fallback, and are sent through the Solana RPC — a private RPC (Helius, QuickNode) set under Settings lands them faster. Most meme coins go to zero: only fund this wallet with what you can afford to lose.
+        Trades go through Jupiter (pump.fun coins included), with pump.fun's own API as the fallback, and are sent through the Solana RPC chosen above — a private one (Helius, QuickNode) lands them faster. Most meme coins go to zero: only fund this wallet with what you can afford to lose.
       </div>
     </div>
   );

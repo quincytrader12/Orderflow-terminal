@@ -445,7 +445,7 @@ function registerIpc() {
   });
 
   // meme scanner: read-only Solana RPC (the RPC url may hold an API key, so it stays here)
-  const READ_RPC = new Set(['getAccountInfo', 'getTokenLargestAccounts', 'getMultipleAccounts', 'getTokenSupply', 'getBalance', 'getSignaturesForAddress']);
+  const READ_RPC = new Set(['getAccountInfo', 'getTokenLargestAccounts', 'getMultipleAccounts', 'getTokenSupply', 'getBalance', 'getSignaturesForAddress', 'getSlot']);
   handle('solana:rpc', async (_e, method, params, rpcSecretId) => {
     if (!READ_RPC.has(method)) throw new Error(`RPC method not allowed: ${method}`);
     const url = httpsOnly((rpcSecretId ? vault.reveal(rpcSecretId).fields.url : DEFAULT_RPC) ?? DEFAULT_RPC);

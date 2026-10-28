@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { desktop, isDesktop, type CcxtExchangeInfo, type KeyTest, type SecretKind, type SecretRecord } from '../desktop/bridge';
 import { vault } from '../desktop/vault';
+import { getSettings } from '../store/settings';
 import { Modal } from './Modals';
 
 const KIND_LABEL: Record<SecretKind, string> = { exchange: 'Exchange (CCXT)', 'solana-rpc': 'Solana RPC', telegram: 'Telegram bot', api: 'Other API key' };
@@ -148,7 +149,7 @@ export const QUICK: Quick[] = [
     kind: 'solana-rpc',
     badge: 'SOL',
     url: 'https://solana.com/rpc',
-    steps: ['Any Solana RPC URL (Helius, QuickNode, Triton…). The public endpoint is heavily rate-limited.', 'Used by the Wallet panel for balances and recent activity.'],
+    steps: ['Any Solana RPC URL (Helius, QuickNode, Triton…). The public endpoint is heavily rate-limited.', 'For Helius: sign up at helius.dev, open your project, and copy the Mainnet RPC URL (https://mainnet.helius-rpc.com/?api-key=…). Paste the whole URL below.', 'The first one you save is used by the meme scanner and the swarm (on-chain checks, live trades); change it under Meme Swarm → Wallet. The Wallet panel picks its RPC in its toolbar.'],
   },
 ];
 
@@ -265,7 +266,10 @@ export function KeysModal({ onClose, onOpenPanel }: { onClose: () => void; onOpe
       }
       const id = await vault.save({ id: draft.id, kind: draft.kind, label: draft.label.trim() || KIND_LABEL[draft.kind], exchange: draft.kind === 'exchange' ? draft.exchange : null, fields });
       setDraft(null);
-      setMsg({ id, text: 'Saved and encrypted.', ok: true });
+      // the first Solana RPC saved becomes the one the meme scanner and the swarm use
+      const firstRpc = draft.kind === 'solana-rpc' && !getSettings().memeRpcSecretId;
+      if (firstRpc) getSettings().set({ memeRpcSecretId: id });
+      setMsg({ id, text: firstRpc ? 'Saved and encrypted. The meme scanner and the swarm now use this RPC.' : 'Saved and encrypted.', ok: true });
       setJustSaved(id);
       await reload();
     } catch (e) {
@@ -553,6 +557,8 @@ export function KeysModal({ onClose, onOpenPanel }: { onClose: () => void; onOpe
                 onClick={async () => {
                   if (!confirm(`Delete “${r.label}”? This cannot be undone.`)) return;
                   await vault.remove(r.id);
+                  // a deleted RPC cannot stay the swarm's: back to the public one
+                  if (getSettings().memeRpcSecretId === r.id) getSettings().set({ memeRpcSecretId: '' });
                   await reload();
                 }}
               >
