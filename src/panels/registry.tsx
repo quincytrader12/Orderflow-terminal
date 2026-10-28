@@ -49,7 +49,7 @@ export interface PanelDef {
 }
 
 export const PANELS: PanelDef[] = [
-  { id: 'memeswarm', title: 'Meme Swarm', category: 'Meme', component: MemeSwarm, defaults: { ...MEME_SWARM_DEFAULTS }, description: 'Five bots on the meme-coin chain: Scout finds coins, Sentinel rejects rugs, Herald scores virality, Strategist picks entries, Manager runs the trades (paper) — with hit rates by conviction.' },
+  { id: 'memeswarm', title: 'Meme Swarm', category: 'Meme', component: MemeSwarm, defaults: { ...MEME_SWARM_DEFAULTS }, description: 'Five bots on the meme-coin chain: Scout finds coins, Sentinel rejects rugs, Herald scores virality, Strategist picks entries, Manager runs the trades (paper, or live from the swarm wallet) — with hit rates by conviction.' },
   { id: 'memescan', title: 'Meme Scanner', category: 'Meme', component: MemeScanner, defaults: { ...MEME_SCANNER_DEFAULTS }, description: 'Live Solana meme coins: every pump.fun launch, coins near graduation, migrated and DexScreener-listed coins — heat, flow, room to your target and rug flags.' },
   { id: 'memetoken', title: 'Meme Token', category: 'Meme', component: MemeToken, defaults: { ...MEME_TOKEN_DEFAULTS }, description: 'One meme coin: bonding curve, market cap, on-chain safety checks, buy/sell flow, creator activity, live trades and chart.' },
   { id: 'footprint', title: 'Footprint Chart', category: 'Charts', component: FootprintChart, defaults: { ...FOOTPRINT_DEFAULTS }, description: 'Bid×ask clusters, delta, imbalances, POC, heatmap/CVD/VP/bubble overlays, time/tick/volume/range bars.' },

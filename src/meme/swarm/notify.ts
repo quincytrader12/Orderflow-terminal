@@ -60,10 +60,11 @@ export async function coinCard(tok: MemeToken, p: Position | null, headline: str
     ctx.roundRect(L, 18, 56, 56, 12);
     ctx.fill();
     ctx.fillStyle = pal.text;
-    ctx.font = font(20, 800, false);
+    const initials = tok.symbol.slice(0, 3).toUpperCase();
+    ctx.font = font(initials.length > 2 ? 16 : 20, 800, false);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(tok.symbol.slice(0, 3).toUpperCase(), L + 28, 46);
+    ctx.fillText(initials, L + 28, 46);
   }
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
@@ -100,7 +101,8 @@ export async function coinCard(tok: MemeToken, p: Position | null, headline: str
       hi = Math.max(hi, v(x.mcapSol));
     }
     const pad = (hi - lo) * 0.08 || hi * 0.05 || 1;
-    lo -= pad;
+    // a market cap is never below zero: no negative axis labels from the padding
+    lo = Math.max(0, lo - pad);
     hi += pad;
     const X = (t: number) => L + ((t - t0) / (t1 - t0)) * (right - L);
     const Y = (val: number) => bottom - ((val - lo) / (hi - lo)) * (bottom - top);
@@ -140,14 +142,20 @@ export async function coinCard(tok: MemeToken, p: Position | null, headline: str
       ctx.font = font(12, 700);
       ctx.textAlign = 'left';
       ctx.textBaseline = 'bottom';
-      ctx.fillText('BUY', X(p.openedAt) + 9, Y(v(e.mcapSol)) - 6);
+      // labels flip to the left of their marker near the right edge, clear of the axis
+      const tag = (text: string, x: number, y: number) => {
+        const flip = x > right - 110;
+        ctx.textAlign = flip ? 'right' : 'left';
+        ctx.fillText(text, flip ? x - 10 : x + 9, y - 6);
+      };
+      tag('BUY', X(p.openedAt), Y(v(e.mcapSol)));
       for (const f of p.fills.filter((f) => f.side === 'sell')) {
         const s = near(f.t);
         ctx.fillStyle = f.mult >= 1 ? pal.buy : pal.sell;
         ctx.beginPath();
         ctx.arc(X(f.t), Y(v(s.mcapSol)), 6, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillText(`SELL ${f.mult.toFixed(1)}×`, X(f.t) + 8, Y(v(s.mcapSol)) - 6);
+        tag(`SELL ${f.mult.toFixed(1)}×`, X(f.t), Y(v(s.mcapSol)));
       }
     }
     ctx.fillStyle = pal.muted;

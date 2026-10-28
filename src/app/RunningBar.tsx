@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { fmtPrice } from '../core/format';
 import { desktop } from '../desktop/bridge';
 import { hub } from '../market/hub';
+import { useSwarm } from '../meme/swarm/swarm';
 import { useTicker } from '../ui/controls';
 import { useLock } from './lock';
 
@@ -16,7 +17,7 @@ const ago = (ms: number) => {
 /**
  * Top-left of the lock screen after the terminal has been locked: proof it is
  * still running — a live activity bar, how long it has been locked and why,
- * the market feed and the bots still working underneath.
+ * the market feed, the bots and the meme swarm still working underneath.
  */
 export function RunningBar() {
   useTicker(1000);
@@ -34,6 +35,9 @@ export function RunningBar() {
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
   }, []);
+  const swarmOn = useSwarm((s) => s.enabled);
+  const swarmLive = useSwarm((s) => s.mode === 'live' && Boolean(s.wallet?.limits.armed));
+  const swarmOpen = useSwarm((s) => s.positions.filter((p) => !p.closedAt).length);
   const f = hub().primary;
   const live = f.status.state === 'open';
   const price = f.lastPrice();
@@ -55,9 +59,13 @@ export function RunningBar() {
       {bots && (
         <div className="rb-line">
           <span className={bots.running ? 'rb-ok' : 'rb-idle'}>{bots.running ? '● ' : '○ '}</span>
-          {bots.running ? `${bots.running} AMT bot${bots.running > 1 ? 's' : ''} running${bots.live ? ` (${bots.live} live)` : ''}` : 'No bots running'}
+          {bots.running ? `${bots.running} AMT bot${bots.running > 1 ? 's' : ''} running${bots.live ? ` (${bots.live} live)` : ''}` : 'No AMT bots running'}
         </div>
       )}
+      <div className="rb-line">
+        <span className={swarmOn ? 'rb-ok' : 'rb-idle'}>{swarmOn ? '● ' : '○ '}</span>
+        {swarmOn ? `Meme swarm ${swarmLive ? 'LIVE · armed' : 'on · paper'} · ${swarmOpen} open` : 'Meme swarm off'}
+      </div>
     </div>
   );
 }
