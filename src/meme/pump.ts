@@ -33,6 +33,23 @@ export function multipleToGraduate(mcapSol: number): number {
   return mcapSol > 0 ? Math.max(1, PUMP_MCAP_SOL_END / mcapSol) : NaN;
 }
 
+/**
+ * Trading fee on the curve, both ways (protocol + creator fee). An estimate on
+ * the safe side: paper fills should cost at least what real ones do.
+ */
+export const PUMP_FEE = 0.0125;
+
+/** Tokens out for `solIn` SOL on the curve (constant product, fee taken from the SOL). */
+export function curveBuyTokens(vSol: number, vTokens: number, solIn: number, fee = PUMP_FEE): number {
+  const sol = solIn * (1 - fee);
+  return vTokens - (vSol * vTokens) / (vSol + sol);
+}
+
+/** SOL out for selling `tokensIn` on the curve, after the fee. */
+export function curveSellSol(vSol: number, vTokens: number, tokensIn: number, fee = PUMP_FEE): number {
+  return (vSol - (vSol * vTokens) / (vTokens + tokensIn)) * (1 - fee);
+}
+
 export const PUMPPORTAL_WS = 'wss://pumpportal.fun/api/data';
 
 export interface PumpCreate {

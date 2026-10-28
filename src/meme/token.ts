@@ -71,6 +71,8 @@ export interface MemeToken {
   lastTradeAt: number;
   dex?: DexInfo;
   safety?: Safety;
+  /** the coin's metadata file (pump.fun uri): socials the creator linked */
+  meta?: { twitter?: string; telegram?: string; website?: string; description?: string; fetchedAt: number; error?: string };
   /** curve progress five minutes ago, for its speed */
   progressMarks: { t: number; p: number }[];
 }

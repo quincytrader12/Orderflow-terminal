@@ -61,6 +61,20 @@ class Scanner {
   private safetyQueue: string[] = [];
   private checking = false;
   private listings = new Map<string, DexListing>();
+  /** coins the swarm holds or is following: never dropped */
+  private pinned = new Set<string>();
+
+  pin(mint: string, on = true) {
+    if (on) {
+      this.pinned.add(mint);
+      this.follow(mint);
+    } else this.pinned.delete(mint);
+  }
+
+  /** Ask for an on-chain check (queued; one at a time). */
+  check(mint: string) {
+    this.queueSafety(mint);
+  }
 
   /** Panels call this on mount; the scanner runs while any is open. */
   use() {
@@ -165,7 +179,7 @@ class Scanner {
     let worst: string | null = null;
     let low = Infinity;
     for (const m of this.followed) {
-      if (m === selected) continue;
+      if (m === selected || this.pinned.has(m)) continue;
       const tok = tokens[m];
       const h = tok ? assess(tok, now, solUsd).heat - (now - tok.lastTradeAt) / 60_000 : -Infinity;
       if (h < low) {
@@ -222,7 +236,7 @@ class Scanner {
     const quiet: string[] = [];
     for (const m of this.followed) {
       const tok = st.tokens[m];
-      if (!tok || (m !== st.selected && now - tok.lastTradeAt > 10 * 60_000)) quiet.push(m);
+      if (!tok || (m !== st.selected && !this.pinned.has(m) && now - tok.lastTradeAt > 10 * 60_000)) quiet.push(m);
     }
     this.unfollow(quiet);
     const all = Object.values(st.tokens);
@@ -230,7 +244,7 @@ class Scanner {
     // memory: drop the oldest quiet coins beyond the cap
     if (all.length > MAX_TOKENS) {
       const drop = all
-        .filter((t) => t.mint !== st.selected && !this.followed.has(t.mint))
+        .filter((t) => t.mint !== st.selected && !this.followed.has(t.mint) && !this.pinned.has(t.mint))
         .sort((a, b) => a.lastTradeAt - b.lastTradeAt)
         .slice(0, all.length - MAX_TOKENS);
       for (const t of drop) delete st.tokens[t.mint];

@@ -3070,3 +3070,127 @@ table.amt-train tr.best td {
   margin: 10px 0;
   font-size: 11px;
 }
+
+/* ---------- meme swarm ---------- */
+.swarm-power {
+  font-weight: 700;
+}
+.swarm-power.on {
+  color: var(--bg);
+  background: var(--buy);
+  border-color: var(--buy);
+}
+.swarm-agents {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--gap);
+  padding: var(--gap);
+}
+.swarm-agent {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font-size: 11px;
+  background: var(--tabbar);
+}
+.swarm-agent-name {
+  font-weight: 700;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.swarm-agent-line {
+  margin-top: 3px;
+  font-size: 10px;
+}
+.swarm-pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.swarm-agent.on .swarm-pulse {
+  background: var(--buy);
+  box-shadow: 0 0 6px var(--buy);
+  animation: swarm-pulse 1.6s ease-in-out infinite;
+}
+@keyframes swarm-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.swarm-body {
+  padding: 0 var(--gap) var(--gap);
+}
+.swarm-narratives {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 4px 0;
+  font-size: 11px;
+}
+.swarm-rejects,
+.swarm-note {
+  font-size: 11px;
+  margin: 6px 0;
+}
+.swarm-note a {
+  color: var(--accent);
+  cursor: pointer;
+}
+.swarm-reads tr,
+.swarm-trades tr {
+  cursor: pointer;
+}
+.swarm-reads tr.pick {
+  background: rgba(52, 209, 165, 0.08);
+}
+table.grid.swarm-reads td,
+table.grid.swarm-reads th,
+table.grid.swarm-trades td,
+table.grid.swarm-trades th,
+table.grid.swarm-results td,
+table.grid.swarm-results th,
+table.grid.meme-table td,
+table.grid.meme-table th,
+table.grid.meme-tape td {
+  text-align: left;
+}
+.swarm-why {
+  max-width: 420px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+}
+.swarm-log {
+  font-size: 11px;
+}
+.swarm-logline {
+  padding: 2px 0;
+  border-bottom: 1px solid var(--row-line);
+  cursor: pointer;
+}
+.swarm-logline.a-sentinel b {
+  color: var(--warn);
+}
+.swarm-logline.a-herald b {
+  color: var(--accent);
+}
+.swarm-logline.a-strategist b,
+.swarm-logline.a-manager b {
+  color: var(--buy);
+}
+.swarm-rules {
+  max-width: 760px;
+}
+.swarm-rule {
+  display: grid;
+  grid-template-columns: 140px auto 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 12px;
+}
