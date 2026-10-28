@@ -1,6 +1,6 @@
 import { createPublicKey, verify } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { LIMIT_DEFAULTS, MemeTrader, MIN_SWEEP, SOL_MINT } from './memetrade.mjs';
+import { LIMIT_DEFAULTS, MemeTrader, MIN_SWEEP, rpcWithFallback, SOL_MINT } from './memetrade.mjs';
 import { base58Decode, base58Encode } from './phantom.mjs';
 import { exportSecret, keypairFromSeed, newKeypair, parseSecret, parseTx, signTx, txSignature } from './solana-tx.mjs';
 
@@ -201,5 +201,27 @@ describe('the executor', () => {
   it('reads the tokens from the wallet when the RPC does not serve the transaction yet', async () => {
     const r = await rig({ noTx: true, grow: 3_500_000_000 }).t.buy(MINT, 0.1);
     expect(r).toMatchObject({ tokenDelta: '3500000000', decimals: 6, solDelta: null });
+  });
+});
+
+describe('the RPC fallback', () => {
+  it('uses the public RPC when your own refuses or cannot be reached, but not for a real error answer', async () => {
+    const used = [];
+    const refuse = async (m) => {
+      used.push(`own:${m}`);
+      throw Object.assign(new Error('RPC 429 Too Many Requests'), { transport: true });
+    };
+    const pub = async (m) => (used.push(`public:${m}`), 'ok');
+    const notes = [];
+    expect(await rpcWithFallback(refuse, pub, (e, m) => notes.push(m))('getBalance', [])).toBe('ok');
+    expect(used).toEqual(['own:getBalance', 'public:getBalance']);
+    expect(notes).toEqual(['getBalance']);
+    // the node answered with an error (a failed simulation): that is the answer
+    const simFail = async () => {
+      throw new Error('Transaction simulation failed: slippage');
+    };
+    await expect(rpcWithFallback(simFail, pub)('sendTransaction', [])).rejects.toThrow(/simulation failed/);
+    // no fallback configured
+    await expect(rpcWithFallback(refuse, null)('getSlot', [])).rejects.toThrow(/429/);
   });
 });

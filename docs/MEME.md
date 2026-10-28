@@ -127,6 +127,11 @@ trade; Meme Swarm → Wallet → **Solana RPC** shows which one is in use, switc
 between them, and **Test RPC** checks it answers (and how fast). The key stays in
 the vault; only the main process sees the URL.
 
+Helius's free plan has a monthly allowance of requests. The scanner's safety
+checks run all day, so they go to the public RPC first and only use yours when
+the public one refuses; trades and the wallet use yours first, and the public
+RPC steps in if yours refuses (allowance used up, an outage).
+
 Each buy goes to Jupiter (which routes pump.fun curves and pools), with
 PumpPortal's transaction API as the fallback; it is signed in the main
 process, sent with preflight simulation through the Solana RPC (the one chosen under

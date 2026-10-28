@@ -424,7 +424,7 @@ function Wallet() {
         </button>
         {rpcTest && <span className={`mono ${rpcTest.startsWith('✓') ? 'up' : rpcTest.startsWith('✗') ? 'down' : 'muted'}`}>{rpcTest}</span>}
       </div>
-      <div className="muted swarm-note">{rpcs.length ? 'Used for the on-chain safety checks, balances and every live trade.' : 'Add a private RPC (Helius, QuickNode) in 🔌 Connect → Solana RPC: trades land faster and checks are not rate-limited.'}</div>
+      <div className="muted swarm-note">{rpcs.length ? 'Used for the wallet and every live trade (the public RPC steps in if it refuses). The scanner’s all-day safety checks try the public RPC first, so a free plan’s monthly credits go to your trades.' : 'Add a private RPC in 🔌 Connect → Solana RPC — Helius has a free plan (helius.dev): trades land faster and more reliably than on the public RPC.'}</div>
 
       <div className="section-title">Swarm wallet</div>
       {w ? (

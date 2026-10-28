@@ -49,8 +49,21 @@ const MAX_TOKENS = 400;
 
 const get = (url: string) => fetchJson(url);
 
+/**
+ * The scanner's on-chain checks run all day (one or two requests a second), so
+ * they go to the public RPC first and save a private RPC's monthly credits for
+ * trades; the private one answers when the public one refuses.
+ */
 const rpc: Rpc = async (method, params) => {
-  if (desktop) return desktop.solana.rpc(method, params, getSettings().memeRpcSecretId || undefined);
+  if (desktop) {
+    const own = getSettings().memeRpcSecretId || undefined;
+    try {
+      return await desktop.solana.rpc(method, params, undefined);
+    } catch (e) {
+      if (!own) throw e;
+      return desktop.solana.rpc(method, params, own);
+    }
+  }
   const res = await fetch(DEFAULT_RPC, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
   if (!res.ok) throw new Error(`RPC ${res.status}`);
   const j = await res.json();

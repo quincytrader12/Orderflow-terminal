@@ -25,6 +25,25 @@ const TRANSFER_FEE = 0.00001;
 /** profits are only sent home once there is at least this much over the amount kept */
 export const MIN_SWEEP = 0.05;
 
+/**
+ * An RPC that goes to `primary` and, when it cannot be reached or refuses
+ * (rate limit, credits used up, server error: errors marked `transport`), to
+ * `fallback`. A JSON-RPC error from the node itself (a failed simulation, say)
+ * is a real answer and is not retried. Resending a signed transaction is safe:
+ * it has the same signature, so it can only land once.
+ */
+export function rpcWithFallback(primary, fallback, onFallback = () => {}) {
+  return async (method, params) => {
+    try {
+      return await primary(method, params);
+    } catch (e) {
+      if (!fallback || !e?.transport) throw e;
+      onFallback(e, method);
+      return fallback(method, params);
+    }
+  };
+}
+
 export class MemeTrader {
   /**
    * @param o.wallet () => keypair (from solana-tx.mjs), or throws when there is none

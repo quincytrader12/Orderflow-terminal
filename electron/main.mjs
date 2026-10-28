@@ -12,7 +12,7 @@ import { reportData } from './reports.mjs';
 import { AttemptGate, isLedgerRecord, ledgerMatches, makeLedger, PUBLIC_CHANNELS } from '../src/shared/ledger.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { Vault } from './vault.mjs';
-import { LIMIT_DEFAULTS, MemeTrader, MIN_SWEEP } from './memetrade.mjs';
+import { LIMIT_DEFAULTS, MemeTrader, MIN_SWEEP, rpcWithFallback } from './memetrade.mjs';
 import { exportSecret, newKeypair, parseSecret } from './solana-tx.mjs';
 import { Worker } from 'node:worker_threads';
 import { initLog, log, logFile } from './log.mjs';
@@ -465,19 +465,34 @@ function registerIpc() {
   // meme swarm: its own trading wallet. The key lives in the vault and never
   // leaves this process; trades need the wallet armed, and stay inside the
   // limits kept here (per trade, per day, SOL kept for fees).
-  const swarmRpc = (rpcSecretId) => async (method, params) => {
-    const url = httpsOnly((rpcSecretId ? vault.reveal(rpcSecretId).fields.url : DEFAULT_RPC) ?? DEFAULT_RPC);
+  /** JSON-RPC to one URL; failures to reach it, or refusals, are marked `transport` */
+  const rpcAt = (url) => async (method, params) => {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 30_000);
+    let res;
     try {
-      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }), signal: ctrl.signal });
-      if (!res.ok) throw new Error(`RPC ${res.status} ${res.statusText}`);
+      res = await fetch(httpsOnly(url), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }), signal: ctrl.signal });
+      if (!res.ok) throw Object.assign(new Error(`RPC ${res.status} ${res.statusText}`), { transport: true });
       const j = await res.json();
       if (j.error) throw new Error(j.error.message ?? 'RPC error');
       return j.result;
+    } catch (e) {
+      if (!res) e.transport = true; // never reached it
+      throw e;
     } finally {
       clearTimeout(t);
     }
+  };
+  let lastFallbackLog = 0;
+  // the private RPC first (Helius, QuickNode…); when it refuses or cannot be reached, the public one
+  const swarmRpc = (rpcSecretId) => {
+    const own = rpcSecretId ? vault.reveal(rpcSecretId).fields.url : null;
+    if (!own) return rpcAt(DEFAULT_RPC);
+    return rpcWithFallback(rpcAt(own), rpcAt(DEFAULT_RPC), (e, method) => {
+      if (Date.now() - lastFallbackLog < 60_000) return;
+      lastFallbackLog = Date.now();
+      log('warn', `swarm: your RPC refused ${method} (${e.message}) — using the public RPC meanwhile`);
+    });
   };
   const swarmWalletId = () => db.get('swarmWallet') ?? null;
   const swarmKeypair = () => {
