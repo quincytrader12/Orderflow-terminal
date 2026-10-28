@@ -27,10 +27,13 @@ export class MemeTrader {
    * @param o.rpc (method, params) => result
    * @param o.http (url, init) => Response-like ({ ok, status, json(), arrayBuffer() })
    * @param o.limits () => current limits; o.spent / o.addSpend: today's SOL spent
+   * @param o.flight { sol }: buys in flight, shared by every trader on the wallet
    * @param o.sleep ms => Promise (tests pass a fast one)
    */
-  constructor({ wallet, rpc, http, limits, spent, addSpend, now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = () => {} }) {
-    Object.assign(this, { wallet, rpc, http, limits, spent, addSpend, now, sleep, log });
+  constructor({ wallet, rpc, http, limits, spent, addSpend, flight = { sol: 0 }, now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = () => {} }) {
+    // flight: SOL of buys in flight, shared by every trader on the wallet. It counts against
+    // the caps until the buys settle, so buys at the same moment cannot overspend.
+    Object.assign(this, { wallet, rpc, http, limits, spent, addSpend, flight, now, sleep, log });
   }
 
   async solBalance() {
@@ -54,19 +57,41 @@ export class MemeTrader {
     return { raw, decimals };
   }
 
-  /** Buy `sol` SOL of `mint`. */
+  /**
+   * Buy `sol` SOL of `mint`. The spend counts against the daily cap from the
+   * moment the transaction is sent; it is given back only when the chain
+   * rejects it (a transaction that is merely slow to confirm may still land).
+   */
   async buy(mint, sol) {
     const L = this.limits();
     if (!L.armed) throw new Error('live trading is not armed');
     if (!(sol > 0) || sol > L.maxBuySol + 1e-9) throw new Error(`buy of ${sol} SOL is over the ${L.maxBuySol} SOL cap per trade`);
-    if (this.spent() + sol > L.dailySpendSol + 1e-9) throw new Error(`daily spend cap reached (${L.dailySpendSol} SOL)`);
-    const bal = await this.solBalance();
-    if (bal - sol < L.reserveSol) throw new Error(`not enough SOL: ${bal.toFixed(4)} in the wallet, ${L.reserveSol} kept for fees`);
-    const lamports = Math.floor(sol * LAMPORTS);
-    const tx = await this.build({ side: 'buy', mint, amount: String(lamports), sol });
-    const res = await this.execute(tx, mint);
-    this.addSpend(sol);
-    return res;
+    if (this.spent() + this.flight.sol + sol > L.dailySpendSol + 1e-9) throw new Error(`daily spend cap reached (${L.dailySpendSol} SOL)`);
+    this.flight.sol += sol;
+    let sent = false;
+    try {
+      const bal = await this.solBalance();
+      // other buys in flight have not left the wallet yet: keep their SOL aside too
+      if (bal - (this.flight.sol - sol) - sol < L.reserveSol) throw new Error(`not enough SOL: ${bal.toFixed(4)} in the wallet, ${L.reserveSol} kept for fees`);
+      const before = await this.tokenBalance(mint).catch(() => null);
+      const lamports = Math.floor(sol * LAMPORTS);
+      const tx = await this.build({ side: 'buy', mint, amount: String(lamports), sol });
+      const res = await this.execute(tx, mint, () => {
+        sent = true;
+        this.addSpend(sol);
+      });
+      // the RPC did not report the amounts: read them from the wallet instead
+      if (res.tokenDelta === null && before) {
+        const after = await this.tokenBalance(mint).catch(() => null);
+        if (after) Object.assign(res, { tokenDelta: (after.raw - before.raw).toString(), decimals: after.decimals });
+      }
+      return res;
+    } catch (e) {
+      if (sent && /failed on chain/.test(String(e?.message))) this.addSpend(-sol);
+      throw e;
+    } finally {
+      this.flight.sol -= sol;
+    }
   }
 
   /**
@@ -80,7 +105,13 @@ export class MemeTrader {
     if (amount > held.raw) amount = held.raw;
     if (amount <= 0n) throw new Error('no tokens to sell');
     const tx = await this.build({ side: 'sell', mint, amount: amount.toString(), share: held.raw > 0n ? Number(amount) / Number(held.raw) : 1 });
-    return this.execute(tx, mint);
+    const res = await this.execute(tx, mint);
+    // the RPC did not report the amounts: read the tokens from the wallet instead
+    if (res.tokenDelta === null) {
+      const after = await this.tokenBalance(mint).catch(() => null);
+      if (after) Object.assign(res, { tokenDelta: (after.raw - held.raw).toString(), decimals: after.decimals });
+    }
+    return res;
   }
 
   /** The swap transaction, unsigned: Jupiter first, PumpPortal for what it cannot route. */
@@ -129,11 +160,12 @@ export class MemeTrader {
   }
 
   /** Sign, send (with preflight simulation), confirm, and read back what really happened. */
-  async execute({ bytes, via }, mint) {
+  async execute({ bytes, via }, mint, onSent = () => {}) {
     const kp = this.wallet();
     const signed = signTx(bytes, kp);
     const signature = txSignature(signed);
     await this.rpc('sendTransaction', [signed.toString('base64'), { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 3 }]);
+    onSent();
     const t0 = this.now();
     for (;;) {
       await this.sleep(1000);
@@ -150,7 +182,8 @@ export class MemeTrader {
   async settle(signature, mint) {
     const kp = this.wallet();
     let tx = null;
-    for (let i = 0; i < 5 && !tx; i++) {
+    // public RPCs can take a while to serve a fresh transaction
+    for (let i = 0; i < 12 && !tx; i++) {
       tx = await this.rpc('getTransaction', [signature, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0, commitment: 'confirmed' }]).catch(() => null);
       if (!tx) await this.sleep(1000);
     }

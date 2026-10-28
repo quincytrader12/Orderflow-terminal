@@ -827,6 +827,8 @@ export class Core3D {
     this.glow.dispose();
     this.composer.dispose();
     this.renderer.dispose();
+    // give the GPU context back now: the browser keeps only a handful, and the view can be opened and closed many times
+    this.renderer.forceContextLoss();
     this.host.replaceChildren();
   }
 }

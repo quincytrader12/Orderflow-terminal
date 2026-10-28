@@ -156,8 +156,11 @@ const handlers = {
         const rows = [...levels('bitfinex', 'bid', 100).map(([p, q]) => [Number(p), 2, Number(q)]), ...levels('bitfinex', 'ask', 100).map(([p, q]) => [Number(p), 2, -Number(q)])];
         ws.send(JSON.stringify([12, rows]));
         every(200, () => {
+          // both sides, as the real feed does (bids alone would cross the stale asks as the price drifts)
           const [p, q] = levels('bitfinex', 'bid', 1)[0];
           ws.send(JSON.stringify([12, [Number(p), 1, Number(q)]]));
+          const [pa, qa] = levels('bitfinex', 'ask', 1)[0];
+          ws.send(JSON.stringify([12, [Number(pa), 1, -Number(qa)]]));
           const amt = rnd(-1, 1);
           ws.send(JSON.stringify([11, 'te', [Date.now(), Date.now(), amt, Number(px('bitfinex'))]]));
         }, timers);

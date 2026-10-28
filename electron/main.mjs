@@ -486,13 +486,19 @@ function registerIpc() {
     return parseSecret(vault.reveal(id).fields.secret);
   };
   const swarmLimits = () => ({ ...LIMIT_DEFAULTS, ...(db.get('swarmLimits') ?? {}) });
-  const today = () => new Date().toISOString().slice(0, 10);
+  // the local calendar day, like the swarm's daily loss limit
+  const today = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
   const swarmSpent = () => {
     const s = db.get('swarmSpent');
     return s?.day === today() ? Number(s.sol) || 0 : 0;
   };
+  const swarmFlight = { sol: 0 };
   const trader = (rpcSecretId) =>
     new MemeTrader({
+      flight: swarmFlight,
       wallet: swarmKeypair,
       rpc: swarmRpc(rpcSecretId),
       http: (url, init) => fetch(httpsOnly(url), init),

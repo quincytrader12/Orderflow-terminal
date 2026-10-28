@@ -58,15 +58,20 @@ describe('the executor', () => {
   function rig(over = {}) {
     const calls = [];
     let spent = 0;
+    let held = 5_000_000 - (over.grow ?? 0);
+    let clock = 0;
     const limits = { ...LIMIT_DEFAULTS, armed: true, ...over.limits };
     const rpc = async (method, params) => {
       calls.push(method);
       if (method === 'getBalance') return { value: (over.balance ?? 1) * 1e9 };
       if (method === 'sendTransaction') return txSignature(Buffer.from(params[0], 'base64'));
-      if (method === 'getSignatureStatuses') return { value: [{ confirmationStatus: 'confirmed', err: over.chainErr ?? null }] };
-      if (method === 'getTokenAccountsByOwner') return { value: [{ account: { data: { parsed: { info: { tokenAmount: { amount: '5000000', decimals: 6 } } } } } }] };
+      if (method === 'getSignatureStatuses') return { value: [over.slow ? null : { confirmationStatus: 'confirmed', err: over.chainErr ?? null }] };
+      if (method === 'getTokenAccountsByOwner') {
+        held += over.grow ?? 0;
+        return { value: [{ account: { data: { parsed: { info: { tokenAmount: { amount: String(held), decimals: 6 } } } } } }] };
+      }
       if (method === 'getTransaction')
-        return {
+        return over.noTx ? null : {
           transaction: { message: { accountKeys: [{ pubkey: kp.address }, { pubkey: 'Other' }] } },
           meta: { preBalances: [1e9, 0], postBalances: [0.9 * 1e9 - 5000, 0], preTokenBalances: [], postTokenBalances: [{ owner: kp.address, mint: MINT, uiTokenAmount: { amount: '3500000000', decimals: 6 } }] },
         };
@@ -86,7 +91,7 @@ describe('the executor', () => {
       }
       throw new Error(url);
     };
-    const t = new MemeTrader({ wallet: () => kp, rpc, http, limits: () => limits, spent: () => spent, addSpend: (s) => (spent += s), sleep: async () => {} });
+    const t = new MemeTrader({ wallet: () => kp, rpc, http, limits: () => limits, spent: () => spent, addSpend: (s) => (spent += s), flight: over.flight, now: () => (clock += 5_000), sleep: async () => {} });
     return { t, calls, spentNow: () => spent };
   }
 
@@ -95,7 +100,7 @@ describe('the executor', () => {
     const r = await t.buy(MINT, 0.1);
     expect(r).toMatchObject({ via: 'Jupiter', tokenDelta: '3500000000', decimals: 6 });
     expect(r.solDelta).toBeCloseTo(-0.100005, 9);
-    expect(calls).toEqual(['getBalance', `${'https://lite-api.jup.ag/swap/v1'}/quote`, 'https://lite-api.jup.ag/swap/v1/swap', 'sendTransaction', 'getSignatureStatuses', 'getTransaction']);
+    expect(calls).toEqual(['getBalance', 'getTokenAccountsByOwner', `${'https://lite-api.jup.ag/swap/v1'}/quote`, 'https://lite-api.jup.ag/swap/v1/swap', 'sendTransaction', 'getSignatureStatuses', 'getTransaction']);
     expect(spentNow()).toBe(0.1);
   });
 
@@ -118,5 +123,29 @@ describe('the executor', () => {
     await expect(rig({ balance: 0.11 }).t.buy(MINT, 0.1)).rejects.toThrow(/not enough SOL: 0\.1100 in the wallet, 0\.02 kept for fees/);
     await expect(rig({ chainErr: { InstructionError: [2, { Custom: 6001 }] } }).t.buy(MINT, 0.1)).rejects.toThrow(/transaction failed on chain/);
     expect(SOL_MINT).toMatch(/^So1/);
+  });
+
+  it('counts buys in flight against the daily cap, so two at once cannot overspend', async () => {
+    const flight = { sol: 0 };
+    const a = rig({ flight, limits: { dailySpendSol: 0.15 } });
+    const b = rig({ flight, limits: { dailySpendSol: 0.15 } });
+    const results = await Promise.allSettled([a.t.buy(MINT, 0.1), b.t.buy(MINT, 0.1)]);
+    expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(results.find((r) => r.status === 'rejected').reason.message).toMatch(/daily spend cap reached/);
+    expect(flight.sol).toBe(0);
+  });
+
+  it('keeps a slow buy on the daily count (it may still land) and gives back one the chain rejected', async () => {
+    const slow = rig({ slow: true });
+    await expect(slow.t.buy(MINT, 0.1)).rejects.toThrow(/not confirmed within 60 s/);
+    expect(slow.spentNow()).toBe(0.1);
+    const failed = rig({ chainErr: { InstructionError: [0, 'Custom'] } });
+    await expect(failed.t.buy(MINT, 0.1)).rejects.toThrow(/failed on chain/);
+    expect(failed.spentNow()).toBe(0);
+  });
+
+  it('reads the tokens from the wallet when the RPC does not serve the transaction yet', async () => {
+    const r = await rig({ noTx: true, grow: 3_500_000_000 }).t.buy(MINT, 0.1);
+    expect(r).toMatchObject({ tokenDelta: '3500000000', decimals: 6, solDelta: null });
   });
 });

@@ -13,7 +13,7 @@ const fake = vi.hoisted(() => ({
 }));
 vi.mock('../../desktop/bridge', () => ({ desktop: { swarm: fake } }));
 
-const { swarm, useSwarm } = await import('./swarm');
+const { mergeSwarm, swarm, useSwarm } = await import('./swarm');
 
 const LIMITS: SwarmLimits = { armed: true, maxBuySol: 0.05, dailySpendSol: 0.5, reserveSol: 0.02, slippageBps: 1500, priorityLamports: 300_000 };
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -98,6 +98,56 @@ describe('the swarm, trading live', () => {
     expect(r.closedAt).toBeUndefined();
     expect(r.milestones).toEqual([2]);
     expect(useSwarm.getState().log.map((l) => l.text)).toEqual(expect.arrayContaining([expect.stringMatching(/sold live — 0\.0540 SOL back — take profit at 2×/), expect.stringMatching(/: 2× — position worth/)]));
+  });
+});
+
+describe('the swarm, live, when things go wrong', () => {
+  const held = (tok: ReturnType<typeof setup>['tok'], now: number, over: Partial<Position> = {}): Position => {
+    const px = markPrice(tok, 150);
+    return { id: 'live-2', mint: tok.mint, symbol: tok.symbol, openedAt: now - 60_000, costSol: 0.05, entryPx: px / 2.2, tokens: 1000, left: 1000, realizedSol: 0, peakMult: 1, peakAt: now - 60_000, tpDone: 0, fills: [], why: 'test', conviction: 80, live: { rawLeft: '1000000000', decimals: 6, buyTx: 'BuyTx' }, ...over };
+  };
+  beforeEach(() => {
+    fake.buy.mockReset();
+    fake.sell.mockReset();
+  });
+
+  it('books a sale the RPC did not report at the share asked for and the price now', async () => {
+    const { tok, now } = setup();
+    useSwarm.setState({ positions: [held(tok, now)], wallet: { ...useSwarm.getState().wallet!, limits: { ...LIMITS, maxBuySol: 0 } } });
+    fake.buy.mockRejectedValue(new Error('cap'));
+    fake.sell.mockResolvedValueOnce({ signature: 'S', via: 'Jupiter', solDelta: null, tokenDelta: null, decimals: null } satisfies SwarmFill);
+    swarm.tick(now);
+    await flush();
+    const p = useSwarm.getState().positions.find((x) => x.id === 'live-2')!;
+    expect(p).toMatchObject({ tpDone: 1, left: 500, live: { rawLeft: '500000000' } });
+    expect(p.realizedSol).toBeCloseTo(500 * p.entryPx * 2.2, 6);
+    expect(useSwarm.getState().log.map((l) => l.text)).toContain(`${tok.symbol}: the RPC did not report the sale's amounts yet — booked at the price now`);
+  });
+
+  it('after a restart: a sell that was in flight is managed again, and a coin already traded is not bought again', async () => {
+    const { tok, now } = setup();
+    const restored = mergeSwarm({ positions: [held(tok, now, { pending: true, retryAt: now + 9e9, closedAt: now - 1000 })] }, useSwarm.getState());
+    expect(restored.positions[0]).toMatchObject({ pending: false, retryAt: undefined });
+    useSwarm.setState({ positions: restored.positions, enabled: false });
+    useSwarm.setState({ enabled: true });
+    swarm.sync();
+    swarm.tick(now);
+    expect(fake.buy).not.toHaveBeenCalled();
+    useSwarm.setState({ enabled: false });
+    swarm.sync();
+  });
+
+  it('counts buys still in flight towards the most coins open at once', async () => {
+    const { now } = setup();
+    // three more clean runners: four picks in one tick
+    const more = [runner(8, now - 8 * 60_000), runner(8, now - 8 * 60_000), runner(8, now - 8 * 60_000)];
+    for (const m of more) m.tok.meta = { twitter: 'x', telegram: 't', fetchedAt: now };
+    useMeme.setState((s) => ({ tokens: { ...s.tokens, ...Object.fromEntries(more.map((m) => [m.tok.mint, m.tok])) } }));
+    useSwarm.setState((s) => ({ manager: { ...s.manager, maxOpen: 2 } }));
+    fake.buy.mockReturnValue(new Promise(() => {})); // never settles: all still in flight
+    swarm.tick(Math.max(now, ...more.map((m) => m.now)));
+    expect(fake.buy.mock.calls.length).toBe(2);
+    useSwarm.setState((s) => ({ manager: { ...s.manager, maxOpen: 4 } }));
   });
 });
 

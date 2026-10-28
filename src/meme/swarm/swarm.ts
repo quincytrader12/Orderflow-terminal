@@ -84,6 +84,13 @@ const emptyStats = (): SwarmState['stats'] => ({
   manager: { open: 0, closed: 0, pnlSol: 0, winRate: null },
 });
 
+/** The saved swarm over the defaults. A sell in flight when the app closed is not in flight any more: those positions are managed again. */
+export function mergeSwarm(persisted: unknown, current: SwarmState): SwarmState {
+  const p = (persisted ?? {}) as Partial<SwarmState>;
+  const positions = (p.positions ?? []).map((x) => ({ ...x, pending: false, retryAt: undefined }));
+  return { ...current, ...p, positions, strategy: { ...STRATEGY_DEFAULTS, ...p.strategy }, manager: { ...MANAGER_DEFAULTS, ...p.manager } };
+}
+
 export const useSwarm = create<SwarmState>()(
   persist(
     (set) => ({
@@ -106,10 +113,7 @@ export const useSwarm = create<SwarmState>()(
       name: 'novus-swarm',
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({ enabled: s.enabled, mode: s.mode, strategy: s.strategy, manager: s.manager, positions: s.positions.slice(-300), outcomes: s.outcomes.slice(-2000) }),
-      merge: (persisted, current) => {
-        const p = (persisted ?? {}) as Partial<SwarmState>;
-        return { ...current, ...p, strategy: { ...STRATEGY_DEFAULTS, ...p.strategy }, manager: { ...MANAGER_DEFAULTS, ...p.manager } };
-      },
+      merge: (persisted, current) => mergeSwarm(persisted, current),
     },
   ),
 );
@@ -136,7 +140,11 @@ class Swarm {
     const on = useSwarm.getState().enabled;
     if (on && !this.timer) {
       this.release = scanner.use();
-      for (const p of useSwarm.getState().positions) if (!p.closedAt) scanner.pin(p.mint);
+      // coins already traded (before a restart too) are not bought again
+      for (const p of useSwarm.getState().positions) {
+        this.traded.add(p.mint);
+        if (!p.closedAt) scanner.pin(p.mint);
+      }
       this.timer = setInterval(() => this.tick(), TICK_MS);
       void this.refreshWallet();
       this.walletTimer = setInterval(() => void this.refreshWallet(), 30_000);
@@ -228,11 +236,14 @@ class Swarm {
       const left = BigInt(p.live.rawLeft);
       const raw = d.share >= 1 ? 'all' : ((left * BigInt(Math.round(d.share * 1_000_000))) / 1_000_000n).toString();
       const r = await desktop!.swarm.sell(p.mint, raw, this.rpcId());
-      const sold = -BigInt(r.tokenDelta ?? '0');
+      // the chain's amounts when it reported them, else what was asked for (and SOL at the price now)
+      const reported = r.tokenDelta !== null;
+      const sold = reported ? -BigInt(r.tokenDelta!) : raw === 'all' ? left : BigInt(raw);
       const rest = left - sold > 0n ? left - sold : 0n;
       p.live.rawLeft = rest.toString();
       const tokens = Number(sold) / 10 ** p.live.decimals;
-      const sol = r.solDelta ?? 0;
+      const sol = r.solDelta ?? tokens * p.entryPx * (Number.isFinite(d.mult) ? d.mult : 0);
+      if (!reported || r.solDelta === null) this.say('manager', `${sym}: the RPC did not report the sale's amounts yet — booked at the price now`, p.mint);
       applySell(p, Date.now(), tokens, sol, d.why, d.mult, d.share >= 1 || rest === 0n);
       if (d.tp) p.tpDone++;
       p.retryAt = undefined;
@@ -403,7 +414,8 @@ class Swarm {
         newOutcomes.push(newOutcome({ mint: tok.mint, symbol: tok.symbol, t0: now, mcap0: tok.mcapSol, kind: 'pick', conviction: d.conviction, heat: a.heat, virality: x!.score, viability: v.score }));
         scanner.pin(tok.mint);
         this.say('strategist', `${tok.symbol}: PICK (conviction ${d.conviction}) — ${d.why}`, tok.mint);
-        const room = open.length + newPositions.length < sw.manager.maxOpen;
+        // buys still in flight count as open
+        const room = open.length + newPositions.length + this.buying.size < sw.manager.maxOpen;
         const budget = lostToday < sw.manager.dailyLossSol;
         const mc = Number.isFinite(a.mcapUsd) ? ` at $${Math.round(a.mcapUsd).toLocaleString('en-US')} market cap` : '';
         if (room && budget && sw.mode === 'live') {
