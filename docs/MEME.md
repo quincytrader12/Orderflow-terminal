@@ -89,6 +89,13 @@ swarm has **a wallet of its own** (Meme Swarm → **Wallet**):
 3. Set the **limits** (enforced in the main process, not the window): SOL per
    trade (default 0.1), SOL per day (0.5), SOL kept for fees (0.02), slippage
    (15 %) and the most it pays in priority fees.
+   **Set up for my balance** does it for you from the SOL in the wallet: up to
+   four positions, the rest of the account split between them (each new coin
+   also locks ~0.002 SOL of token-account rent until it is sold), 0.02 SOL kept
+   for fees, a daily loss limit of a third of the account and a priority fee
+   that stays small next to the trade. About R500 (0.30 SOL) becomes four
+   coins of 0.065 SOL and stops for the day after losing 0.1 SOL. When a coin
+   is sold out, its empty token account is closed and the rent comes back.
 4. Switch the mode to **Live** and **Arm** it — a system dialog asks you to
    confirm. From then on the Strategist's picks are bought, managed and sold
    with no approval clicks, also while the terminal is locked.

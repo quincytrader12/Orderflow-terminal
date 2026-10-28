@@ -129,3 +129,24 @@ export function buildTransfer(from, to, lamports, blockhash) {
   ]);
   return Buffer.concat([Buffer.from([1]), Buffer.alloc(64), msg]);
 }
+
+/**
+ * An unsigned legacy transaction closing empty token accounts of `owner`
+ * (SPL Token or Token-2022: instruction 9, CloseAccount); their rent goes back
+ * to the owner, who pays the fee. `accounts`: [{ pubkey, program }].
+ */
+export function buildCloseAccounts(owner, accounts, blockhash) {
+  if (!accounts.length) throw new Error('nothing to close');
+  const programs = [...new Set(accounts.map((a) => a.program))];
+  const keys = [owner, ...accounts.map((a) => a.pubkey), ...programs];
+  const ix = accounts.map((a, i) => Buffer.from([1 + accounts.length + programs.indexOf(a.program), 3, 1 + i, 0, 0, 1, 9]));
+  const msg = Buffer.concat([
+    Buffer.from([1, 0, programs.length]), // the owner signs and pays; the token programs are read-only
+    Buffer.from([keys.length]),
+    ...keys.map(pubkeyBytes),
+    pubkeyBytes(blockhash),
+    Buffer.from([ix.length]),
+    ...ix, // program, accounts [account, destination = owner, owner], data [9]
+  ]);
+  return Buffer.concat([Buffer.from([1]), Buffer.alloc(64), msg]);
+}

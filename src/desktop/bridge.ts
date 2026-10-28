@@ -511,6 +511,8 @@ export interface SwarmFill {
   solDelta: number | null;
   tokenDelta: string | null;
   decimals: number | null;
+  /** a sell that emptied the coin: SOL of token-account rent reclaimed by closing it */
+  rentBack?: number;
 }
 
 export interface AmtEvent {

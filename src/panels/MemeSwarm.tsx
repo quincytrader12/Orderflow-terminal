@@ -5,6 +5,7 @@ import { vault } from '../desktop/vault';
 import { useSettings } from '../store/settings';
 import { useMeme } from '../meme/scanner';
 import { multiple, pnlSol } from '../meme/swarm/book';
+import { bankrollPlan } from '../meme/swarm/bankroll';
 import { calibrate } from '../meme/swarm/outcomes';
 import { swarm, useSwarm, type AgentId } from '../meme/swarm/swarm';
 import { Chip, Empty, NumberInput, Select, Spacer, Toolbar, useTicker, type PanelProps } from '../ui/controls';
@@ -446,6 +447,37 @@ function Wallet() {
               </div>
             </div>
           </div>
+          {(() => {
+            const plan = w.sol !== null ? bankrollPlan(w.sol) : null;
+            const usd = useMeme.getState().solUsd;
+            return (
+              <div className="swarm-bankroll">
+                <button
+                  className="chip"
+                  disabled={!!busy || !plan || 'error' in plan}
+                  title="Size the swarm to the SOL in this wallet: positions, per-trade and daily caps, loss limit, fee reserve, priority fee"
+                  onClick={() =>
+                    plan &&
+                    !('error' in plan) &&
+                    run('limits', async () => {
+                      await desktop!.swarm.setLimits({ maxBuySol: plan.sizeSol, dailySpendSol: plan.dailySpendSol, reserveSol: plan.reserveSol, priorityLamports: plan.priorityLamports });
+                      sw.setManager({ sizeSol: plan.sizeSol, maxOpen: plan.maxOpen, dailyLossSol: plan.dailyLossSol });
+                    })
+                  }
+                >
+                  Set up for my balance
+                </button>
+                <span className="muted">
+                  {!plan
+                    ? 'Balance not known yet (the RPC has not answered).'
+                    : 'error' in plan
+                      ? plan.error
+                      : `${plan.maxOpen} coin${plan.maxOpen > 1 ? 's' : ''} × ${plan.sizeSol} SOL${usd > 0 ? ` (≈ $${(plan.sizeSol * usd).toFixed(2)} each)` : ''}, ${plan.reserveSol} SOL kept for fees, stop for the day after losing ${plan.dailyLossSol} SOL — uses ${(plan.deployedSol + plan.reserveSol).toFixed(3)} of ${plan.balanceSol.toFixed(3)} SOL.`}
+                  {sw.manager.sizeSol === (plan && !('error' in plan) ? plan.sizeSol : NaN) && sw.manager.maxOpen === (plan && !('error' in plan) ? plan.maxOpen : NaN) ? ' ✓ in use' : ''}
+                </span>
+              </div>
+            );
+          })()}
           <div className="swarm-arm">
             {w.limits.armed ? (
               <button className="chip swarm-armed" disabled={!!busy} onClick={() => run('arm', () => desktop!.swarm.setLimits({ armed: false }))}>

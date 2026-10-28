@@ -273,6 +273,7 @@ class Swarm {
       if (d.tp) p.tpDone++;
       p.retryAt = undefined;
       this.say('manager', `${sym}: sold live — ${sol.toFixed(4)} SOL back — ${d.why}`, p.mint);
+      if (r.rentBack) this.say('manager', `${sym}: closed the empty token account — ${r.rentBack.toFixed(4)} SOL of rent back`, p.mint);
       this.afterSell(p, d, `https://solscan.io/tx/${r.signature}`);
       void this.refreshWallet();
     } catch (e) {

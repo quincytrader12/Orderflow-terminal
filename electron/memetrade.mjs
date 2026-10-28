@@ -12,7 +12,7 @@
 // Hard limits live here, not in the window: a cap per buy, a cap on SOL spent
 // per day, and SOL kept back for fees. Nothing is bought unless the wallet
 // has been armed for live trading.
-import { buildTransfer, pubkeyBytes, signTx, txSignature } from './solana-tx.mjs';
+import { buildCloseAccounts, buildTransfer, pubkeyBytes, signTx, txSignature } from './solana-tx.mjs';
 
 export const SOL_MINT = 'So11111111111111111111111111111111111111112';
 export const JUP = 'https://lite-api.jup.ag/swap/v1';
@@ -115,7 +115,26 @@ export class MemeTrader {
       const after = await this.tokenBalance(mint).catch(() => null);
       if (after) Object.assign(res, { tokenDelta: (after.raw - held.raw).toString(), decimals: after.decimals });
     }
+    // sold out: close the empty token account and take its rent (~0.002 SOL) back
+    if (amount === held.raw) {
+      res.rentBack = await this.closeEmpty(mint).catch((e) => {
+        this.log(`could not close the empty ${mint.slice(0, 6)}… account: ${e?.message ?? e}`);
+        return 0;
+      });
+    }
     return res;
+  }
+
+  /** Close the wallet's empty token accounts for `mint`; returns the SOL of rent reclaimed. */
+  async closeEmpty(mint) {
+    const kp = this.wallet();
+    const r = await this.rpc('getTokenAccountsByOwner', [kp.address, { mint }, { encoding: 'jsonParsed', commitment: 'confirmed' }]);
+    const empty = (r?.value ?? []).filter((a) => a?.pubkey && a?.account?.owner && a.account.data?.parsed?.info?.tokenAmount?.amount === '0');
+    if (!empty.length) return 0;
+    const { value } = await this.rpc('getLatestBlockhash', [{ commitment: 'confirmed' }]);
+    const tx = buildCloseAccounts(kp.address, empty.map((a) => ({ pubkey: a.pubkey, program: a.account.owner })), value.blockhash);
+    await this.execute({ bytes: tx, via: 'close' }, null);
+    return empty.reduce((s, a) => s + Number(a.account.lamports ?? 0), 0) / LAMPORTS;
   }
 
   /**

@@ -54,6 +54,7 @@ describe('signing a swap transaction', () => {
 describe('the executor', () => {
   const kp = newKeypair();
   const MINT = 'FrogMint1111111111111111111111111111111pump';
+  const TOKEN_ACCOUNT = newKeypair().address;
 
   function rig(over = {}) {
     const calls = [];
@@ -73,7 +74,9 @@ describe('the executor', () => {
       if (method === 'getSignatureStatuses') return { value: [over.slow ? null : { confirmationStatus: 'confirmed', err: over.chainErr ?? null }] };
       if (method === 'getTokenAccountsByOwner') {
         held += over.grow ?? 0;
-        return { value: [{ account: { data: { parsed: { info: { tokenAmount: { amount: String(held), decimals: 6 } } } } } }] };
+        // after a sell went out, the account is empty (when the test says so)
+        const amount = over.emptyAfterSell && sentTx.length ? '0' : String(held);
+        return { value: [{ pubkey: TOKEN_ACCOUNT, account: { owner: 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb', lamports: 2_039_280, data: { parsed: { info: { tokenAmount: { amount, decimals: 6 } } } } } }] };
       }
       if (method === 'getTransaction')
         return over.noTx ? null : {
@@ -150,6 +153,19 @@ describe('the executor', () => {
   });
 
   const HOME = newKeypair().address;
+
+  it('sold out: closes the empty token account and takes its rent back', async () => {
+    const r = rig({ emptyAfterSell: true });
+    const res = await r.t.sell(MINT, 'all');
+    expect(res.rentBack).toBeCloseTo(0.00203928, 8);
+    expect(r.sentTx).toHaveLength(2);
+    const close = parseTx(r.sentTx[1]);
+    expect(close.keys).toEqual([kp.address, TOKEN_ACCOUNT, 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb']);
+    expect([...r.sentTx[1].subarray(r.sentTx[1].length - 7)]).toEqual([2, 3, 1, 0, 0, 1, 9]);
+    // a partial sell leaves the account open
+    const part = rig({ emptyAfterSell: true });
+    expect((await part.t.sell(MINT, '2500000')).rentBack).toBeUndefined();
+  });
   /** lamports and destination of a signed transfer */
   const transferOf = (tx) => {
     const p = parseTx(tx);

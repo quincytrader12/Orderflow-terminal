@@ -3203,6 +3203,18 @@ table.grid.meme-tape td {
   margin: 6px 0;
   font-size: 11px;
 }
+.swarm-bankroll {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  font-size: 11px;
+}
 .swarm-wallet {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
