@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { fmtAgo, fmtNum, fmtUsd } from '../core/format';
 import { scanner, useMeme } from '../meme/scanner';
 import { assess, roomTo, type Assessment } from '../meme/score';
@@ -40,6 +40,17 @@ export function MemeScanner({ config: c, setConfig }: PanelProps<MemeScannerConf
   const version = useMeme((s) => s.version);
   const { tokens, solUsd, feed, selected, select } = useMeme();
   const [q, setQ] = useState('');
+  // a narrow panel shows one Pulse column at a time, with tabs
+  const box = useRef<HTMLDivElement>(null);
+  const [narrow, setNarrow] = useState(false);
+  const [tab, setTab] = useState<MemeStage>('new');
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setNarrow(el.clientWidth < 760));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const now = Date.now();
 
   const rows = useMemo(() => {
@@ -60,7 +71,7 @@ export function MemeScanner({ config: c, setConfig }: PanelProps<MemeScannerConf
   const dot = (s: string) => <span className={`meme-dot ${s === 'open' ? 'ok' : s.startsWith('error') ? 'bad' : ''}`} title={s} />;
 
   return (
-    <div className="panel meme">
+    <div className="panel meme" ref={box}>
       <Toolbar>
         <Chip active={c.view === 'pulse'} onClick={() => setConfig({ view: 'pulse' })}>
           Pulse
@@ -84,9 +95,18 @@ export function MemeScanner({ config: c, setConfig }: PanelProps<MemeScannerConf
           {dot(feed.pump)} pump {dot(feed.dex)} dex {dot(feed.rpc)} rpc · SOL {solUsd > 0 ? fmtUsd(solUsd, 2) : '—'}
         </span>
       </Toolbar>
+      {c.view === 'pulse' && narrow && (
+        <div className="meme-tabs">
+          {COLUMNS.map((col) => (
+            <Chip key={col.stage} active={tab === col.stage} onClick={() => setTab(col.stage)} title={col.hint}>
+              {col.title} <span className="muted">{rows.filter((r) => r.stage === col.stage).length}</span>
+            </Chip>
+          ))}
+        </div>
+      )}
       {c.view === 'pulse' ? (
-        <div className="meme-pulse">
-          {COLUMNS.map((col) => {
+        <div className={`meme-pulse ${narrow ? 'one' : ''}`}>
+          {COLUMNS.filter((col) => !narrow || col.stage === tab).map((col) => {
             const list = rows.filter((r) => r.stage === col.stage).sort((x, y) => (col.stage === 'new' ? y.tok.createdAt - x.tok.createdAt : y.a.heat - x.a.heat));
             return (
               <div key={col.stage} className="meme-col">

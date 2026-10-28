@@ -2818,6 +2818,17 @@ table.amt-train tr.best td {
   gap: var(--gap);
   padding: var(--gap);
 }
+.meme-pulse.one {
+  grid-template-columns: minmax(0, 1fr);
+}
+.meme-pulse.one .meme-col-head {
+  display: none;
+}
+.meme-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px var(--gap) 0;
+}
 .meme-col {
   display: flex;
   flex-direction: column;
