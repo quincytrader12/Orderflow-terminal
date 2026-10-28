@@ -13,6 +13,7 @@ import { desktop, type CcxtExchangeInfo } from '../desktop/bridge';
 import { useAmtLive } from '../desktop/amt';
 import { useBoot } from './boot';
 import { sealTerminal } from './LockScreen';
+import { solTickerFeed, useSolTicker } from '../meme/solTicker';
 
 /** Pyramid mark with three candles — Novus Ordo. */
 export function Logo({ size = 26 }: { size?: number }) {
@@ -26,6 +27,37 @@ function feedDot(f: Feed) {
     cls: `status-dot status-${silent ? 'connecting' : f.status.state}`,
     title: `${f.adapter.name}: ${f.status.state}${f.status.error ? ' — ' + f.status.error : ''}${silent ? ` — no trades for ${Math.round(silent / 60)} min while the order book is live` : ''}`,
   };
+}
+
+/** SOL in USD, live, for the Command Center: price, 24 h change, high/low and the last 10 minutes. */
+function SolChip() {
+  useEffect(solTickerFeed, []);
+  const t = useSolTicker();
+  const ch = t.open > 0 ? ((t.price - t.open) / t.open) * 100 : undefined;
+  const sp = t.spark;
+  const lo = Math.min(...sp);
+  const hi = Math.max(...sp);
+  const path = sp.length > 1 ? sp.map((v, i) => `${i ? 'L' : 'M'}${((i / (sp.length - 1)) * 80).toFixed(1)},${(hi > lo ? 18 - ((v - lo) / (hi - lo)) * 16 : 10).toFixed(1)}`).join(' ') : '';
+  const live = t.price > 0 && Date.now() - t.at < 30_000;
+  return (
+    <div className="group sol-chip" title={`SOL/USD from ${t.source || '…'}${t.state.startsWith('error') ? ` (Binance: ${t.state})` : ''} — the price the swarm values its coins in`}>
+      <span className="sol-mark">◎</span>
+      <b className="sol-name">SOL</b>
+      <span className={`price-big ${(ch ?? 0) >= 0 ? 'up' : 'down'}`}>{t.price > 0 ? `$${t.price.toFixed(2)}` : '—'}</span>
+      {ch !== undefined && <span className={(ch ?? 0) >= 0 ? 'up mono' : 'down mono'}>{fmtPct(ch)}</span>}
+      {t.high > 0 && (
+        <span className="mono muted hide-sm sol-hl">
+          H {t.high.toFixed(2)} · L {t.low.toFixed(2)} · vol ${t.volUsd >= 1e9 ? `${(t.volUsd / 1e9).toFixed(2)}B` : `${(t.volUsd / 1e6).toFixed(0)}M`}
+        </span>
+      )}
+      {path && (
+        <svg className="sol-spark hide-sm" width="80" height="20" viewBox="0 0 80 20" aria-hidden>
+          <path d={path} className={(ch ?? 0) >= 0 ? 'up' : 'down'} />
+        </svg>
+      )}
+      <span className={`status-dot status-${live ? 'open' : t.state.startsWith('error') ? 'error' : 'connecting'}`} />
+    </div>
+  );
 }
 
 export type ModalKind = 'connection' | 'layouts' | 'add' | 'settings' | 'keys' | null;
@@ -252,6 +284,7 @@ export function TopBar({ onOpen, onFocusChart, onOpenPanel, alertCount, editing,
   useHubVersion();
   const showFps = useSettings((s) => s.showFps);
   const view = useSettings((s) => s.view);
+  const command = view === 'command';
   const setSettings = useSettings((s) => s.set);
   const fps = useFps();
   const H = hub();
@@ -270,23 +303,30 @@ export function TopBar({ onOpen, onFocusChart, onOpenPanel, alertCount, editing,
         </span>
       </div>
       <div className="sep" />
-      <SymbolPicker />
-      <div className="group">
-        <span className={`price-big ${(ch ?? 0) >= 0 ? 'up' : 'down'}`}>{fmtPrice(last)}</span>
-        {ch !== undefined && <span className={(ch ?? 0) >= 0 ? 'up mono' : 'down mono'}>{fmtPct(ch)}</span>}
-        <span className={feedDot(f).cls} title={feedDot(f).title} />
-      </div>
-      <div className="sep" />
-      <AggregateChips />
-      <button className="chip" onClick={() => onOpen('connection')} title="Connection & history source">
-        <span className={`status-dot status-${bf.state === 'done' ? 'open' : bf.state === 'loading' ? 'connecting' : bf.state === 'error' ? 'error' : 'idle'}`} />
-        History
-        {bf.state === 'loading' && (
-          <span className="progress">
-            <div style={{ width: `${Math.round(bf.progress * 100)}%` }} />
-          </span>
-        )}
-      </button>
+      {/* the Command Center is about Solana: SOL's price instead of the order-flow market */}
+      {command ? (
+        <SolChip />
+      ) : (
+        <>
+          <SymbolPicker />
+          <div className="group">
+            <span className={`price-big ${(ch ?? 0) >= 0 ? 'up' : 'down'}`}>{fmtPrice(last)}</span>
+            {ch !== undefined && <span className={(ch ?? 0) >= 0 ? 'up mono' : 'down mono'}>{fmtPct(ch)}</span>}
+            <span className={feedDot(f).cls} title={feedDot(f).title} />
+          </div>
+          <div className="sep" />
+          <AggregateChips />
+          <button className="chip" onClick={() => onOpen('connection')} title="Connection & history source">
+            <span className={`status-dot status-${bf.state === 'done' ? 'open' : bf.state === 'loading' ? 'connecting' : bf.state === 'error' ? 'error' : 'idle'}`} />
+            History
+            {bf.state === 'loading' && (
+              <span className="progress">
+                <div style={{ width: `${Math.round(bf.progress * 100)}%` }} />
+              </span>
+            )}
+          </button>
+        </>
+      )}
       <div style={{ flex: 1 }} />
       <button
         className={`chip primary-chip chrome-chip cc-toggle${view === 'command' ? ' active' : ''}`}
@@ -303,18 +343,22 @@ export function TopBar({ onOpen, onFocusChart, onOpenPanel, alertCount, editing,
       <button className="chip primary-chip chrome-chip" onClick={() => onOpen('keys')} title="Connections: exchange API keys (Binance, Coinbase…), Telegram bot, Solana RPC">
         <ConnectIcon /> <span className="lbl keep">Connect</span>
       </button>
-      <button className="chip" onClick={() => onOpen('add')} title="Add a panel">
-        + <span className="lbl">Panel</span>
-      </button>
-      <button className="chip" onClick={onFocusChart} title="Maximise the main chart (click again to restore)">
-        ⤢ <span className="lbl">Chart</span>
-      </button>
-      <button className={`chip primary-chip${editing ? ' active' : ''}`} onClick={onEdit} title={editing ? 'Finish editing the layout' : 'Edit layout: move, split, add and close panels'}>
-        ✎ <span className="lbl keep">{editing ? 'Done' : 'Edit layout'}</span>
-      </button>
-      <button className="chip" onClick={() => onOpen('layouts')} title="Layout gallery & saved layouts">
-        ▦ <span className="lbl">Layouts</span>
-      </button>
+      {!command && (
+        <>
+        <button className="chip" onClick={() => onOpen('add')} title="Add a panel">
+          + <span className="lbl">Panel</span>
+        </button>
+        <button className="chip" onClick={onFocusChart} title="Maximise the main chart (click again to restore)">
+          ⤢ <span className="lbl">Chart</span>
+        </button>
+        <button className={`chip primary-chip${editing ? ' active' : ''}`} onClick={onEdit} title={editing ? 'Finish editing the layout' : 'Edit layout: move, split, add and close panels'}>
+          ✎ <span className="lbl keep">{editing ? 'Done' : 'Edit layout'}</span>
+        </button>
+        <button className="chip" onClick={() => onOpen('layouts')} title="Layout gallery & saved layouts">
+          ▦ <span className="lbl">Layouts</span>
+        </button>
+        </>
+      )}
       <ThemeSwatches />
       <FilterSelect />
       <button className="chip seal primary-chip chrome-chip" onClick={() => void sealTerminal()} title="Lock the terminal — back to the ENTER LEDGER KEY page. Market data and bots keep running.">

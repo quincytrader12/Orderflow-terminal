@@ -4106,3 +4106,33 @@ table.grid.meme-tape td {
     animation: none;
   }
 }
+/* SOL ticker in the top bar (Command Center) */
+.sol-chip {
+  gap: 8px;
+}
+.sol-mark {
+  font-size: 15px;
+  line-height: 1;
+  background: linear-gradient(135deg, #9945ff, #14f195);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.sol-name {
+  letter-spacing: 0.08em;
+  font-size: 12px;
+}
+.sol-hl {
+  font-size: 10px;
+}
+.sol-spark path {
+  fill: none;
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+}
+.sol-spark path.up {
+  stroke: var(--buy);
+}
+.sol-spark path.down {
+  stroke: var(--sell);
+}

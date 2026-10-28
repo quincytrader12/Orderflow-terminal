@@ -126,6 +126,11 @@ control row, the rules are not adding anything yet.
 (**Terminal** switches back; the panels stay as they were). Black and chrome
 in the **Void Chrome** theme (now the default; the other themes still work):
 
+- **Top bar**: SOL in USD, live (Binance's SOL/USDT ticker, about once a
+  second, with DexScreener's on-chain price as the backup): 24 h change, high,
+  low, volume and the last 10 minutes. The order-flow market picker (BTC by
+  default) and the layout buttons belong to the Terminal view and are hidden
+  here.
 - **Top**: SWARM COMMAND, the mode (PAPER, LIVE · not armed, ● LIVE ·
   autonomous), what the bots are doing scrolling past, and Start/Stop.
 - **Left**: wallet and P&L (total, in USD, banked and open, the equity curve,
