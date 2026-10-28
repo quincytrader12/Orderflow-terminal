@@ -117,13 +117,14 @@ profits come back to Phantom on their own. Don't import your main Phantom key
 into the swarm: a separate wallet means the bot can only ever lose what you
 put in it.
 
-**A private RPC** (strongly recommended for live trading): sign up at
+**A private RPC — optional.** The swarm works on Solana's free public
+connection with nothing to set up. Only for heavy use: sign up at
 [helius.dev](https://www.helius.dev) (the free plan is enough to start), open
 your project and copy its **Mainnet RPC URL**
 (`https://mainnet.helius-rpc.com/?api-key=…`). In Novus Ordo: 🔌 **Connect →
 Solana RPC**, paste the whole URL, label it, **Save encrypted**. The first RPC
 you save is used straight away by the scanner's on-chain checks and every swarm
-trade; Meme Swarm → Wallet → **Solana RPC** shows which one is in use, switches
+trade; Meme Swarm → Wallet → **Advanced (optional)** shows which one is in use, switches
 between them, and **Test RPC** checks it answers (and how fast). The key stays in
 the vault; only the main process sees the URL.
 

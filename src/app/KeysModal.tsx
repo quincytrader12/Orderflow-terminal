@@ -149,7 +149,7 @@ export const QUICK: Quick[] = [
     kind: 'solana-rpc',
     badge: 'SOL',
     url: 'https://solana.com/rpc',
-    steps: ['Any Solana RPC URL (Helius, QuickNode, Triton…). The public endpoint is heavily rate-limited.', 'For Helius (free plan, no card): sign up at dashboard.helius.dev, open API Keys, and copy the Mainnet RPC URL (https://mainnet.helius-rpc.com/?api-key=…). Paste the whole URL below.', 'The first one you save is used by the meme scanner and the swarm (on-chain checks, live trades); change it under Meme Swarm → Wallet. The Wallet panel picks its RPC in its toolbar.'],
+    steps: ['Optional — the app works without it, on Solana’s free public connection. A private RPC URL (Helius, QuickNode, Triton…) is only for heavy use.', 'For Helius (free plan, no card): sign up at dashboard.helius.dev, open API Keys, and copy the Mainnet RPC URL (https://mainnet.helius-rpc.com/?api-key=…). Paste the whole URL below.', 'The first one you save is used by the meme scanner and the swarm (on-chain checks, live trades); change it under Meme Swarm → Wallet. The Wallet panel picks its RPC in its toolbar.'],
   },
 ];
 

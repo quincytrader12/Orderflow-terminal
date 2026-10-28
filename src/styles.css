@@ -4148,3 +4148,15 @@ table.grid.meme-tape td {
 .sol-spark path.down {
   stroke: var(--sell);
 }
+.swarm-advanced {
+  margin: 12px 0 6px;
+  font-size: 11px;
+}
+.swarm-advanced summary {
+  cursor: pointer;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.swarm-advanced[open] summary {
+  margin-bottom: 6px;
+}

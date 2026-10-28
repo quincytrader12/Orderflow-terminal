@@ -403,35 +403,14 @@ function Wallet() {
         </span>
       </div>
 
-      <div className="section-title">Solana RPC</div>
-      <div className="swarm-arm">
-        <Select value={rpcs.some((r) => r.id === rpcId) ? rpcId : ''} options={[{ value: '', label: 'Public RPC (slow, rate-limited)' }, ...rpcs.map((r) => ({ value: r.id, label: r.label }))]} onChange={(memeRpcSecretId) => setSettings({ memeRpcSecretId })} title="The RPC the scanner's on-chain checks and the swarm's trades go through" width={240} />
-        <button
-          className="chip"
-          disabled={!!busy}
-          onClick={async () => {
-            setRpcTest('testing…');
-            const t0 = performance.now();
-            try {
-              const slot = await desktop!.solana.rpc('getSlot', [{ commitment: 'confirmed' }], rpcId || undefined);
-              setRpcTest(`✓ working · slot ${Number(slot).toLocaleString('en-US')} · ${Math.round(performance.now() - t0)} ms`);
-            } catch (e) {
-              setRpcTest(`✗ ${String((e as Error)?.message ?? e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`);
-            }
-          }}
-        >
-          Test RPC
-        </button>
-        {rpcTest && <span className={`mono ${rpcTest.startsWith('✓') ? 'up' : rpcTest.startsWith('✗') ? 'down' : 'muted'}`}>{rpcTest}</span>}
-      </div>
-      <div className="muted swarm-note">{rpcs.length ? 'Used for the wallet and every live trade (the public RPC steps in if it refuses). The scanner’s all-day safety checks try the public RPC first, so a free plan’s monthly credits go to your trades.' : 'Add a private RPC in 🔌 Connect → Solana RPC — Helius has a free plan (helius.dev): trades land faster and more reliably than on the public RPC.'}</div>
+
 
       <div className="section-title">Swarm wallet</div>
       {w ? (
         <>
           <div className="swarm-wallet">
             <div>
-              <div className="muted">Address — send SOL here to fund it</div>
+              <div className="muted">Address — to fund it, in Phantom: Send → paste this address (click it to copy)</div>
               <div className="mono swarm-address" onClick={() => navigator.clipboard.writeText(w.address)} title="Copy">
                 {w.address}
               </div>
@@ -469,7 +448,7 @@ function Wallet() {
                 </button>
                 <span className="muted">
                   {!plan
-                    ? 'Balance not known yet (the RPC has not answered).'
+                    ? 'Balance not known yet (waiting for the Solana network).'
                     : 'error' in plan
                       ? plan.error
                       : `${plan.maxOpen} coin${plan.maxOpen > 1 ? 's' : ''} × ${plan.sizeSol} SOL${usd > 0 ? ` (≈ $${(plan.sizeSol * usd).toFixed(2)} each)` : ''}, ${plan.reserveSol} SOL kept for fees, stop for the day after losing ${plan.dailyLossSol} SOL — uses ${(plan.deployedSol + plan.reserveSol).toFixed(3)} of ${plan.balanceSol.toFixed(3)} SOL.`}
@@ -578,8 +557,32 @@ function Wallet() {
       )}
       {busy && <div className="muted swarm-note">Working…</div>}
       {err && <div className="down swarm-note">{err}</div>}
+      <details className="swarm-advanced">
+        <summary>Advanced (optional): Solana connection</summary>
+        <div className="swarm-arm">
+          <Select value={rpcs.some((r) => r.id === rpcId) ? rpcId : ''} options={[{ value: '', label: 'Solana public (free)' }, ...rpcs.map((r) => ({ value: r.id, label: r.label }))]} onChange={(memeRpcSecretId) => setSettings({ memeRpcSecretId })} title="The RPC the scanner's on-chain checks and the swarm's trades go through" width={240} />
+          <button
+            className="chip"
+            disabled={!!busy}
+            onClick={async () => {
+              setRpcTest('testing…');
+              const t0 = performance.now();
+              try {
+                const slot = await desktop!.solana.rpc('getSlot', [{ commitment: 'confirmed' }], rpcId || undefined);
+                setRpcTest(`✓ working · slot ${Number(slot).toLocaleString('en-US')} · ${Math.round(performance.now() - t0)} ms`);
+              } catch (e) {
+                setRpcTest(`✗ ${String((e as Error)?.message ?? e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`);
+              }
+            }}
+          >
+            Test RPC
+          </button>
+          {rpcTest && <span className={`mono ${rpcTest.startsWith('✓') ? 'up' : rpcTest.startsWith('✗') ? 'down' : 'muted'}`}>{rpcTest}</span>}
+        </div>
+        <div className="muted swarm-note">The swarm talks to Solana through its free public connection — nothing to set up. If you ever add a private one (🔌 Connect → Solana RPC), pick it here; the free one still steps in if it fails.</div>
+      </details>
       <div className="muted swarm-note">
-        Trades go through Jupiter (pump.fun coins included), with pump.fun's own API as the fallback, and are sent through the Solana RPC chosen above — a private one (Helius, QuickNode) lands them faster. Most meme coins go to zero: only fund this wallet with what you can afford to lose.
+        Most meme coins go to zero: only fund this wallet with what you can afford to lose.
       </div>
     </div>
   );
