@@ -120,6 +120,35 @@ conviction, how often each reached 2×, 5×, 10×, graduated, or ended the hour
 dead (a fifth of the entry market cap or less). If picks do not beat the
 control row, the rules are not adding anything yet.
 
+## Command Center
+
+**Command** in the top bar switches the whole window to the swarm's dashboard
+(**Terminal** switches back; the panels stay as they were). Black and chrome
+in the **Void Chrome** theme (now the default; the other themes still work):
+
+- **Top**: SWARM COMMAND, the mode (PAPER, LIVE · not armed, ● LIVE ·
+  autonomous), what the bots are doing scrolling past, and Start/Stop.
+- **Left**: wallet and P&L (total, in USD, banked and open, the equity curve,
+  the wallet balance); the coin in focus (the newest open trade, else the
+  strongest read) with its buys and sells on the chart; the feeds — pump.fun
+  messages per second, DexScreener and RPC response times, how long since each
+  last answered; capital at risk per open coin with its multiple.
+- **Centre — the swarm core**: the inputs on the left (new coins a minute,
+  the pump.fun feed, the Sentinel's pass rate, viral coins, the hottest
+  narrative, SOL) flow along curves into a lens-shaped membrane that swells
+  and ripples with the activity, and out to the results on the right (picks,
+  open, win rate, P&L, best multiple, budget left); sparks travel each line as
+  fast as its data. Every coin being read is a sphere of particles inside —
+  its size the conviction, cyan the viability, magenta the virality — drifting
+  right as conviction grows; coins held sit at the right tip with a ring.
+- **Right**: results and the execution tape, every fill as it happens.
+- **Bottom**: today's spend against the daily budget, gauges (Sentinel pass
+  rate, Herald viral share, the daily loss limit used, budget spent), and the
+  bots' live log.
+
+Click any coin, fill or log line to open it in the Meme Token panel. Motion
+slows right down when the system asks for reduced motion.
+
 ### What the rules are built on
 
 - Under 1 % of pump.fun coins graduate (0.6–0.9 % through 2025), and about

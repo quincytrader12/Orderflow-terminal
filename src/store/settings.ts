@@ -127,6 +127,8 @@ export interface Settings {
   byodToken: string;
   backfillMinutes: number;
   theme: ThemeId;
+  /** the panel layout, or the Command Center (swarm dashboard) */
+  view: 'terminal' | 'command';
   filter: FilterId;
   glass: GlassLevel;
   soundEnabled: boolean;
@@ -190,7 +192,8 @@ const initial: Settings = {
   byodUrl: 'http://localhost:8080',
   byodToken: '',
   backfillMinutes: 30,
-  theme: 'grey',
+  theme: 'void',
+  view: 'terminal',
   filter: 'none',
   glass: 'medium',
   soundEnabled: true,
@@ -239,7 +242,7 @@ export const useSettings = create<Settings & Actions>()(
     }),
     {
       name: 'oft-settings',
-      version: 4,
+      version: 5,
       // v1 had dark/light themes only
       migrate: (persisted, version) => {
         const p = (persisted ?? {}) as Record<string, unknown>;
@@ -251,6 +254,8 @@ export const useSettings = create<Settings & Actions>()(
           p.telegramAlerts = false;
           p.telegramBotStory = true;
         }
+        // v5: the black-and-chrome look is the default
+        if (version < 5) p.theme = 'void';
         return p as unknown as Settings & Actions;
       },
       storage: createJSONStorage(() => safeStorage),

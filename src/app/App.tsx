@@ -3,6 +3,7 @@ import { Actions, DockLocation, ICloseType, Layout, Model, type BorderNode, type
 import 'flexlayout-react/style/dark.css';
 import { startAlerts, useToasts } from '../alerts/engine';
 import { startAmtService } from '../desktop/amt';
+import { CommandCenter } from '../command/CommandCenter';
 import { startSwarmService } from '../meme/swarm/swarm';
 import { startReportScheduler } from '../desktop/reports';
 import { startTelegramService } from '../desktop/telegram';
@@ -43,6 +44,7 @@ export function App() {
   const [modal, setModal] = useState<ModalKind>(null);
   const layoutRef = useRef<ILayoutApi>(null);
   const fired = useSettings((s) => s.fired);
+  const view = useSettings((s) => s.view);
   const sessionStart = useMemo(() => Date.now(), []);
 
   useEffect(() => {
@@ -154,7 +156,9 @@ export function App() {
           </button>
         </div>
       )}
-      <div className="layout-host">
+      {view === 'command' && <CommandCenter />}
+      {/* the panels stay mounted under the Command Center, so they keep their state */}
+      <div className="layout-host" style={view === 'command' ? { display: 'none' } : undefined}>
         <div className="layout-inner">
           <Layout ref={layoutRef} model={model} factory={factory} onModelChange={(m) => saveLayout(m.toJson())} realtimeResize />
         </div>

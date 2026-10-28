@@ -1,6 +1,6 @@
 import { useSettings } from '../store/settings';
 
-export type ThemeId = 'grey' | 'white' | 'black' | 'neon-green' | 'neon-orange';
+export type ThemeId = 'void' | 'grey' | 'white' | 'black' | 'neon-green' | 'neon-orange';
 export type FilterId = 'none' | 'vivid' | 'soft' | 'mono' | 'warm' | 'cool' | 'night' | 'crt';
 export type GlassLevel = 'off' | 'light' | 'medium' | 'heavy';
 
@@ -167,6 +167,54 @@ function build(s: Spec): ThemeDef {
 }
 
 export const THEMES: Record<ThemeId, ThemeDef> = {
+  // pure black, chrome edges, cyan and magenta light — the Command Center look
+  void: build({
+    id: 'void',
+    name: 'Void Chrome',
+    swatch: 'linear-gradient(135deg,#e9edf2 0%,#5d646e 30%,#000000 62%,#00e5ff 100%)',
+    dark: true,
+    bg: '#000000',
+    bgImage: 'radial-gradient(1200px 520px at 50% -18%, rgba(190,205,225,0.07), transparent 70%), radial-gradient(900px 600px at 50% 120%, rgba(0,229,255,0.035), transparent 70%), #000000',
+    glass: 'rgba(5,6,8,0.94)',
+    glassStrong: 'rgba(7,8,10,0.97)',
+    glassBorder: 'rgba(214,222,235,0.10)',
+    glassHi: 'rgba(255,255,255,0.05)',
+    shadow: '0 1px 2px rgba(0,0,0,0.8), 0 10px 30px rgba(0,0,0,0.6)',
+    control: 'rgba(255,255,255,0.03)',
+    raised: 'rgba(255,255,255,0.055)',
+    border: 'rgba(214,222,235,0.09)',
+    border2: 'rgba(214,222,235,0.18)',
+    text: '#eef1f5',
+    muted: '#8c939e',
+    faint: '#4f5560',
+    buy: '#2cf0b0',
+    sell: '#ff3d7f',
+    accent: '#38e1ff',
+    warn: '#ffc53d',
+    poc: '#f5c542',
+    glow: 'rgba(56,225,255,0.30)',
+    canvasTint: 'rgba(0,0,0,0)',
+    grid: 'rgba(214,222,235,0.045)',
+    header: 'rgba(255,255,255,0.03)',
+    rowAlt: 'rgba(255,255,255,0.014)',
+    cell: 'rgba(0,0,0,0.4)',
+    cellSpread: 'rgba(255,255,255,0.045)',
+    tooltip: 'rgba(6,7,9,0.97)',
+    tabbar: 'rgba(255,255,255,0.018)',
+    rowLine: 'rgba(214,222,235,0.05)',
+    accentSoft: 'rgba(56,225,255,0.10)',
+    focus: 'rgba(56,225,255,0.30)',
+    onAccent: '#001218',
+    ramp: [
+      [6, 10, 22],
+      [20, 40, 90],
+      [0, 150, 210],
+      [56, 225, 255],
+      [210, 120, 255],
+      [255, 61, 127],
+      [255, 255, 255],
+    ],
+  }),
   grey: build({
     id: 'grey',
     name: 'Grey',

@@ -251,6 +251,8 @@ export function TopBar({ onOpen, onFocusChart, onOpenPanel, alertCount, editing,
   useTicker(500);
   useHubVersion();
   const showFps = useSettings((s) => s.showFps);
+  const view = useSettings((s) => s.view);
+  const setSettings = useSettings((s) => s.set);
   const fps = useFps();
   const H = hub();
   const f = H.primary;
@@ -286,6 +288,13 @@ export function TopBar({ onOpen, onFocusChart, onOpenPanel, alertCount, editing,
         )}
       </button>
       <div style={{ flex: 1 }} />
+      <button
+        className={`chip primary-chip chrome-chip cc-toggle${view === 'command' ? ' active' : ''}`}
+        onClick={() => setSettings({ view: view === 'command' ? 'terminal' : 'command' })}
+        title={view === 'command' ? 'Back to the panel layout' : 'Command Center: the meme swarm at a glance — wallet, core, results, tape'}
+      >
+        <span className="cc-toggle-dot" /> <span className="lbl keep">{view === 'command' ? 'Terminal' : 'Command'}</span>
+      </button>
       <SafeModeChip />
       <AlgoKill />
       <button className="chip primary-chip chrome-chip" onClick={() => onOpenPanel('amt')} title="AMT trading bots: scalp and intraday, paper or live, backtests">

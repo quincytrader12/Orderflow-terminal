@@ -36,6 +36,12 @@ export const useMeme = create<ScannerState>((set) => ({
   },
 }));
 
+/**
+ * Feed meters for the Command Center: messages counted per source, the time of
+ * the last one, and how long the last DexScreener poll and RPC check took.
+ */
+export const meters = { pump: 0, pumpAt: 0, dex: 0, dexAt: 0, dexMs: 0, rpc: 0, rpcAt: 0, rpcMs: 0 };
+
 /** Most coins followed trade by trade at once (PumpPortal: one socket, many keys). */
 const MAX_FOLLOW = 80;
 /** Most coins kept in memory. */
@@ -93,7 +99,11 @@ class Scanner {
         ws.send(pumpSub.migrations());
         if (this.followed.size) ws.send(pumpSub.trades([...this.followed]));
       },
-      onMessage: (m) => this.onPump(parsePumpMessage(m)),
+      onMessage: (m) => {
+        meters.pump++;
+        meters.pumpAt = Date.now();
+        this.onPump(parsePumpMessage(m));
+      },
       onState: (st, err) => this.setFeed('pump', st === 'error' && err ? `error: ${err}` : st),
     });
     void this.sock.connect();
@@ -261,6 +271,7 @@ class Scanner {
   }
 
   private async pollDex() {
+    const t0 = performance.now();
     try {
       const list = await dexListings(get);
       for (const l of list) this.listings.set(l.mint, l);
@@ -270,6 +281,9 @@ class Scanner {
         .filter((t) => t.migrated)
         .map((t) => t.mint);
       await this.refreshDex([...new Set([...list.map((l) => l.mint), ...migrated])].slice(0, 90));
+      meters.dex++;
+      meters.dexAt = Date.now();
+      meters.dexMs = Math.round(performance.now() - t0);
       this.setFeed('dex', 'open');
     } catch (e) {
       this.setFeed('dex', `error: ${String((e as Error)?.message ?? e)}`);
@@ -325,7 +339,11 @@ class Scanner {
         const mint = this.safetyQueue.shift()!;
         const tok = useMeme.getState().tokens[mint];
         if (!tok) continue;
+        const t0 = performance.now();
         const s = await checkSafety(rpc, mint, [tok.bondingCurve, tok.dex?.pairAddress]);
+        meters.rpc++;
+        meters.rpcAt = Date.now();
+        meters.rpcMs = Math.round(performance.now() - t0);
         tok.safety = s;
         this.setFeed('rpc', s.error ? `error: ${s.error}` : 'open');
         this.dirty = true;
