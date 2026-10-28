@@ -3186,6 +3186,49 @@ table.grid.meme-tape td {
 .swarm-rules {
   max-width: 760px;
 }
+.swarm-mode {
+  cursor: pointer;
+}
+.swarm-mode.live {
+  color: var(--sell);
+  border-color: var(--sell);
+  font-weight: 700;
+}
+.swarm-modes,
+.swarm-arm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 11px;
+}
+.swarm-wallet {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+.swarm-address {
+  word-break: break-all;
+  cursor: copy;
+}
+.swarm-balance {
+  font-size: 18px;
+  font-weight: 700;
+}
+.swarm-arm-btn {
+  font-weight: 700;
+  border-color: var(--buy);
+  color: var(--buy);
+}
+.swarm-armed {
+  font-weight: 700;
+  color: var(--bg);
+  background: var(--sell);
+  border-color: var(--sell);
+}
 .swarm-rule {
   display: grid;
   grid-template-columns: 140px auto 1fr;

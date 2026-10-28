@@ -77,6 +77,14 @@ export interface Position {
   conviction: number;
   closedAt?: number;
   closeReason?: string;
+  /** live: real wallet trades (raw token units left, the token's decimals, the buy transaction) */
+  live?: { rawLeft: string; decimals: number; buyTx: string };
+  /** live: a sell on its way (not decided again until it settles) */
+  pending?: boolean;
+  /** live: the next sell attempt after a failure */
+  retryAt?: number;
+  /** price multiples already reported (Telegram progress) */
+  milestones?: number[];
 }
 
 const POOL_FEE = 0.0025;
@@ -140,17 +148,22 @@ export function openPosition(tok: MemeToken, sizeSol: number, now: number, solUs
   };
 }
 
-function sell(p: Position, tok: MemeToken, share: number, now: number, solUsd: number, why: string, mult: number) {
-  const tokens = share >= 1 ? p.left : p.left * share;
-  const sol = quoteSell(tok, tokens, solUsd);
-  p.left -= tokens;
+/** Book a sell: `tokens` sold for `sol` (a paper quote, or what the wallet really received). */
+export function applySell(p: Position, now: number, tokens: number, sol: number, why: string, mult: number, all: boolean) {
+  const t = Math.min(p.left, tokens);
+  p.left = all ? 0 : p.left - t;
   p.realizedSol += sol;
-  p.fills.push({ t: now, side: 'sell', sol, tokens, mult, why });
-  if (p.left <= p.tokens * 1e-6) {
+  p.fills.push({ t: now, side: 'sell', sol, tokens: t, mult, why });
+  if (all || p.left <= p.tokens * 1e-6) {
     p.left = 0;
     p.closedAt = now;
     p.closeReason = why;
   }
+}
+
+function sell(p: Position, tok: MemeToken, share: number, now: number, solUsd: number, why: string, mult: number) {
+  const tokens = share >= 1 ? p.left : p.left * share;
+  applySell(p, now, tokens, quoteSell(tok, tokens, solUsd), why, mult, share >= 1);
 }
 
 /** Has the trade's reason gone: creator dumping, a danger flag, or trading stopped. */
@@ -162,29 +175,60 @@ export function rugReason(tok: MemeToken, now: number, dangers: string[]): strin
   return null;
 }
 
-/** Manage one open position; mutates it and returns the fills it made. */
-export function managePosition(p: Position, tok: MemeToken, now: number, solUsd: number, cfg: ManagerConfig, dangers: string[]): Fill[] {
-  if (p.closedAt) return [];
-  const before = p.fills.length;
+export interface ExitDecision {
+  /** share of what is left to sell (1 = all) */
+  share: number;
+  why: string;
+  mult: number;
+  /** a take-profit step (counted once its sell settles) */
+  tp: boolean;
+}
+
+/**
+ * The next exit for a position, or null: rug, stop loss, the next take
+ * profit, trailing stop, stale. Updates the peak; sells nothing itself.
+ */
+export function decideExit(p: Position, tok: MemeToken, now: number, solUsd: number, cfg: ManagerConfig, dangers: string[]): ExitDecision | null {
+  if (p.closedAt) return null;
   const m = multiple(p, tok, solUsd);
-  if (!Number.isFinite(m)) return [];
+  if (!Number.isFinite(m)) return null;
   if (m > p.peakMult) {
     p.peakMult = m;
     p.peakAt = now;
   }
   const rug = rugReason(tok, now, dangers);
-  if (rug) sell(p, tok, 1, now, solUsd, rug, m);
-  else if (m <= 1 - cfg.stopLoss) sell(p, tok, 1, now, solUsd, `stop loss at ${m.toFixed(2)}×`, m);
-  else {
-    while (p.tpDone < cfg.takeProfits.length && m >= cfg.takeProfits[p.tpDone].at && !p.closedAt) {
-      const tp = cfg.takeProfits[p.tpDone];
-      sell(p, tok, tp.sell, now, solUsd, `take profit at ${tp.at}× (sold ${Math.round(tp.sell * 100)}% of what was left)`, m);
-      p.tpDone++;
-    }
-    if (!p.closedAt && p.peakMult >= cfg.trailFrom && m <= p.peakMult * (1 - cfg.trail)) sell(p, tok, 1, now, solUsd, `trailing stop: ${m.toFixed(2)}× after a ${p.peakMult.toFixed(2)}× peak`, m);
-    else if (!p.closedAt && now - p.peakAt >= cfg.staleMin * 60_000 && m < cfg.staleBelow) sell(p, tok, 1, now, solUsd, `no new high for ${cfg.staleMin} min at ${m.toFixed(2)}× — out`, m);
+  if (rug) return { share: 1, why: rug, mult: m, tp: false };
+  if (m <= 1 - cfg.stopLoss) return { share: 1, why: `stop loss at ${m.toFixed(2)}×`, mult: m, tp: false };
+  const tp = cfg.takeProfits[p.tpDone];
+  if (tp && m >= tp.at) return { share: tp.sell, why: `take profit at ${tp.at}× (sold ${Math.round(tp.sell * 100)}% of what was left)`, mult: m, tp: true };
+  if (p.peakMult >= cfg.trailFrom && m <= p.peakMult * (1 - cfg.trail)) return { share: 1, why: `trailing stop: ${m.toFixed(2)}× after a ${p.peakMult.toFixed(2)}× peak`, mult: m, tp: false };
+  if (now - p.peakAt >= cfg.staleMin * 60_000 && m < cfg.staleBelow) return { share: 1, why: `no new high for ${cfg.staleMin} min at ${m.toFixed(2)}× — out`, mult: m, tp: false };
+  return null;
+}
+
+/** Paper: manage one open position, filling exits at quoted prices; returns the fills it made. */
+export function managePosition(p: Position, tok: MemeToken, now: number, solUsd: number, cfg: ManagerConfig, dangers: string[]): Fill[] {
+  const before = p.fills.length;
+  for (let guard = 0; guard < 8; guard++) {
+    const d = decideExit(p, tok, now, solUsd, cfg, dangers);
+    if (!d) break;
+    sell(p, tok, d.share, now, solUsd, d.why, d.mult);
+    if (d.tp) p.tpDone++;
+    if (p.closedAt || !d.tp) break;
   }
   return p.fills.slice(before);
+}
+
+/** Price multiples worth a progress update. */
+export const MILESTONES = [2, 5, 10, 25, 50, 100, 250, 500, 1000];
+
+/** The highest milestone the position has newly reached (once each), or null. */
+export function newMilestone(p: Position, mult: number): number | null {
+  const done = p.milestones ?? [];
+  const hit = MILESTONES.filter((x) => mult >= x && !done.includes(x));
+  if (!hit.length) return null;
+  p.milestones = [...done, ...hit];
+  return hit[hit.length - 1];
 }
 
 /** Profit in SOL of a closed position (or so far, at mark, for an open one). */

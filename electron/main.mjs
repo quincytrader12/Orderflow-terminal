@@ -12,6 +12,8 @@ import { reportData } from './reports.mjs';
 import { AttemptGate, isLedgerRecord, ledgerMatches, makeLedger, PUBLIC_CHANNELS } from '../src/shared/ledger.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { Vault } from './vault.mjs';
+import { LIMIT_DEFAULTS, MemeTrader } from './memetrade.mjs';
+import { exportSecret, newKeypair, parseSecret } from './solana-tx.mjs';
 import { Worker } from 'node:worker_threads';
 import { initLog, log, logFile } from './log.mjs';
 import { initialWindow, loadWindowState, MIN_H, MIN_W, saveWindowState } from './windowState.mjs';
@@ -112,6 +114,8 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // the meme swarm trades from this window: keep its timers at full speed when minimised or covered
+      backgroundThrottling: false,
     },
   });
   // external links open in the default browser, never inside the app
@@ -246,10 +250,12 @@ const ledgerRecord = () => {
 const NEEDS_SERVICES = /^(ccxt|trade|amt|report):|^vault:test$/;
 
 function registerIpc() {
+  // the swarm keeps trading behind the lock screen: its own trades, balances and Telegram updates only
+  const SWARM_WHILE_SEALED = new Set(['swarm:buy', 'swarm:sell', 'swarm:balance', 'swarm:notify', 'swarm:notifyPhoto', 'solana:rpc', 'net:fetchImage']);
   const handle = (ch, fn) =>
     ipcMain.handle(ch, async (e, ...args) => {
       try {
-        if (!unlocked && !PUBLIC_CHANNELS.has(ch)) throw new Error('Terminal is sealed — enter the ledger key');
+        if (!unlocked && !PUBLIC_CHANNELS.has(ch) && !SWARM_WHILE_SEALED.has(ch)) throw new Error('Terminal is sealed — enter the ledger key');
         if (NEEDS_SERVICES.test(ch)) await services;
         return { ok: true, value: await fn(e, ...args) };
       } catch (err) {
@@ -451,6 +457,163 @@ function registerIpc() {
       const j = await res.json();
       if (j.error) throw new Error(j.error.message ?? 'RPC error');
       return j.result;
+    } finally {
+      clearTimeout(t);
+    }
+  });
+
+  // meme swarm: its own trading wallet. The key lives in the vault and never
+  // leaves this process; trades need the wallet armed, and stay inside the
+  // limits kept here (per trade, per day, SOL kept for fees).
+  const swarmRpc = (rpcSecretId) => async (method, params) => {
+    const url = httpsOnly((rpcSecretId ? vault.reveal(rpcSecretId).fields.url : DEFAULT_RPC) ?? DEFAULT_RPC);
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 30_000);
+    try {
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }), signal: ctrl.signal });
+      if (!res.ok) throw new Error(`RPC ${res.status} ${res.statusText}`);
+      const j = await res.json();
+      if (j.error) throw new Error(j.error.message ?? 'RPC error');
+      return j.result;
+    } finally {
+      clearTimeout(t);
+    }
+  };
+  const swarmWalletId = () => db.get('swarmWallet') ?? null;
+  const swarmKeypair = () => {
+    const id = swarmWalletId();
+    if (!id) throw new Error('no swarm trading wallet — create or import one first');
+    return parseSecret(vault.reveal(id).fields.secret);
+  };
+  const swarmLimits = () => ({ ...LIMIT_DEFAULTS, ...(db.get('swarmLimits') ?? {}) });
+  const today = () => new Date().toISOString().slice(0, 10);
+  const swarmSpent = () => {
+    const s = db.get('swarmSpent');
+    return s?.day === today() ? Number(s.sol) || 0 : 0;
+  };
+  const trader = (rpcSecretId) =>
+    new MemeTrader({
+      wallet: swarmKeypair,
+      rpc: swarmRpc(rpcSecretId),
+      http: (url, init) => fetch(httpsOnly(url), init),
+      limits: swarmLimits,
+      spent: swarmSpent,
+      addSpend: (sol) => db.set('swarmSpent', { day: today(), sol: swarmSpent() + sol }),
+      log: (m) => log('info', `swarm: ${m}`),
+    });
+  const saveSwarmWallet = (kp, label) => {
+    const id = vault.save({ id: swarmWalletId() ?? undefined, label, kind: 'solana-hot', exchange: null, fields: { secret: exportSecret(kp), address: kp.address } });
+    db.set('swarmWallet', id);
+    return kp.address;
+  };
+  handle('swarm:wallet', () => {
+    const id = swarmWalletId();
+    if (!id) return null;
+    try {
+      return { address: vault.reveal(id).fields.address, limits: swarmLimits(), spentToday: swarmSpent() };
+    } catch {
+      return null;
+    }
+  });
+  handle('swarm:walletCreate', () => {
+    if (swarmWalletId()) throw new Error('a swarm wallet already exists');
+    return saveSwarmWallet(newKeypair(), 'Swarm trading wallet');
+  });
+  handle('swarm:walletImport', (_e, secret) => {
+    if (swarmWalletId()) throw new Error('remove the current swarm wallet first');
+    return saveSwarmWallet(parseSecret(secret), 'Swarm trading wallet (imported)');
+  });
+  handle('swarm:walletExport', async () => {
+    const kp = swarmKeypair();
+    const r = await dialog.showMessageBox(win, {
+      type: 'warning',
+      buttons: ['Cancel', 'Copy private key'],
+      defaultId: 0,
+      cancelId: 0,
+      title: 'Export the swarm wallet',
+      message: 'Copy the swarm wallet’s private key to the clipboard?',
+      detail: 'Anyone with this key controls the wallet. Paste it straight into Phantom (Add account → Import private key); the clipboard is cleared after 60 seconds.',
+    });
+    if (r.response !== 1) return false;
+    const secret = exportSecret(kp);
+    clipboard.writeText(secret);
+    setTimeout(() => clipboard.readText() === secret && clipboard.clear(), 60_000);
+    return true;
+  });
+  handle('swarm:walletRemove', async () => {
+    const id = swarmWalletId();
+    if (!id) return true;
+    const r = await dialog.showMessageBox(win, {
+      type: 'warning',
+      buttons: ['Cancel', 'Remove'],
+      defaultId: 0,
+      cancelId: 0,
+      title: 'Remove the swarm wallet',
+      message: 'Remove the swarm wallet from this computer?',
+      detail: 'Export its private key first if it still holds funds — without the key they cannot be recovered.',
+    });
+    if (r.response !== 1) return false;
+    vault.remove(id);
+    db.set('swarmWallet', null);
+    db.set('swarmLimits', { ...swarmLimits(), armed: false });
+    return true;
+  });
+  handle('swarm:setLimits', async (_e, p) => {
+    const cur = swarmLimits();
+    const next = { ...cur };
+    for (const k of ['maxBuySol', 'dailySpendSol', 'reserveSol', 'slippageBps', 'priorityLamports']) if (Number.isFinite(Number(p?.[k])) && Number(p[k]) >= 0) next[k] = Number(p[k]);
+    if (p?.armed === false) next.armed = false;
+    if (p?.armed === true && !cur.armed) {
+      const address = swarmKeypair().address;
+      const r = await dialog.showMessageBox(win, {
+        type: 'warning',
+        buttons: ['Cancel', 'Trade live'],
+        defaultId: 0,
+        cancelId: 0,
+        title: 'Live trading',
+        message: 'Let the swarm buy and sell meme coins on its own, with real SOL?',
+        detail: `Wallet ${address}
+Up to ${next.maxBuySol} SOL a trade and ${next.dailySpendSol} SOL a day; ${next.reserveSol} SOL kept for fees.
+
+Trades are signed here without asking you each time. Most meme coins go to zero — only fund this wallet with what you can afford to lose.`,
+      });
+      if (r.response !== 1) return cur;
+      next.armed = true;
+    }
+    db.set('swarmLimits', next);
+    log('info', `swarm limits: ${JSON.stringify(next)}`);
+    return next;
+  });
+  handle('swarm:balance', async (_e, rpcSecretId) => ({ sol: await trader(rpcSecretId).solBalance(), spentToday: swarmSpent(), limits: swarmLimits() }));
+  handle('swarm:buy', async (_e, mint, sol, rpcSecretId) => {
+    const r = await trader(rpcSecretId).buy(String(mint), Number(sol));
+    log('info', `swarm bought ${mint} for ${sol} SOL via ${r.via}: ${r.signature}`);
+    return r;
+  });
+  handle('swarm:sell', async (_e, mint, raw, rpcSecretId) => {
+    const r = await trader(rpcSecretId).sell(String(mint), raw === 'all' ? 'all' : String(raw));
+    log('info', `swarm sold ${mint} via ${r.via}: ${r.signature}`);
+    return r;
+  });
+  handle('swarm:notify', (_e, id, html) => {
+    const s = tg(id);
+    return tgSendLong(s.fields.token, s.fields.chatId, html);
+  });
+  handle('swarm:notifyPhoto', (_e, id, png, caption) => {
+    const s = tg(id);
+    return tgSendPhoto(s.fields.token, s.fields.chatId, new Uint8Array(png), caption);
+  });
+  // coin logos for the Telegram pictures (as data, so drawing them keeps the canvas exportable)
+  handle('net:fetchImage', async (_e, url) => {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 10_000);
+    try {
+      const res = await fetch(httpsOnly(url), { signal: ctrl.signal });
+      const type = res.headers.get('content-type') ?? '';
+      if (!res.ok || !/^image\//.test(type)) throw new Error('not an image');
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > 3_000_000) throw new Error('image too large');
+      return `data:${type};base64,${buf.toString('base64')}`;
     } finally {
       clearTimeout(t);
     }

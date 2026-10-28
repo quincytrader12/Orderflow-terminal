@@ -492,6 +492,25 @@ export interface AmtOrderFlow {
   pools: number;
 }
 
+/** Hard limits on the swarm's live trading, kept in the main process. */
+export interface SwarmLimits {
+  armed: boolean;
+  maxBuySol: number;
+  dailySpendSol: number;
+  reserveSol: number;
+  slippageBps: number;
+  priorityLamports: number;
+}
+
+/** A confirmed swap: the real SOL and token changes (raw units) in the wallet. */
+export interface SwarmFill {
+  signature: string;
+  via: string;
+  solDelta: number | null;
+  tokenDelta: string | null;
+  decimals: number | null;
+}
+
 export interface AmtEvent {
   id: string;
   t: number;
@@ -590,6 +609,20 @@ export interface NovusApi {
     vacuum(): Promise<void>;
     setRetention(days: number): Promise<void>;
     exportCsv(venue: string, symbol: string): Promise<{ path: string; rows: number } | null>;
+  };
+  swarm: {
+    wallet(): Promise<{ address: string; limits: SwarmLimits; spentToday: number } | null>;
+    create(): Promise<string>;
+    importKey(secret: string): Promise<string>;
+    exportKey(): Promise<boolean>;
+    remove(): Promise<boolean>;
+    setLimits(p: Partial<SwarmLimits>): Promise<SwarmLimits>;
+    balance(rpcSecretId?: string): Promise<{ sol: number; spentToday: number; limits: SwarmLimits }>;
+    buy(mint: string, sol: number, rpcSecretId?: string): Promise<SwarmFill>;
+    sell(mint: string, raw: string, rpcSecretId?: string): Promise<SwarmFill>;
+    notify(id: string, html: string): Promise<void>;
+    notifyPhoto(id: string, png: Uint8Array, caption: string): Promise<void>;
+    fetchImage(url: string): Promise<string>;
   };
   solana: {
     /** read-only JSON-RPC (getAccountInfo, getTokenLargestAccounts, getMultipleAccounts, …) */

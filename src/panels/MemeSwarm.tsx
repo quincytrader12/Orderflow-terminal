@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { fmtAgo, fmtTime, fmtUsd } from '../core/format';
+import { desktop } from '../desktop/bridge';
 import { useMeme } from '../meme/scanner';
 import { multiple, pnlSol } from '../meme/swarm/book';
 import { calibrate } from '../meme/swarm/outcomes';
-import { useSwarm, type AgentId } from '../meme/swarm/swarm';
+import { swarm, useSwarm, type AgentId } from '../meme/swarm/swarm';
 import { Chip, Empty, NumberInput, Spacer, Toolbar, useTicker, type PanelProps } from '../ui/controls';
 
 export interface MemeSwarmConfig {
-  tab: 'live' | 'trades' | 'results' | 'rules';
+  tab: 'live' | 'trades' | 'results' | 'rules' | 'wallet';
 }
 
 export const MEME_SWARM_DEFAULTS: MemeSwarmConfig = { tab: 'live' };
@@ -51,10 +52,16 @@ export function MemeSwarm({ config: c, setConfig }: PanelProps<MemeSwarmConfig>)
         <button className={`chip swarm-power ${sw.enabled ? 'on' : ''}`} onClick={() => sw.set({ enabled: !sw.enabled })} title="Turn the swarm on or off (it keeps running with its panel closed)">
           {sw.enabled ? '■ Swarm on' : '▶ Start swarm'}
         </button>
-        <span className="meme-tag">paper</span>
-        {(['live', 'trades', 'results', 'rules'] as const).map((t) => (
+        <button
+          className={`meme-tag swarm-mode ${sw.mode}`}
+          onClick={() => setConfig({ tab: 'wallet' })}
+          title={sw.mode === 'live' ? (sw.wallet?.limits.armed ? 'Trading real SOL from the swarm wallet, on its own' : 'Live mode, but not armed — nothing is bought') : 'Paper trading — switch to live under Wallet'}
+        >
+          {sw.mode === 'live' ? (sw.wallet?.limits.armed ? '● LIVE' : 'live · not armed') : 'paper'}
+        </button>
+        {(['live', 'trades', 'results', 'rules', 'wallet'] as const).map((t) => (
           <Chip key={t} active={c.tab === t} onClick={() => setConfig({ tab: t })}>
-            {t === 'live' ? 'Live' : t === 'trades' ? 'Trades' : t === 'results' ? 'Results' : 'Rules'}
+            {t[0].toUpperCase() + t.slice(1)}
           </Chip>
         ))}
         <Spacer />
@@ -152,6 +159,7 @@ export function MemeSwarm({ config: c, setConfig }: PanelProps<MemeSwarmConfig>)
                     <th>Peak</th>
                     <th>P&amp;L</th>
                     <th>Status</th>
+                    <th />
                   </tr>
                 </thead>
                 <tbody>
@@ -169,7 +177,24 @@ export function MemeSwarm({ config: c, setConfig }: PanelProps<MemeSwarmConfig>)
                         <td className="mono">{Number.isFinite(m) ? `${m.toFixed(2)}×` : '—'}</td>
                         <td className="mono">{p.peakMult.toFixed(2)}×</td>
                         <td className={`mono ${pnl >= 0 ? 'up' : 'down'}`}>{Number.isFinite(pnl) ? sol(pnl) : '—'}</td>
-                        <td className="muted">{p.closedAt ? p.closeReason : p.tpDone ? `open · ${p.tpDone} take-profit${p.tpDone > 1 ? 's' : ''} hit` : 'open'}</td>
+                        <td className="muted">
+                          {p.live ? 'LIVE · ' : ''}
+                          {p.closedAt ? p.closeReason : p.pending ? 'selling…' : p.tpDone ? `open · ${p.tpDone} take-profit${p.tpDone > 1 ? 's' : ''} hit` : 'open'}
+                        </td>
+                        <td>
+                          {!p.closedAt && (
+                            <button
+                              className="chip"
+                              disabled={p.pending}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (confirm(`Sell all of ${p.symbol} now${p.live ? ' (real SOL)' : ''}?`)) swarm.sellNow(p.id);
+                              }}
+                            >
+                              Sell
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
@@ -179,8 +204,21 @@ export function MemeSwarm({ config: c, setConfig }: PanelProps<MemeSwarmConfig>)
               <Empty>No trades yet — the Strategist only buys when heat, virality and viability all line up.</Empty>
             )}
             <div className="muted swarm-note">
-              Paper trades: fills priced exactly on the bonding curve (fee and price impact included) or on the pool. Live trading through Phantom comes next.
-              {sw.positions.length > 0 && (
+              Paper trades are priced exactly on the bonding curve (fee and price impact included) or on the pool; live trades book what the chain says was paid and received.
+              {sw.positions.some((p) => !p.closedAt) && (
+                <>
+                  {' '}
+                  <a
+                    onClick={() => {
+                      const open = sw.positions.filter((p) => !p.closedAt);
+                      if (confirm(`Sell all ${open.length} open position${open.length > 1 ? 's' : ''} now?`)) for (const p of open) swarm.sellNow(p.id);
+                    }}
+                  >
+                    Sell everything
+                  </a>
+                </>
+              )}
+              {sw.positions.length > 0 && !sw.positions.some((p) => p.live && !p.closedAt) && (
                 <>
                   {' '}
                   <a onClick={() => confirm('Clear all paper trades and results?') && sw.reset()}>Clear history</a>
@@ -192,6 +230,7 @@ export function MemeSwarm({ config: c, setConfig }: PanelProps<MemeSwarmConfig>)
 
         {c.tab === 'results' && <Results />}
         {c.tab === 'rules' && <Rules />}
+        {c.tab === 'wallet' && <Wallet />}
       </div>
     </div>
   );
@@ -286,6 +325,134 @@ function Rules() {
       {row('Stale after', <NumberInput value={m.staleMin} onChange={(staleMin) => setManager({ staleMin })} min={1} step={5} suffix="min" />, `no new high, and under ${m.staleBelow}×`)}
       {row('Daily loss limit', <NumberInput value={m.dailyLossSol} onChange={(dailyLossSol) => setManager({ dailyLossSol })} min={0.01} step={0.1} suffix="SOL" />, 'no new trades for the day after this')}
       <div className="muted swarm-note">The Sentinel's rejections (live mint or freeze authority, creator dumping, bundled launches, top 10 over 50 %, wash trading, idle trading, thin pools, creators whose earlier coins rugged) are not adjustable: they are the rugs.</div>
+    </div>
+  );
+}
+
+/** The swarm's own trading wallet: live mode, its limits, and the arm switch. */
+function Wallet() {
+  const sw = useSwarm();
+  const w = sw.wallet;
+  const [secret, setSecret] = useState('');
+  const [busy, setBusy] = useState('');
+  const [err, setErr] = useState('');
+  const run = async (what: string, f: () => Promise<unknown>) => {
+    setBusy(what);
+    setErr('');
+    try {
+      await f();
+    } catch (e) {
+      setErr(String((e as Error)?.message ?? e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+    } finally {
+      setBusy('');
+      await swarm.refreshWallet();
+    }
+  };
+  if (!desktop) return <Empty>Live trading runs in the desktop app: the wallet key stays in its main process.</Empty>;
+  const limit = (k: 'maxBuySol' | 'dailySpendSol' | 'reserveSol', v: number) => run('limits', () => desktop!.swarm.setLimits({ [k]: v }));
+  const row = (label: string, el: React.ReactNode, hint: string) => (
+    <label className="swarm-rule">
+      <span>{label}</span>
+      {el}
+      <span className="muted">{hint}</span>
+    </label>
+  );
+  return (
+    <div className="swarm-rules">
+      <div className="section-title">Mode</div>
+      <div className="swarm-modes">
+        <Chip active={sw.mode === 'paper'} onClick={() => sw.set({ mode: 'paper' })}>
+          Paper
+        </Chip>
+        <Chip active={sw.mode === 'live'} onClick={() => sw.set({ mode: 'live' })}>
+          Live
+        </Chip>
+        <span className="muted">
+          {sw.mode === 'paper'
+            ? 'Trades are simulated against the real market. Nothing leaves a wallet.'
+            : w?.limits.armed
+              ? 'The swarm buys, manages and sells on its own from the wallet below — no approval clicks. Telegram gets a card for each buy, each new multiple and each sale.'
+              : 'Live, but not armed: picks are logged and nothing is bought until you arm the wallet below.'}
+        </span>
+      </div>
+
+      <div className="section-title">Swarm wallet</div>
+      {w ? (
+        <>
+          <div className="swarm-wallet">
+            <div>
+              <div className="muted">Address — send SOL here to fund it</div>
+              <div className="mono swarm-address" onClick={() => navigator.clipboard.writeText(w.address)} title="Copy">
+                {w.address}
+              </div>
+            </div>
+            <div>
+              <div className="muted">Balance</div>
+              <div className="mono swarm-balance">{w.sol === null ? '—' : `${w.sol.toFixed(4)} SOL`}</div>
+            </div>
+            <div>
+              <div className="muted">Spent today</div>
+              <div className="mono">
+                {w.spentToday.toFixed(3)} / {w.limits.dailySpendSol} SOL
+              </div>
+            </div>
+          </div>
+          <div className="swarm-arm">
+            {w.limits.armed ? (
+              <button className="chip swarm-armed" disabled={!!busy} onClick={() => run('arm', () => desktop!.swarm.setLimits({ armed: false }))}>
+                ■ Disarm — stop buying
+              </button>
+            ) : (
+              <button className="chip swarm-arm-btn" disabled={!!busy} onClick={() => run('arm', () => desktop!.swarm.setLimits({ armed: true }))}>
+                Arm live trading…
+              </button>
+            )}
+            <span className="muted">{w.limits.armed ? 'Armed: the swarm signs its own trades within the limits below. Open positions keep being managed and sold after you disarm.' : 'Arming asks for confirmation in a system dialog.'}</span>
+          </div>
+          {row('Per trade', <NumberInput value={w.limits.maxBuySol} onChange={(v) => limit('maxBuySol', v)} min={0.001} step={0.01} suffix="SOL" />, `hard cap; the swarm buys ${Math.min(sw.manager.sizeSol, w.limits.maxBuySol)} SOL (the smaller of this and Rules → Size)`)}
+          {row('Per day', <NumberInput value={w.limits.dailySpendSol} onChange={(v) => limit('dailySpendSol', v)} min={0.001} step={0.1} suffix="SOL" />, 'total bought per day, then it stops')}
+          {row('Keep for fees', <NumberInput value={w.limits.reserveSol} onChange={(v) => limit('reserveSol', v)} min={0} step={0.01} suffix="SOL" />, 'never spent on coins, so sells can always pay their fee')}
+          {row(
+            'Slippage',
+            <NumberInput value={w.limits.slippageBps / 100} onChange={(v) => run('limits', () => desktop!.swarm.setLimits({ slippageBps: Math.round(v * 100) }))} min={1} step={1} suffix="%" />,
+            'meme coins move fast: 10–20 % is normal',
+          )}
+          {row(
+            'Priority fee',
+            <NumberInput value={w.limits.priorityLamports / 1e9} onChange={(v) => run('limits', () => desktop!.swarm.setLimits({ priorityLamports: Math.round(v * 1e9) }))} min={0} step={0.0001} suffix="SOL" />,
+            'most it pays to land a trade quickly',
+          )}
+          <div className="swarm-arm">
+            <button className="chip" disabled={!!busy} onClick={() => run('export', () => desktop!.swarm.exportKey())}>
+              Export to Phantom…
+            </button>
+            <button className="chip" disabled={!!busy} onClick={() => run('remove', () => desktop!.swarm.remove())}>
+              Remove wallet…
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="muted swarm-note">
+            Phantom asks you to approve every trade, so the swarm trades from a wallet of its own. Its key is encrypted in the vault and used only by the app's main process. Fund it with a small amount and send profits back to Phantom when you like — or import it into Phantom with Export.
+          </div>
+          <div className="swarm-arm">
+            <button className="chip swarm-arm-btn" disabled={!!busy} onClick={() => run('create', () => desktop!.swarm.create())}>
+              Create swarm wallet
+            </button>
+            <span className="muted">or import one:</span>
+            <input className="ctl mono" type="password" placeholder="private key (base58, as Phantom exports it)" value={secret} onChange={(e) => setSecret(e.target.value)} style={{ width: 280 }} />
+            <button className="chip" disabled={!!busy || !secret.trim()} onClick={() => run('import', async () => (await desktop!.swarm.importKey(secret.trim()), setSecret('')))}>
+              Import
+            </button>
+          </div>
+        </>
+      )}
+      {busy && <div className="muted swarm-note">Working…</div>}
+      {err && <div className="down swarm-note">{err}</div>}
+      <div className="muted swarm-note">
+        Trades go through Jupiter (pump.fun coins included), with pump.fun's own API as the fallback, and are sent through the Solana RPC — a private RPC (Helius, QuickNode) set under Settings lands them faster. Most meme coins go to zero: only fund this wallet with what you can afford to lose.
+      </div>
     </div>
   );
 }

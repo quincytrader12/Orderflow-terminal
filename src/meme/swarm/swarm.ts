@@ -6,20 +6,21 @@
 //   Strategist — enters when heat, virality and viability all line up
 //   Manager    — runs the trade: take profits, trailing stop, stop loss, rug exits
 //
-// Trades are on paper until live execution through Phantom is added. Every
-// pick (and a sample of passed-but-not-picked coins) is followed for an hour,
-// so the hit rates per conviction level show whether the strategy works.
+// Trades are on paper, or live from the swarm's own wallet (signed in the main
+// process within hard limits, no approval clicks). Every pick (and a sample of
+// passed-but-not-picked coins) is followed for an hour, so the hit rates per
+// conviction level show whether the strategy works.
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import { desktop, type SwarmLimits } from '../../desktop/bridge';
 import { fetchJson } from '../../exchanges/ws';
-import { escapeHtml } from '../../shared/telegram';
 import { getSettings } from '../../store/settings';
-import { telegram } from '../../desktop/telegram';
 import { scanner, useMeme } from '../scanner';
 import { assess } from '../score';
 import type { MemeToken } from '../token';
 import { herald, Narratives, sentinel, strategist, STRATEGY_DEFAULTS, type CreatorRecord, type StrategyConfig, type Viability, type Virality } from './agents';
-import { managePosition, MANAGER_DEFAULTS, multiple, openPosition, pnlSol, type ManagerConfig, type Position } from './book';
+import { applySell, decideExit, managePosition, MANAGER_DEFAULTS, multiple, newMilestone, openPosition, pnlSol, type ExitDecision, type ManagerConfig, type Position } from './book';
+import { tellWithCard } from './notify';
 import { follow, newOutcome, type Outcome } from './outcomes';
 
 export type AgentId = 'scout' | 'sentinel' | 'herald' | 'strategist' | 'manager';
@@ -43,8 +44,18 @@ export interface CoinRead {
   mcapUsd: number;
 }
 
+export interface SwarmWallet {
+  address: string;
+  limits: SwarmLimits;
+  spentToday: number;
+  sol: number | null;
+}
+
 interface SwarmState {
   enabled: boolean;
+  /** paper, or live: real trades from the swarm wallet, no approval click */
+  mode: 'paper' | 'live';
+  wallet: SwarmWallet | null;
   strategy: StrategyConfig;
   manager: ManagerConfig;
   positions: Position[];
@@ -77,6 +88,8 @@ export const useSwarm = create<SwarmState>()(
   persist(
     (set) => ({
       enabled: false,
+      mode: 'paper',
+      wallet: null,
       strategy: { ...STRATEGY_DEFAULTS },
       manager: { ...MANAGER_DEFAULTS },
       positions: [],
@@ -92,7 +105,7 @@ export const useSwarm = create<SwarmState>()(
     {
       name: 'novus-swarm',
       storage: createJSONStorage(() => localStorage),
-      partialize: (s) => ({ enabled: s.enabled, strategy: s.strategy, manager: s.manager, positions: s.positions.slice(-300), outcomes: s.outcomes.slice(-2000) }),
+      partialize: (s) => ({ enabled: s.enabled, mode: s.mode, strategy: s.strategy, manager: s.manager, positions: s.positions.slice(-300), outcomes: s.outcomes.slice(-2000) }),
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<SwarmState>;
         return { ...current, ...p, strategy: { ...STRATEGY_DEFAULTS, ...p.strategy }, manager: { ...MANAGER_DEFAULTS, ...p.manager } };
@@ -106,6 +119,7 @@ const TICK_MS = 2000;
 class Swarm {
   private release: (() => void) | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private walletTimer: ReturnType<typeof setInterval> | null = null;
   private narratives = new Narratives();
   private creators = new Map<string, CreatorRecord>();
   private seen = new Set<string>();
@@ -124,10 +138,15 @@ class Swarm {
       this.release = scanner.use();
       for (const p of useSwarm.getState().positions) if (!p.closedAt) scanner.pin(p.mint);
       this.timer = setInterval(() => this.tick(), TICK_MS);
-      this.say('scout', 'Swarm on — watching every pump.fun launch, migration and DexScreener listing (paper trading).');
+      void this.refreshWallet();
+      this.walletTimer = setInterval(() => void this.refreshWallet(), 30_000);
+      const live = useSwarm.getState().mode === 'live';
+      this.say('scout', `Swarm on — watching every pump.fun launch, migration and DexScreener listing (${live ? 'LIVE trading from the swarm wallet' : 'paper trading'}).`);
     } else if (!on && this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+      if (this.walletTimer) clearInterval(this.walletTimer);
+      this.walletTimer = null;
       this.release?.();
       this.release = null;
       this.say('scout', 'Swarm off.');
@@ -138,11 +157,147 @@ class Swarm {
     useSwarm.setState((s) => ({ log: [...s.log.slice(-199), { t: Date.now(), agent, text, mint }] }));
   }
 
-  private tell(text: string) {
-    const s = getSettings();
-    if (!s.telegramBotStory || !s.telegramSecretId) return;
-    const [head, ...rest] = text.split('\n');
-    telegram.send(s.telegramSecretId, [`<b>${escapeHtml(head)}</b>`, ...rest.map(escapeHtml)].join('\n')).catch(() => undefined);
+  private rpcId() {
+    return getSettings().memeRpcSecretId || undefined;
+  }
+
+  /** The swarm wallet's state (live mode), refreshed every half minute. */
+  async refreshWallet() {
+    if (!desktop) return;
+    try {
+      const w = await desktop.swarm.wallet();
+      if (!w) return useSwarm.setState({ wallet: null });
+      const b = await desktop.swarm.balance(this.rpcId()).catch(() => null);
+      useSwarm.setState({ wallet: { address: w.address, limits: b?.limits ?? w.limits, spentToday: b?.spentToday ?? w.spentToday, sol: b ? b.sol : null } });
+    } catch {
+      /* keep the last state */
+    }
+  }
+
+  private buying = new Set<string>();
+
+  /** Buy for real from the swarm wallet; the position books what the chain says happened. */
+  private async liveBuy(tok: MemeToken, sizeSol: number, why: string, conviction: number, mc: string) {
+    this.buying.add(tok.mint);
+    this.say('manager', `${tok.symbol}: buying ${sizeSol} SOL live${mc}…`, tok.mint);
+    try {
+      const r = await desktop!.swarm.buy(tok.mint, sizeSol, this.rpcId());
+      const decimals = r.decimals ?? 6;
+      const raw = BigInt(r.tokenDelta ?? '0');
+      const tokens = Number(raw) / 10 ** decimals;
+      const cost = r.solDelta !== null ? -r.solDelta : sizeSol;
+      if (!(tokens > 0)) throw new Error(`the buy went through (${r.signature}) but no tokens showed up — check the wallet`);
+      const now = Date.now();
+      const p: Position = {
+        id: `${tok.mint}-${now}`,
+        mint: tok.mint,
+        symbol: tok.symbol,
+        openedAt: now,
+        costSol: cost,
+        entryPx: cost / tokens,
+        tokens,
+        left: tokens,
+        realizedSol: 0,
+        peakMult: 1,
+        peakAt: now,
+        tpDone: 0,
+        fills: [{ t: now, side: 'buy', sol: cost, tokens, mult: 1, why }],
+        why,
+        conviction,
+        live: { rawLeft: raw.toString(), decimals, buyTx: r.signature },
+      };
+      useSwarm.setState((s) => ({ positions: [...s.positions, p] }));
+      this.say('manager', `${tok.symbol}: bought live — ${cost.toFixed(4)} SOL for ${tokens.toLocaleString('en-US', { maximumFractionDigits: 0 })} tokens via ${r.via}`, tok.mint);
+      void tellWithCard(tok, p, `Bought — ${cost.toFixed(3)} SOL`, `🐝 Swarm bought ${tok.symbol} (LIVE)${mc}\nWhy: ${why}\nPaid: ${cost.toFixed(4)} SOL incl. fees, via ${r.via}\nPlan: ${this.plan()}\nTx: https://solscan.io/tx/${r.signature}`, useMeme.getState().solUsd);
+      void this.refreshWallet();
+    } catch (e) {
+      const msg = String((e as Error)?.message ?? e);
+      this.say('manager', `${tok.symbol}: live buy failed — ${msg}`, tok.mint);
+      void tellWithCard(undefined, null, '', `⚠️ Swarm could not buy ${tok.symbol}\nWhy: ${msg}`, 0);
+    } finally {
+      this.buying.delete(tok.mint);
+    }
+  }
+
+  /** Sell for real; books the SOL that really came back. */
+  private async liveSell(p: Position, d: ExitDecision) {
+    if (!p.live) return;
+    p.pending = true;
+    const sym = p.symbol;
+    try {
+      const left = BigInt(p.live.rawLeft);
+      const raw = d.share >= 1 ? 'all' : ((left * BigInt(Math.round(d.share * 1_000_000))) / 1_000_000n).toString();
+      const r = await desktop!.swarm.sell(p.mint, raw, this.rpcId());
+      const sold = -BigInt(r.tokenDelta ?? '0');
+      const rest = left - sold > 0n ? left - sold : 0n;
+      p.live.rawLeft = rest.toString();
+      const tokens = Number(sold) / 10 ** p.live.decimals;
+      const sol = r.solDelta ?? 0;
+      applySell(p, Date.now(), tokens, sol, d.why, d.mult, d.share >= 1 || rest === 0n);
+      if (d.tp) p.tpDone++;
+      p.retryAt = undefined;
+      this.say('manager', `${sym}: sold live — ${sol.toFixed(4)} SOL back — ${d.why}`, p.mint);
+      this.afterSell(p, d, `https://solscan.io/tx/${r.signature}`);
+      void this.refreshWallet();
+    } catch (e) {
+      const msg = String((e as Error)?.message ?? e);
+      if (/no tokens to sell/.test(msg)) {
+        applySell(p, Date.now(), p.left, 0, 'no tokens left in the wallet — closed', d.mult, true);
+        this.say('manager', `${sym}: nothing left in the wallet — position closed`, p.mint);
+      } else {
+        p.retryAt = Date.now() + 15_000;
+        this.say('manager', `${sym}: live sell failed, retrying in 15 s — ${msg}`, p.mint);
+      }
+    } finally {
+      p.pending = false;
+      useSwarm.setState((s) => ({ positions: [...s.positions] }));
+    }
+  }
+
+  private plan() {
+    const m = useSwarm.getState().manager;
+    return `${m.takeProfits.map((t) => `sell ${Math.round(t.sell * 100)}% at ${t.at}×`).join(', ')}, trail ${Math.round(m.trail * 100)}% from the peak once up ${m.trailFrom}×, stop −${Math.round(m.stopLoss * 100)}%`;
+  }
+
+  /** Telegram after a sell: a progress note for a take-profit, the result for a close. */
+  private afterSell(p: Position, d: ExitDecision, tx?: string) {
+    const { tokens, solUsd } = useMeme.getState();
+    const tok = tokens[p.mint];
+    const tag = p.live ? 'LIVE' : 'paper';
+    if (p.closedAt) {
+      const pnl = p.realizedSol - p.costSol;
+      void tellWithCard(
+        tok,
+        p,
+        `${pnl >= 0 ? '+' : '−'}${Math.abs(pnl).toFixed(3)} SOL (${(((p.realizedSol / p.costSol) - 1) * 100).toFixed(0)}%)`,
+        `${pnl >= 0 ? '💰' : '🔻'} Swarm closed ${p.symbol} (${tag}) ${pnl >= 0 ? '+' : '−'}${Math.abs(pnl).toFixed(4)} SOL\nWhy: ${d.why}\nResult: paid ${p.costSol.toFixed(4)} SOL, got back ${p.realizedSol.toFixed(4)} SOL · peak ${p.peakMult.toFixed(2)}× · held ${Math.max(1, Math.round((Date.now() - p.openedAt) / 60_000))} min${tx ? `\nTx: ${tx}` : ''}`,
+        solUsd,
+      );
+    } else
+      void tellWithCard(
+        tok,
+        p,
+        `${d.mult.toFixed(2)}× — profit taken`,
+        `✅ ${p.symbol} at ${d.mult.toFixed(2)}× (${tag}) — ${d.why}\nBanked so far: ${p.realizedSol.toFixed(4)} SOL of ${p.costSol.toFixed(4)} paid · still holding ${Math.round((p.left / p.tokens) * 100)}%${tx ? `\nTx: ${tx}` : ''}`,
+        solUsd,
+      );
+  }
+
+  /** Sell a position now (the panel's button). */
+  sellNow(id: string) {
+    const p = useSwarm.getState().positions.find((x) => x.id === id);
+    const { tokens, solUsd } = useMeme.getState();
+    const tok = p ? tokens[p.mint] : undefined;
+    if (!p || p.closedAt || p.pending) return;
+    const mult = tok ? multiple(p, tok, solUsd) : NaN;
+    const d: ExitDecision = { share: 1, why: 'sold by you', mult: Number.isFinite(mult) ? mult : 0, tp: false };
+    if (p.live) void this.liveSell(p, d);
+    else if (tok) {
+      const sol = Number.isFinite(mult) ? p.left * p.entryPx * mult * 0.98 : 0;
+      applySell(p, Date.now(), p.left, sol, d.why, d.mult, true);
+      this.afterSell(p, d);
+      useSwarm.setState((s) => ({ positions: [...s.positions] }));
+    }
   }
 
   /** Socials from the coin's metadata file (fetched only for coins worth a look). */
@@ -250,13 +405,18 @@ class Swarm {
         this.say('strategist', `${tok.symbol}: PICK (conviction ${d.conviction}) — ${d.why}`, tok.mint);
         const room = open.length + newPositions.length < sw.manager.maxOpen;
         const budget = lostToday < sw.manager.dailyLossSol;
-        if (room && budget) {
+        const mc = Number.isFinite(a.mcapUsd) ? ` at $${Math.round(a.mcapUsd).toLocaleString('en-US')} market cap` : '';
+        if (room && budget && sw.mode === 'live') {
+          const w = sw.wallet;
+          if (!desktop || !w) this.say('manager', `${tok.symbol}: not bought — live mode needs the swarm wallet (Wallet tab)`, tok.mint);
+          else if (!w.limits.armed) this.say('manager', `${tok.symbol}: not bought — live trading is not armed (Wallet tab)`, tok.mint);
+          else if (!this.buying.has(tok.mint)) void this.liveBuy(tok, Math.min(sw.manager.sizeSol, w.limits.maxBuySol), d.why, d.conviction, mc);
+        } else if (room && budget) {
           const p = openPosition(tok, sw.manager.sizeSol, now, solUsd, d.why, d.conviction);
           if (p) {
             newPositions.push(p);
-            const mc = Number.isFinite(a.mcapUsd) ? ` at $${Math.round(a.mcapUsd).toLocaleString('en-US')} market cap` : '';
             this.say('manager', `${tok.symbol}: bought ${p.costSol} SOL (paper)${mc}`, tok.mint);
-            this.tell(`🐝 Swarm bought ${tok.symbol} (paper)${mc}\nWhy: ${d.why}\nPlan: ${sw.manager.takeProfits.map((t) => `sell ${Math.round(t.sell * 100)}% at ${t.at}×`).join(', ')}, trail ${Math.round(sw.manager.trail * 100)}% from the peak, stop −${Math.round(sw.manager.stopLoss * 100)}%`);
+            void tellWithCard(tok, p, `Bought — ${p.costSol} SOL (paper)`, `🐝 Swarm bought ${tok.symbol} (paper)${mc}\nWhy: ${d.why}\nPlan: ${this.plan()}`, solUsd);
           }
         } else this.say('manager', `${tok.symbol}: not bought — ${room ? `daily loss limit (${sw.manager.dailyLossSol} SOL) reached` : `${sw.manager.maxOpen} positions already open`}`, tok.mint);
       } else if (!d.enter && v.verdict === 'pass' && a.heat >= 30 && !this.traded.has(tok.mint) && !this.controls.has(tok.mint) && now - this.lastControl > 30_000) {
@@ -268,20 +428,34 @@ class Swarm {
       }
     }
 
-    // Manager: every open position
+    // Manager: every open position (paper fills at once; live sells wait for the chain)
     const positions = [...sw.positions, ...newPositions];
     for (const p of positions) {
       if (p.closedAt) continue;
       const tok = tokens[p.mint];
       if (!tok) continue;
       const dangers = assess(tok, now, solUsd).flags.filter((f) => f.level === 'danger').map((f) => f.text);
-      for (const f of managePosition(p, tok, now, solUsd, sw.manager, dangers)) {
-        const pnl = pnlSol(p, tok, solUsd);
-        this.say('manager', `${p.symbol}: sold ${f.sol.toFixed(3)} SOL — ${f.why}${p.closedAt ? ` · closed ${pnl >= 0 ? '+' : ''}${pnl.toFixed(3)} SOL` : ''}`, p.mint);
-        if (p.closedAt) {
-          scanner.pin(p.mint, false);
-          this.tell(`${pnl >= 0 ? '💰' : '🔻'} Swarm closed ${p.symbol} (paper) ${pnl >= 0 ? '+' : ''}${pnl.toFixed(3)} SOL (${(((p.realizedSol / p.costSol) - 1) * 100).toFixed(0)}%)\nWhy: ${f.why}\nPeak ${p.peakMult.toFixed(2)}× · held ${Math.max(1, Math.round((now - p.openedAt) / 60_000))} min`);
+      if (p.live) {
+        // a failed sell waits 15 s of wall-clock time (the sell itself can take a minute)
+        if (p.pending || (p.retryAt && Date.now() < p.retryAt)) continue;
+        const d = decideExit(p, tok, now, solUsd, sw.manager, dangers);
+        if (d) void this.liveSell(p, d);
+      } else {
+        const tpBefore = p.tpDone;
+        for (const f of managePosition(p, tok, now, solUsd, sw.manager, dangers)) {
+          const pnl = pnlSol(p, tok, solUsd);
+          this.say('manager', `${p.symbol}: sold ${f.sol.toFixed(3)} SOL — ${f.why}${p.closedAt ? ` · closed ${pnl >= 0 ? '+' : ''}${pnl.toFixed(3)} SOL` : ''}`, p.mint);
+          if (p.closedAt || p.tpDone > tpBefore) this.afterSell(p, { share: 1, why: f.why, mult: f.mult, tp: p.tpDone > tpBefore && !p.closedAt });
         }
+      }
+      if (p.closedAt) scanner.pin(p.mint, false);
+      // progress on Telegram as the price multiplies: 2×, 5×, 10×, 25×, 50×, 100× …
+      const m = multiple(p, tok, solUsd);
+      const hit = !p.closedAt && Number.isFinite(m) ? newMilestone(p, m) : null;
+      if (hit) {
+        const value = p.realizedSol + p.left * p.entryPx * m;
+        this.say('manager', `${p.symbol}: ${hit}× — position worth ${value.toFixed(3)} SOL (paid ${p.costSol.toFixed(3)})`, p.mint);
+        void tellWithCard(tok, p, `${m.toFixed(1)}× and running`, `🚀 ${p.symbol} is ${m.toFixed(2)}× (${p.live ? 'LIVE' : 'paper'})\nPosition: worth ${value.toFixed(4)} SOL · paid ${p.costSol.toFixed(4)} SOL · banked ${p.realizedSol.toFixed(4)} SOL\nNext: ${this.plan()}`, solUsd);
       }
     }
 
