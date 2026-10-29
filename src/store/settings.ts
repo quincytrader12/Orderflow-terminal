@@ -193,7 +193,7 @@ const initial: Settings = {
   byodToken: '',
   backfillMinutes: 30,
   theme: 'void',
-  view: 'terminal',
+  view: 'command',
   filter: 'none',
   glass: 'medium',
   soundEnabled: true,
@@ -242,7 +242,7 @@ export const useSettings = create<Settings & Actions>()(
     }),
     {
       name: 'oft-settings',
-      version: 5,
+      version: 6,
       // v1 had dark/light themes only
       migrate: (persisted, version) => {
         const p = (persisted ?? {}) as Record<string, unknown>;
@@ -256,6 +256,8 @@ export const useSettings = create<Settings & Actions>()(
         }
         // v5: the black-and-chrome look is the default
         if (version < 5) p.theme = 'void';
+        // v6: the app is the meme terminal; the order-flow layout is in Settings
+        if (version < 6) p.view = 'command';
         return p as unknown as Settings & Actions;
       },
       storage: createJSONStorage(() => safeStorage),

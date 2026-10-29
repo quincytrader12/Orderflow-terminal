@@ -7,6 +7,8 @@
 //   bottom   today's budget · the bots' gauges · their live log
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { fmtNum, fmtTime, fmtUsd } from '../core/format';
+import { fetchJson } from '../exchanges/ws';
+import { ensureHistory, priceSeries } from '../meme/history';
 import { meters, scanner, useMeme } from '../meme/scanner';
 import { useSwarm } from '../meme/swarm/swarm';
 import type { MemeToken } from '../meme/token';
@@ -14,6 +16,9 @@ import { useBoot } from '../app/boot';
 import { Canvas, font, type PointerState } from '../ui/canvas';
 import { rgba, type Palette } from '../ui/theme';
 import { useTicker } from '../ui/controls';
+import { MemeScanner, MEME_SCANNER_DEFAULTS, type MemeScannerConfig } from '../panels/MemeScanner';
+import { MemeToken as MemeTokenPanel, MEME_TOKEN_DEFAULTS, type MemeTokenConfig } from '../panels/MemeToken';
+import { Rules, Wallet } from '../panels/MemeSwarm';
 import { coreMemory, drawCore, type CoreInput } from './core';
 import { Core3D, webglAvailable } from './core3d';
 import { commandStats, Rate, type CommandStats } from './stats';
@@ -239,7 +244,7 @@ function CoreView({ input, onSelect }: { input: React.MutableRefObject<CoreInput
   return <div className="cc3d" ref={host} />;
 }
 
-function Gauge({ value, label, sub, tone }: { value: number | null; label: string; sub: string; tone: 'cyan' | 'magenta' | 'chrome' }) {
+function Gauge({ value, label, sub, tone, text }: { value: number | null; label: string; sub: string; tone: 'cyan' | 'magenta' | 'chrome' | 'mint'; text?: string }) {
   const v = value === null || !Number.isFinite(value) ? 0 : Math.max(0, Math.min(1, value));
   const r = 30;
   const c = 2 * Math.PI * r;
@@ -256,10 +261,55 @@ function Gauge({ value, label, sub, tone }: { value: number | null; label: strin
         <circle cx="40" cy="40" r={r} className="cc-gauge-track" />
         <circle cx="40" cy="40" r={r} className="cc-gauge-arc" strokeDasharray={`${c * v} ${c}`} transform="rotate(-90 40 40)" />
       </svg>
-      <div className="cc-gauge-val mono">{value === null ? '—' : `${Math.round(v * 100)}%`}</div>
+      <div className="cc-gauge-val mono">{text ?? (value === null ? '—' : `${Math.round(v * 100)}%`)}</div>
       <div className="cc-gauge-label">{label}</div>
       <div className="cc-gauge-sub muted">{sub}</div>
     </div>
+  );
+}
+
+export type DrawerTab = 'wallet' | 'scanner' | 'coin' | 'rules';
+const DRAWER_TABS: { id: DrawerTab; label: string }[] = [
+  { id: 'wallet', label: '◎ Wallet' },
+  { id: 'scanner', label: '⌕ Scanner' },
+  { id: 'coin', label: 'Coin' },
+  { id: 'rules', label: 'Rules' },
+];
+
+/** Open a Command Center drawer from anywhere (the top bar's Wallet and Scanner buttons). */
+export function openDrawer(tab: DrawerTab) {
+  window.dispatchEvent(new CustomEvent('novus:drawer', { detail: tab }));
+}
+
+/** Wallet, scanner, a coin's detail and the rules, sliding in over the right side. */
+function Drawer({ tab, onTab, onClose }: { tab: DrawerTab; onTab: (t: DrawerTab) => void; onClose: () => void }) {
+  const [scan, setScan] = useState<MemeScannerConfig>({ ...MEME_SCANNER_DEFAULTS });
+  const [coin, setCoin] = useState<MemeTokenConfig>({ ...MEME_TOKEN_DEFAULTS });
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', esc);
+    return () => window.removeEventListener('keydown', esc);
+  }, [onClose]);
+  return (
+    <aside className="cc-drawer" aria-label="Drawer">
+      <header className="cc-drawer-head">
+        {DRAWER_TABS.map((t) => (
+          <button key={t.id} className={`chip${tab === t.id ? ' active' : ''}`} onClick={() => onTab(t.id)}>
+            {t.label}
+          </button>
+        ))}
+        <span style={{ flex: 1 }} />
+        <button className="chip" onClick={onClose} title="Close (Esc)">
+          ✕
+        </button>
+      </header>
+      <div className={`cc-drawer-body${tab === 'wallet' || tab === 'rules' ? ' padded' : ''}`}>
+        {tab === 'wallet' && <Wallet />}
+        {tab === 'rules' && <Rules />}
+        {tab === 'scanner' && <MemeScanner config={scan} setConfig={(p) => setScan((c) => ({ ...c, ...p }))} nodeId="cc-scanner" />}
+        {tab === 'coin' && <MemeTokenPanel config={coin} setConfig={(p) => setCoin((c) => ({ ...c, ...p }))} nodeId="cc-coin" />}
+      </div>
+    </aside>
   );
 }
 
@@ -281,6 +331,26 @@ export function CommandCenter() {
   const focusMint = [...sw.positions].reverse().find((p) => !p.closedAt)?.mint ?? sw.reads.find((r) => r.enter)?.mint ?? sw.reads[0]?.mint ?? selected ?? undefined;
   const focus: MemeToken | undefined = focusMint ? tokens[focusMint] : undefined;
   const focusPos = focus ? [...sw.positions].reverse().find((p) => p.mint === focus.mint) : undefined;
+
+  // pool coins have no trade feed: their chart comes from the pool's candles
+  useEffect(() => {
+    if (focus && focus.trades.length < 2) void ensureHistory(focus, solUsd, fetchJson).catch(() => undefined);
+  }, [focus?.mint, solUsd]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const [drawer, setDrawer] = useState<DrawerTab | null>(null);
+  useEffect(() => {
+    const open = (e: Event) => setDrawer((e as CustomEvent<DrawerTab>).detail);
+    window.addEventListener('novus:drawer', open);
+    return () => window.removeEventListener('novus:drawer', open);
+  }, []);
+  /** a coin, anywhere on this screen: its detail in the drawer */
+  const openCoin = (mint?: string) => {
+    if (!mint) return;
+    select(mint);
+    setDrawer('coin');
+  };
+  const w = sw.wallet;
+  const bestRead = sw.reads.reduce((m, r) => Math.max(m, r.conviction), 0);
 
   const pumpRate = rates.pump.mean(5);
   const age = (t: number) => (t ? `${Math.max(0, Math.round((now - t) / 1000))} s ago` : '—');
@@ -335,7 +405,7 @@ export function CommandCenter() {
             {[0, 1].map((k) => (
               <span key={k} className="cc-ticker-run" aria-hidden={k === 1}>
                 {ticker.map((l, i) => (
-                  <span key={i} className={`cc-tick a-${l.agent}`} onClick={() => l.mint && select(l.mint)}>
+                  <span key={i} className={`cc-tick a-${l.agent}`} onClick={() => openCoin(l.mint)}>
                     <b>{l.agent.toUpperCase()}</b> {l.text}
                   </span>
                 ))}
@@ -373,7 +443,7 @@ export function CommandCenter() {
         </Card>
 
         <Card n="02" title={focus ? `Focus · ${focus.symbol}` : 'Focus'} right={focus && <span className="mono">{fmtUsd(focus.dex?.mcapUsd && focus.migrated ? focus.dex.mcapUsd : focus.mcapSol * solUsd, 1)}</span>} className="cc-focus">
-          <div className="cc-chart" onClick={() => focus && select(focus.mint)}>
+          <div className="cc-chart" onClick={() => openCoin(focus?.mint)}>
             <Chart
               cursor="pointer"
               draw={(ctx, w, h, pal, hover) =>
@@ -382,7 +452,7 @@ export function CommandCenter() {
                   w,
                   h,
                   pal,
-                  (focus?.trades ?? []).slice(-300).map((x) => ({ t: x.t, v: x.mcapSol * (solUsd || 1) })),
+                  (focus ? priceSeries(focus) : []).slice(-300).map((x) => ({ t: x.t, v: x.mcapSol * (solUsd || 1) })),
                   { color: pal.accentRgb, marks: focusPos?.fills.map((f) => ({ t: f.t, side: f.side })), label: (v) => (solUsd ? `$${fmtNum(v, 1)}` : `${fmtNum(v, 1)}◎`), hover },
                 )
               }
@@ -416,10 +486,10 @@ export function CommandCenter() {
           ))}
         </Card>
 
-        <Card n="04" title="Capital at risk" right={<span className="mono">{st.atRiskSol.toFixed(3)} SOL</span>}>
+        <Card n="04" title="At risk" right={<span className="mono">{st.atRiskSol.toFixed(3)} SOL</span>}>
           {st.open.length ? (
             st.open.slice(0, 5).map((o) => (
-              <div key={o.id} className="cc-risk" onClick={() => select(o.mint)}>
+              <div key={o.id} className="cc-risk" onClick={() => openCoin(o.mint)}>
                 <span className="cc-risk-sym">
                   {o.symbol}
                   {o.live ? <i className="cc-live-dot" title="live" /> : null}
@@ -437,7 +507,7 @@ export function CommandCenter() {
       </div>
 
       <section className="cc-core cc-card" aria-label="Swarm core">
-        <CoreView input={input} onSelect={select} />
+        <CoreView input={input} onSelect={openCoin} />
         <div className="cc-core-agents">
           {(['scout', 'sentinel', 'herald', 'strategist', 'manager'] as const).map((a) => (
             <span key={a} className={`cc-agent ${sw.enabled ? 'on' : ''}`}>
@@ -448,7 +518,26 @@ export function CommandCenter() {
       </section>
 
       <div className="cc-right">
-        <Card n="05" title="Results">
+        <Card n="05" title="Wallet" className="cc-wallet-card" right={<span className={`cc-mode ${live ? (armed ? 'live' : 'unarmed') : 'paper'}`}>{live ? (armed ? '● LIVE' : 'not armed') : 'PAPER'}</span>}>
+          {w ? (
+            <>
+              <div className="cc-wallet-row">
+                <span className="cc-wallet-bal mono">{w.sol === null ? '—' : `${w.sol.toFixed(3)}`}</span>
+                <span className="muted">SOL{w.sol !== null && solUsd > 0 ? ` · ${fmtUsd(w.sol * solUsd, 0)}` : ''}</span>
+              </div>
+              <div className="cc-wallet-row muted">
+                <span>{w.home ? `→ Phantom ${w.home.slice(0, 4)}…${w.home.slice(-4)}` : 'Phantom not connected'}</span>
+                <span>{w.limits.sweepAboveSol > 0 ? `profits home over ${w.limits.sweepAboveSol}` : ''}</span>
+              </div>
+            </>
+          ) : (
+            <div className="muted cc-wallet-row">No swarm wallet yet — set it up in a minute: create it, send SOL from Phantom, done.</div>
+          )}
+          <button className="chip cc-wallet-open" onClick={() => setDrawer('wallet')}>
+            {w ? 'Open wallet' : 'Set up wallet'}
+          </button>
+        </Card>
+        <Card n="06" title="Results">
           <div className="cc-tiles">
             <div className="cc-tile">
               <span className="muted">Picks</span>
@@ -472,11 +561,11 @@ export function CommandCenter() {
             </div>
           </div>
         </Card>
-        <Card n="06" title="Execution tape" className="cc-tape-card" right={<span className="muted">{st.tape.length ? `${st.tape.length} fills` : ''}</span>}>
+        <Card n="07" title="Execution tape" className="cc-tape-card" right={<span className="muted">{st.tape.length ? `${st.tape.length} fills` : ''}</span>}>
           <div className="cc-tape">
             {st.tape.length ? (
               st.tape.map((f) => (
-                <div key={f.key} className={`cc-fill ${f.side}`} onClick={() => select(f.mint)} title={f.why}>
+                <div key={f.key} className={`cc-fill ${f.side}`} onClick={() => openCoin(f.mint)} title={f.why}>
                   <span className="mono muted">{fmtTime(f.t)}</span>
                   <span className={`cc-side ${f.side}`}>{f.side.toUpperCase()}</span>
                   <b>{f.symbol}</b>
@@ -492,17 +581,15 @@ export function CommandCenter() {
       </div>
 
       <div className="cc-bottom">
-        <Card n="07" title="Daily budget" right={<span className="mono">{spentToday.toFixed(2)} / {budget} SOL</span>}>
-          <div className="cc-spark tall">
-            <Chart fps={10} draw={(ctx, w, h, pal, hover) => drawArea(ctx, w, h, pal, st.spend, { color: pal.accentRgb, cap: budget, zero: true, t0: new Date(now).setHours(0, 0, 0, 0), t1: new Date(now).setHours(24, 0, 0, 0), hover, fmt: (v) => `${v.toFixed(3)} SOL spent` })} />
-          </div>
-        </Card>
-        <Card n="08" title="Swarm gauges">
+        <Card n="08" title="Swarm gauges" className="cc-gauges-card">
           <div className="cc-gauges">
+            <Gauge value={Math.min(1, ss.scout.perMin / 30)} text={`${ss.scout.perMin}`} label="Scout" sub="new coins / min" tone="cyan" />
             <Gauge value={passRate} label="Sentinel" sub="pass rate" tone="cyan" />
             <Gauge value={viralShare} label="Herald" sub="viral share" tone="magenta" />
+            <Gauge value={sw.reads.length ? bestRead / 100 : null} text={sw.reads.length ? String(bestRead) : '—'} label="Strategist" sub={`best read · buys at ${sw.strategy.minConviction}+`} tone={bestRead >= sw.strategy.minConviction ? 'mint' : 'cyan'} />
+            <Gauge value={st.open.length / Math.max(1, sw.manager.maxOpen)} text={`${st.open.length}/${sw.manager.maxOpen}`} label="Manager" sub="positions open" tone="mint" />
             <Gauge value={sw.manager.dailyLossSol ? st.lostToday / sw.manager.dailyLossSol : null} label="Loss limit" sub={`${st.lostToday.toFixed(2)} / ${sw.manager.dailyLossSol} SOL`} tone="chrome" />
-            <Gauge value={spentToday / budget} label="Budget" sub="spent today" tone="cyan" />
+            <Gauge value={spentToday / budget} label="Budget" sub={`${spentToday.toFixed(2)} / ${budget} SOL`} tone="chrome" />
           </div>
         </Card>
         <Card n="09" title="Live feed" className="cc-log-card">
@@ -511,7 +598,7 @@ export function CommandCenter() {
               .reverse()
               .slice(0, 40)
               .map((l, i) => (
-                <div key={l.t + l.text + i} className={`cc-logline a-${l.agent}`} onClick={() => l.mint && select(l.mint)}>
+                <div key={l.t + l.text + i} className={`cc-logline a-${l.agent}`} onClick={() => openCoin(l.mint)}>
                   <span className="mono muted">{fmtTime(l.t)}</span> <b>{l.agent}</b> {l.text}
                 </div>
               ))}
@@ -519,6 +606,7 @@ export function CommandCenter() {
           </div>
         </Card>
       </div>
+      {drawer && <Drawer tab={drawer} onTab={setDrawer} onClose={() => setDrawer(null)} />}
     </div>
   );
 }

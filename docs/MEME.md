@@ -69,8 +69,8 @@ it remembers):
 | **Scout** | finds every new coin | the scanner's feeds: pump.fun launches and migrations, DexScreener listings |
 | **Sentinel** | viability — rejects the rugs | rejects: live mint or freeze authority; top 10 wallets over 50 %; the creator buying 20 %+ at launch or selling half the bag; 4+ wallets taking 10 %+ of supply within 3 s of launch (bundled or sniped); most buyers also selling (wash trading); 3 minutes without a trade; pool liquidity under $5k; a creator whose earlier coin rugged. Penalises: top 10 over 30 %, one wallet over 15 %, a big creator bag, partial creator sells, concentrated buying, serial launchers. Waits for the on-chain check before passing anything. |
 | **Herald** | virality — is it catching on | new buyers per minute and whether they are arriving faster; the meme's narrative (how many coins share its name this hour, and whether this one leads them); linked X / Telegram / website; DexScreener profile or paid boosts; total wallets in |
-| **Strategist** | picks the entries | Sentinel pass, viability 60+, heat 55+, virality 40+, under 45 min old, market cap under $250k, 12–85 % of the curve sold (not the bundle seconds, not the graduation top); pools need $20k liquidity. Conviction = 40 % heat + 35 % virality + 25 % viability. All adjustable under Rules. |
-| **Manager** | runs the trades — on paper, or live from the swarm wallet | 0.1 SOL a trade, at most 4 open, 0.5 SOL daily loss limit. Exits: rug (creator dumps, danger flag, trading stops) → stop loss −35 % → take profits (half at 2×, half the rest at 5×) → trailing 40 % from the peak once up 1.5× → out after 20 min without a new high under 1.3×. Multiples are the price against the price paid. |
+| **Strategist** | picks the entries — only ones with room for 5× | Sentinel pass, viability 60+, heat 55+, virality 45+, **conviction 80+** (40 % heat + 35 % virality + 25 % viability), under 45 min old, **room for 5× to a $1M market cap** (so under $200k now), 12–85 % of the curve sold; pools need $20k liquidity. **Not after a spike**: on the curve, no buying while the price stands 50 %+ above its own 5-minute average; on a pool, not after +60 % in 5 minutes. **Net buying**: buyers at least 58 % of the last 5 minutes' flow. All adjustable under Rules. |
+| **Manager** | runs the trades — on paper, or live from the swarm wallet | Sized to the account (Wallet → Set up for my balance). Exits: rug (creator dumps, danger flag, trading stops) → stop loss −35 % → take profits (a third at 3× — the cost back — and half of the rest at 5×) → trailing 40 % from the peak once up 2× → out after 20 min without a new high under 1.3×. Multiples are the price against the price paid. |
 
 Trades are **on paper** by default: fills priced exactly on the bonding curve
 (1.25 % fee and price impact) or against the pool with an impact estimate, so
@@ -162,9 +162,11 @@ control row, the rules are not adding anything yet.
 
 ## Command Center
 
-**Command** in the top bar switches the whole window to the swarm's dashboard
-(**Terminal** switches back; the panels stay as they were). Black and chrome
-in the **Void Chrome** theme (now the default; the other themes still work):
+The app opens on it: the meme terminal. **Wallet** and **Scanner** in the top
+bar open a drawer over the right side (also the coin you click anywhere, and
+the Rules); Esc closes it. The classic order-flow terminal (footprint, DOM,
+AMT bots) is under Settings → Workspace. Black and chrome in the **Void
+Chrome** theme (the other themes still work):
 
 - **Top bar**: SOL in USD, live (Binance's SOL/USDT ticker, about once a
   second, with DexScreener's on-chain price as the backup): 24 h change, high,
@@ -191,9 +193,12 @@ in the **Void Chrome** theme (now the default; the other themes still work):
   its size the conviction, cyan the viability, magenta the virality — drifting
   right as conviction grows; coins held sit at the right tip with a ring.
 - **Right**: results and the execution tape, every fill as it happens.
-- **Bottom**: today's spend against the daily budget, gauges (Sentinel pass
-  rate, Herald viral share, the daily loss limit used, budget spent), and the
-  bots' live log.
+- **Bottom**: a gauge per bot — Scout (new coins a minute), Sentinel (pass
+  rate), Herald (viral share), Strategist (the best read's conviction against
+  the 80 it needs), Manager (positions open) — plus the daily loss limit used
+  and the budget spent, and the bots' live log.
+- **Right**: the Wallet (balance, where profits go, Open wallet), results and
+  the execution tape.
 
 The cards tilt slightly towards the pointer, and the charts show a crosshair
 with the value and time under it. Click any coin, fill or log line to open it
@@ -201,6 +206,16 @@ in the Meme Token panel. Motion
 slows right down when the system asks for reduced motion.
 
 ### What the rules are built on
+
+- The 5× rules (conviction 80+, room for 5×, not after a spike, net buying)
+  came from the first paper trade that went wrong: HYPERTAG, bought at $89.6k
+  right after +111 % in 5 minutes with buyers and sellers even (conviction
+  73), never above 1.00× and stopped out at 0.43× four minutes later. There is
+  little published research on entries this fine-grained; what there is says
+  most pump.fun coins collapse — about 98.6 % in one review, under 1 % ever
+  graduating ([Blofin](https://blofin.com/en/academy/education/solana/solana-memecoins-and-pump-fun-explained),
+  [CoinGecko/Dune via Coinsprobe](https://coinsprobe.com/pump-fun-traders-are-finally-making-money-profitability-hits-ath-after-two-years/)) —
+  so the rules are filters, and **Results** measures whether they help.
 
 - Under 1 % of pump.fun coins graduate (0.6–0.9 % through 2025), and about
   four in five stop trading on day one ([Solana Compass](https://solanacompass.com/news/pumpfun-launched-42000-tokens-in-one-day-fewer-than-2-will-ever-reach-a-dex), [Cryptopolitan](https://www.cryptopolitan.com/pump-fun-graduating-tokens-break-to-1-15-of-new-launches/), [Bitbase](https://www.bitbase.com/news/pump-fun-memecoin-trader-fatigue-token-survival)).

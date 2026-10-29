@@ -14,6 +14,7 @@ import { useAmtLive } from '../desktop/amt';
 import { useBoot } from './boot';
 import { sealTerminal } from './LockScreen';
 import { solTickerFeed, useSolTicker } from '../meme/solTicker';
+import { openDrawer } from '../command/CommandCenter';
 
 /** Pyramid mark with three candles — Novus Ordo. */
 export function Logo({ size = 26 }: { size?: number }) {
@@ -328,18 +329,27 @@ export function TopBar({ onOpen, onFocusChart, onOpenPanel, alertCount, editing,
         </>
       )}
       <div style={{ flex: 1 }} />
-      <button
-        className={`chip primary-chip chrome-chip cc-toggle${view === 'command' ? ' active' : ''}`}
-        onClick={() => setSettings({ view: view === 'command' ? 'terminal' : 'command' })}
-        title={view === 'command' ? 'Back to the panel layout' : 'Command Center: the meme swarm at a glance — wallet, core, results, tape'}
-      >
-        <span className="cc-toggle-dot" /> <span className="lbl keep">{view === 'command' ? 'Terminal' : 'Command'}</span>
-      </button>
+      {command ? (
+        <>
+          <button className="chip primary-chip chrome-chip cc-wallet-btn" onClick={() => openDrawer('wallet')} title="Your swarm wallet: create it, fund it from Phantom, set it up for your balance, go live">
+            <span className="cc-toggle-dot" /> <span className="lbl keep">Wallet</span>
+          </button>
+          <button className="chip primary-chip chrome-chip" onClick={() => openDrawer('scanner')} title="Every meme coin the terminal can see, live">
+            ⌕ <span className="lbl keep">Scanner</span>
+          </button>
+        </>
+      ) : (
+        <button className="chip primary-chip chrome-chip cc-toggle" onClick={() => setSettings({ view: 'command' })} title="Back to the meme terminal">
+          <span className="cc-toggle-dot" /> <span className="lbl keep">Meme terminal</span>
+        </button>
+      )}
       <SafeModeChip />
       <AlgoKill />
-      <button className="chip primary-chip chrome-chip" onClick={() => onOpenPanel('amt')} title="AMT trading bots: scalp and intraday, paper or live, backtests">
-        <BotIcon /> <span className="lbl keep">Bots</span>
-      </button>
+      {!command && (
+        <button className="chip primary-chip chrome-chip" onClick={() => onOpenPanel('amt')} title="AMT trading bots: scalp and intraday, paper or live, backtests">
+          <BotIcon /> <span className="lbl keep">Bots</span>
+        </button>
+      )}
       <button className="chip primary-chip chrome-chip" onClick={() => onOpen('keys')} title="Connections: exchange API keys (Binance, Coinbase…), Telegram bot, Solana RPC">
         <ConnectIcon /> <span className="lbl keep">Connect</span>
       </button>

@@ -57,7 +57,7 @@ try {
     if (/WebSocket|net::ERR|Failed to load resource|fonts\.googleapis/i.test(text)) return;
     errors.push(`console: ${text}`);
   });
-  const base = `http://localhost:${PORT}/?venue=sim&agg=sim&history=exchange`;
+  const base = `http://localhost:${PORT}/?venue=sim&agg=sim&history=exchange&view=terminal`;
   await page.goto(base);
   // secure boot: lock screen first, then the ledger key
   await page.waitForSelector('.lock-key input');
@@ -145,6 +145,18 @@ try {
   await page.click('button[title="Settings"]');
   await page.waitForTimeout(500);
   await page.screenshot({ path: `${OUT}settings-appearance.png` });
+
+  // the meme terminal: what the app opens on; Wallet and Scanner open the drawer
+  await page.keyboard.press('Escape');
+  await page.goto(`http://localhost:${PORT}/?venue=sim&agg=sim&history=exchange&view=command`);
+  await page.waitForSelector('.cc-core', { timeout: 20_000 });
+  await page.click('.cc-wallet-btn');
+  await page.waitForSelector('.cc-drawer');
+  await page.click('.cc-drawer-head .chip:has-text("Scanner")');
+  await page.waitForSelector('.cc-drawer .panel.meme');
+  await page.screenshot({ path: `${OUT}meme-terminal.png` });
+  if ((await page.locator('.cc-gauges .cc-gauge').count()) !== 7) errors.push('meme terminal: expected 7 swarm gauges');
+  console.log('meme terminal: ok');
 } catch (e) {
   failed = true;
   console.error(e);

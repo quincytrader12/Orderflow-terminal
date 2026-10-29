@@ -31,6 +31,9 @@ if (theme && theme in THEMES) s.set({ theme: theme as ThemeId });
 const filter = params.get('filter');
 if (filter && FILTERS.some((f) => f.id === filter)) s.set({ filter: filter as FilterId });
 
+const view = params.get('view');
+if (view === 'terminal' || view === 'command') s.set({ view });
+
 const simLoad = Number(params.get('simLoad'));
 if (simLoad > 1) setSimLoad(simLoad);
 

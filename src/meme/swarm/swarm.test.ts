@@ -101,11 +101,49 @@ describe('Strategist — entries', () => {
     const d = strategist(tok, a, v, x, STRATEGY_DEFAULTS);
     expect(d.enter).toBe(true);
     expect(d.conviction).toBe(Math.round(0.4 * a.heat + 0.35 * x.score + 0.25 * v.score));
-    expect(d.why).toMatch(/^heat \d+ · virality \d+ · viability 100 — /);
+    expect(d.why).toMatch(/^heat \d+ · virality \d+ · viability 100 · \d+× room to \$1000k · \d+% buys — /);
+    // the 5× rules: conviction floor, room to the target, net buying
+    expect(strategist(tok, a, v, x, { ...STRATEGY_DEFAULTS, minConviction: 99 }).why).toMatch(/^conviction \d+ < 99$/);
+    expect(strategist(tok, a, v, x, { ...STRATEGY_DEFAULTS, targetMcapUsd: a.mcapUsd * 3 }).why).toMatch(/^only 3\.0× of room to \$\d+k — needs 5×$/);
+    expect(strategist(tok, a, v, x, { ...STRATEGY_DEFAULTS, minBuyShare: 0.99 }).why).toMatch(/^buyers only \d+% of the flow — needs 99%$/);
     // the same coin, but the window has passed
     expect(strategist(tok, a, v, x, { ...STRATEGY_DEFAULTS, maxAgeMin: 5 }).why).toBe('older than 5 min');
     expect(strategist(tok, a, v, x, { ...STRATEGY_DEFAULTS, maxCurve: 0.1 }).why).toMatch(/^curve \d+% — late, graduation sells into it$/);
     expect(strategist(tok, a, { ...v, verdict: 'reject', reasons: ['bundled'] }, x, STRATEGY_DEFAULTS)).toMatchObject({ enter: false, why: 'rejected: bundled' });
+  });
+});
+
+describe('Strategist — not chasing spikes', () => {
+  const pass = { verdict: 'pass', score: 100, reasons: [] } as unknown as Parameters<typeof strategist>[2];
+  const strong = { score: 80, reasons: [] } as unknown as ReturnType<typeof herald>;
+
+  it('on the curve: a steady climb passes, a vertical last minute does not', () => {
+    const { tok, now } = runner(8);
+    const a = { ...assess(tok, now, 150), heat: 90 };
+    expect(strategist(tok, a, pass, strong, STRATEGY_DEFAULTS).enter).toBe(true);
+    // a spike: the price doubles in the last half minute
+    let t = now;
+    const top = tok.mcapSol * 2;
+    let w = 0;
+    while (tok.mcapSol < top) applyTrade(tok, trade(tok, 'buy', `SP${w++}`, 3, (t += 1_000)));
+    const b = { ...assess(tok, t, 150), heat: 90 };
+    expect(strategist(tok, b, pass, strong, STRATEGY_DEFAULTS).why).toMatch(/^price \d+% above its 5-min average — not chasing the spike/);
+  });
+
+  it('on a pool: up 111 % in 5 min with half the trades sells is skipped (the HYPERTAG trade)', () => {
+    const { tok, now } = runner(8);
+    tok.source = 'dex';
+    tok.migrated = true;
+    const pool = (m5: number, buys: number, sells: number) => ({ pairAddress: 'P', dexId: 'pumpswap', url: '', priceUsd: 0.0001, mcapUsd: 89_581, liquidityUsd: 60_000, volume: { m5: 50_000, h1: 100_000, h6: 0, h24: 0 }, txns: { m5: { buys, sells }, h1: { buys, sells }, h24: { buys, sells } }, change: { m5, h1: m5, h6: m5, h24: m5 }, createdAt: now - 3_600_000, boosts: 0, socials: 2 }) as unknown as NonNullable<typeof tok.dex>;
+    const a = { ...assess(tok, now, 150), heat: 85, mcapUsd: 89_581, ageSec: 600 };
+    tok.dex = pool(111, 484, 484);
+    expect(strategist(tok, a, pass, strong, STRATEGY_DEFAULTS).why).toBe('up 111% in 5 min — not chasing the spike, waiting for it to settle');
+    tok.dex = pool(20, 484, 484);
+    expect(strategist(tok, a, pass, strong, STRATEGY_DEFAULTS).why).toBe('buyers only 50% of the flow — needs 58%');
+    tok.dex = pool(20, 700, 300);
+    expect(strategist(tok, a, pass, strong, STRATEGY_DEFAULTS).enter).toBe(true);
+    // and conviction 73, as it had, is below the floor
+    expect(strategist(tok, { ...a, heat: 85 }, { ...pass, score: 100 }, { score: 40, reasons: [] } as unknown as ReturnType<typeof herald>, { ...STRATEGY_DEFAULTS, minVirality: 0 }).why).toBe('conviction 73 < 80');
   });
 });
 
@@ -127,7 +165,8 @@ describe('Manager — paper trades', () => {
       while (multiple(p, tok, 150) < sol) applyTrade(tok, trade(tok, 'buy', `P${w++}`, 2, (t += 1_000)));
       return managePosition(p, tok, t, 150, MANAGER_DEFAULTS, []);
     };
-    expect(pump(2.05).map((f) => f.why)).toEqual(['take profit at 2× (sold 50% of what was left)']);
+    expect(pump(2.05)).toEqual([]);
+    expect(pump(3.05).map((f) => f.why)).toEqual(['take profit at 3× (sold 34% of what was left)']);
     expect(p.realizedSol).toBeGreaterThan(0.09);
     expect(pump(5.1).map((f) => f.why)).toEqual(['take profit at 5× (sold 50% of what was left)']);
     expect(p.tpDone).toBe(2);

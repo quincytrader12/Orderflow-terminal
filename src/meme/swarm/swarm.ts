@@ -90,6 +90,12 @@ const emptyStats = (): SwarmState['stats'] => ({
 export function mergeSwarm(persisted: unknown, current: SwarmState): SwarmState {
   const p = (persisted ?? {}) as Partial<SwarmState>;
   const positions = (p.positions ?? []).map((x) => ({ ...x, pending: false, retryAt: undefined }));
+  // rules saved before the 5× strategy (no conviction floor): the new entry and exit rules,
+  // keeping the account's sizing (positions, size, daily loss limit)
+  if (p.strategy && !('minConviction' in p.strategy)) {
+    const m = p.manager ?? MANAGER_DEFAULTS;
+    return { ...current, ...p, positions, strategy: { ...STRATEGY_DEFAULTS }, manager: { ...MANAGER_DEFAULTS, sizeSol: m.sizeSol, maxOpen: m.maxOpen, dailyLossSol: m.dailyLossSol } };
+  }
   return { ...current, ...p, positions, strategy: { ...STRATEGY_DEFAULTS, ...p.strategy }, manager: { ...MANAGER_DEFAULTS, ...p.manager } };
 }
 

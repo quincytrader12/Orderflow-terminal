@@ -38,7 +38,7 @@ try {
   });
   const page = await ctx.newPage();
   page.on('pageerror', (e) => console.log('pageerror', e.message));
-  await page.goto(`http://localhost:${PORT}/?venue=sim&agg=sim&history=exchange&simLoad=${LOAD}`);
+  await page.goto(`http://localhost:${PORT}/?venue=sim&agg=sim&history=exchange&simLoad=${LOAD}&view=terminal`);
   await page.waitForSelector('.lock-key input');
   // a user typically unlocks within a few seconds of the lock screen appearing
   await page.waitForTimeout(3000);

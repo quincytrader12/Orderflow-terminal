@@ -68,6 +68,9 @@ export interface MemeToken {
   devInitialSol: number;
   devInitialTokens: number;
   trades: MemeTrade[];
+  /** pool coins: market cap over time (pool candles and DexScreener samples), see history.ts */
+  history?: { t: number; mcapSol: number }[];
+  historyAt?: number;
   lastTradeAt: number;
   dex?: DexInfo;
   safety?: Safety;

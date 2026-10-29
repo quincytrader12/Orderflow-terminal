@@ -11,6 +11,8 @@ import { getSettings } from '../../store/settings';
 import { font, line } from '../../ui/canvas';
 import { palette, rgba } from '../../ui/theme';
 import type { MemeToken } from '../token';
+import { fetchJson } from '../../exchanges/ws';
+import { ensureHistory, priceSeries } from '../history';
 import type { Position } from './book';
 
 const logos = new Map<string, HTMLImageElement | null>();
@@ -84,8 +86,9 @@ export async function coinCard(tok: MemeToken, p: Position | null, headline: str
   ctx.fillText(`${tok.mint.slice(0, 6)}…${tok.mint.slice(-6)}`, W - 24, 36);
   ctx.fillText(p?.live ? 'LIVE · swarm wallet' : 'PAPER', W - 24, 56);
 
-  // chart: market cap (USD when known) over the coin's trades
-  const tr = tok.trades.slice(-400);
+  // chart: market cap (USD when known) over the coin's trades, or its pool's history
+  await Promise.race([ensureHistory(tok, solUsd, fetchJson).catch(() => undefined), new Promise((r) => setTimeout(r, 6000))]);
+  const tr = priceSeries(tok).slice(-400);
   const top = 96;
   const bottom = H - 84;
   const right = W - 90;
@@ -165,6 +168,13 @@ export async function coinCard(tok: MemeToken, p: Position | null, headline: str
     ctx.fillText(fmtTime(t0, false), L, bottom + 6);
     ctx.textAlign = 'right';
     ctx.fillText(fmtTime(t1, false), right, bottom + 6);
+  } else {
+    // no history yet: say so rather than leave the chart blank
+    ctx.fillStyle = pal.muted;
+    ctx.font = font(15, 500, false);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('price history still loading for this coin', (L + right) / 2, (top + bottom) / 2);
   }
   // footer numbers
   ctx.textAlign = 'left';

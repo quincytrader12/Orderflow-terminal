@@ -383,6 +383,21 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const s = useSettings();
   return (
     <Modal title="Settings" onClose={onClose} width={820}>
+      <div className="section-title">Workspace</div>
+      <div className="form-row">
+        <span>Screen</span>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className={`chip${s.view === 'command' ? ' active' : ''}`} onClick={() => (s.set({ view: 'command' }), onClose())}>
+            Meme terminal
+          </button>
+          <button className={`chip${s.view === 'terminal' ? ' active' : ''}`} onClick={() => (s.set({ view: 'terminal' }), onClose())}>
+            Classic order-flow terminal
+          </button>
+          <span className="muted" style={{ fontSize: 11 }}>
+            The app opens on the meme terminal; the order-flow charts and AMT bots are in the classic one.
+          </span>
+        </div>
+      </div>
       <AppearanceSettings />
       <LedgerKeySettings />
       <div className="section-title">Display</div>

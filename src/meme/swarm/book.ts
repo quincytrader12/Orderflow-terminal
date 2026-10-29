@@ -7,8 +7,8 @@
 // die on day one, so profits are taken early and losers cut fast):
 //  1. rug: the creator dumps, a danger flag appears, or trading stops
 //  2. stop loss: price down `stopLoss` from what was paid
-//  3. take profits: sell a share at each price multiple (default half at 2×
-//     — the cost is back — and half the rest at 5×)
+//  3. take profits: sell a share at each price multiple (default a third at
+//     3× — the cost is back — and half of the rest at 5×)
 //  4. trailing: once the price is up `trailFrom`×, give back at most `trail`
 //     from its peak (on the price, so it still guards the bag left after
 //     profits were taken)
@@ -32,15 +32,17 @@ export interface ManagerConfig {
   dailyLossSol: number;
 }
 
+// aimed at 5× and more: a third out at 3× (the cost back, the rest rides free),
+// half of what is left at 5×, the rest trails from 2× up
 export const MANAGER_DEFAULTS: ManagerConfig = {
   sizeSol: 0.1,
   maxOpen: 4,
   takeProfits: [
-    { at: 2, sell: 0.5 },
+    { at: 3, sell: 0.34 },
     { at: 5, sell: 0.5 },
   ],
   stopLoss: 0.35,
-  trailFrom: 1.5,
+  trailFrom: 2,
   trail: 0.4,
   staleMin: 20,
   staleBelow: 1.3,

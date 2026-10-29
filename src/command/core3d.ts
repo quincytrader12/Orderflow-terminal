@@ -19,9 +19,9 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import type { CoreBlob, CoreInput, CoreNode } from './core';
 
-const A = 3.9; // lens half-length (world units)
-const B = 1.7; // lens half-height
-const SPAN_X = 6.9; // where the input and output nodes sit
+const A = 4.6; // lens half-length (world units)
+const B = 2.0; // lens half-height
+const SPAN_X = 7.1; // where the input and output nodes sit
 const CYAN = new THREE.Color('#38e1ff');
 const MAGENTA = new THREE.Color('#ff3d7f');
 const CHROME = new THREE.Color('#e4eaf4');
@@ -151,11 +151,11 @@ function coinMaterial(pixelRatio: number) {
         vec4 c = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
         gl_Position = projectionMatrix * mv;
         float depth = clamp((mv.z - c.z) / (uR * uPulse) * 0.5 + 0.5, 0.0, 1.0);
-        gl_PointSize = uPx * (2.0 + depth * 2.8) * (22.0 / -mv.z);
+        gl_PointSize = uPx * (1.8 + depth * 2.4) * (18.0 / -mv.z);
         float band = smoothstep(-0.12, 0.12, position.y - (uShare * 2.0 - 1.0));
         vCol = mix(uMagenta, uCyan, band);
         vCol = mix(vCol, uChrome, uHeld * step(0.66, fract(float(gl_VertexID) / 3.0)));
-        vA = (0.12 + 0.5 * depth) * uAlpha;
+        vA = (0.07 + 0.3 * depth) * uAlpha;
       }`,
     fragmentShader: /* glsl */ `
       uniform float uHot;
@@ -281,7 +281,7 @@ export class Core3D {
     this.scene.fog = new THREE.FogExp2(0x000000, 0.035);
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.8, 0.5, 0.16);
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.6, 0.45, 0.26);
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
 
@@ -491,9 +491,9 @@ export class Core3D {
     this.bloom.resolution.set(this.w / 2, this.h / 2);
     this.camera.aspect = this.w / this.h;
     // fit the whole span (nodes and labels) in view
-    const halfW = SPAN_X + (this.w < 700 ? 0.6 : 3.3);
+    const halfW = SPAN_X + (this.w < 700 ? 0.6 : 2.9);
     const tan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
-    this.fit = Math.max(halfW / (tan * this.camera.aspect), 3.6 / tan);
+    this.fit = Math.max(halfW / (tan * this.camera.aspect), 3.15 / tan);
     this.camera.updateProjectionMatrix();
   }
 
@@ -503,7 +503,7 @@ export class Core3D {
     this.nodes.clear();
     for (const l of this.labels) l.remove();
     this.labels = [];
-    const place = (n: number, i: number) => (n <= 1 ? 0 : 2.9 - (5.8 * i) / (n - 1));
+    const place = (n: number, i: number) => (n <= 1 ? 0 : 3.1 - (6.2 * i) / (n - 1));
     const mkLine = (c: THREE.CubicBezierCurve3, col: THREE.Color, inbound: boolean) => {
       const pts = c.getPoints(90);
       const g = new THREE.BufferGeometry().setFromPoints(pts);
@@ -647,7 +647,7 @@ export class Core3D {
     (this.flow.material as THREE.ShaderMaterial).uniforms.uSpeed.value = 0.04 + s.activity * 0.1;
     (this.floor.material as THREE.ShaderMaterial).uniforms.uTime.value = t;
     this.dust.rotation.y = t * 0.008;
-    this.bloom.strength = 0.7 + 0.3 * s.activity;
+    this.bloom.strength = 0.55 + 0.2 * s.activity;
     for (const n of this.nodes.children) if (n.userData.ring) n.lookAt(this.camera.position);
 
     // coins
@@ -692,7 +692,7 @@ export class Core3D {
       u.uPulse.value = 1 + 0.06 * Math.sin(t * 2.4 + c.seed * 20) * (b.enter ? 1.8 : 1);
       const hm = c.halo.material as THREE.SpriteMaterial;
       hm.color.copy(b.held ? CHROME : share > 0.5 ? MAGENTA : CYAN);
-      hm.opacity = (b.enter || b.held ? 0.22 : 0.1) * c.a + hot * 0.2;
+      hm.opacity = (b.enter || b.held ? 0.12 : 0.05) * c.a + hot * 0.15;
       c.halo.scale.setScalar(c.r * 4.2);
       const ringOn = b.held || b.enter;
       (c.ring.material as THREE.MeshBasicMaterial).opacity = (ringOn ? 0.75 : hot * 0.5) * c.a;

@@ -64,6 +64,19 @@ try {
   await page.waitForSelector('.topbar', { timeout: 30_000 });
   expect(await page.evaluate(() => window.novus.vault.list().then(() => true, () => false)), 'vault opens after the ledger key');
 
+  step('opens on the meme terminal');
+  await page.waitForSelector('.cc-core', { timeout: 15_000 });
+  expect(true, 'the app opens on the meme terminal');
+  await page.click('.cc-wallet-btn');
+  await page.waitForSelector('.cc-drawer .swarm-rules');
+  expect(true, 'Wallet in the top bar opens the swarm wallet');
+  await page.keyboard.press('Escape');
+  // the rest checks the classic order-flow terminal: Settings → Workspace
+  await page.click('button[title="Settings"]');
+  await page.click('.modal .chip:has-text("Classic order-flow terminal")');
+  await page.waitForSelector('.flexlayout__layout', { state: 'visible' });
+  expect(true, 'Settings switches to the classic order-flow terminal');
+
   step('window fills the screen');
   const win = await app.evaluate(({ BrowserWindow, screen }) => {
     const w = BrowserWindow.getAllWindows()[0];
@@ -519,7 +532,8 @@ try {
   const mode = await page.evaluate(() => (document.querySelector('.cc3d canvas') ? '3D' : 'flat'));
   await page.screenshot({ path: `${OUT}desktop-command.png` });
   expect(errors.length === errorsBefore, `the Command Center draws (${mode}) without errors`);
-  await page.click('.cc-toggle');
+  await page.click('button[title="Settings"]');
+  await page.click('.modal .chip:has-text("Classic order-flow terminal")');
   await page.waitForSelector('.flexlayout__layout', { state: 'visible' });
   expect(true, 'back to the terminal layout');
 } catch (e) {

@@ -279,7 +279,7 @@ function Results() {
   );
 }
 
-function Rules() {
+export function Rules() {
   const { strategy: s, manager: m, setStrategy, setManager } = useSwarm();
   const [tp, setTp] = useState(m.takeProfits.map((t) => `${t.at}:${Math.round(t.sell * 100)}`).join(', '));
   const row = (label: string, el: React.ReactNode, hint: string) => (
@@ -300,6 +300,12 @@ function Rules() {
       {row('Curve to', <NumberInput value={Math.round(s.maxCurve * 100)} onChange={(v) => setStrategy({ maxCurve: v / 100 })} min={0} step={5} suffix="%" />, 'not the very top: graduation gets sold into')}
       {row('Max market cap', <NumberInput value={s.maxMcapUsd} onChange={(maxMcapUsd) => setStrategy({ maxMcapUsd })} min={1000} step={25000} suffix="$" />, 'room to run')}
       {row('Min pool liquidity', <NumberInput value={s.minLiquidityUsd} onChange={(minLiquidityUsd) => setStrategy({ minLiquidityUsd })} min={0} step={5000} suffix="$" />, 'migrated coins')}
+      {row('Min conviction', <NumberInput value={s.minConviction} onChange={(minConviction) => setStrategy({ minConviction })} min={0} step={5} />, 'heat, virality and viability combined, 0–100 — only the strongest picks')}
+      {row('Room needed', <NumberInput value={s.minRoom} onChange={(minRoom) => setStrategy({ minRoom })} min={1} step={1} suffix="×" />, `to a $${Math.round(s.targetMcapUsd / 1000)}k market cap — no buying what cannot reach ${s.minRoom}×`)}
+      {row('Target cap', <NumberInput value={s.targetMcapUsd} onChange={(targetMcapUsd) => setStrategy({ targetMcapUsd })} min={10_000} step={100_000} suffix="$" />, 'the market cap a runner can reach')}
+      {row('Not after a spike', <NumberInput value={Math.round(s.maxExtension * 100 - 100)} onChange={(v) => setStrategy({ maxExtension: 1 + v / 100 })} min={0} step={10} suffix="%" />, 'on the curve: no buying while the price stands this far above its 5-minute average')}
+      {row('Pool spike', <NumberInput value={Math.round(s.maxRun5m * 100)} onChange={(v) => setStrategy({ maxRun5m: v / 100 })} min={0} step={10} suffix="%" />, 'on a pool: no buying after more than this rise in 5 minutes')}
+      {row('Min buyers', <NumberInput value={Math.round(s.minBuyShare * 100)} onChange={(v) => setStrategy({ minBuyShare: v / 100 })} min={0} step={2} suffix="%" />, 'share of the last 5 minutes’ flow that is buying — net accumulation, not churn')}
       <div className="section-title">Manager — how to run the trade</div>
       {row('Size', <NumberInput value={m.sizeSol} onChange={(sizeSol) => setManager({ sizeSol })} min={0.01} step={0.05} suffix="SOL" />, 'per trade')}
       {row('Max open', <NumberInput value={m.maxOpen} onChange={(maxOpen) => setManager({ maxOpen })} min={1} step={1} />, 'positions at once')}
@@ -333,7 +339,7 @@ function Rules() {
 }
 
 /** The swarm's own trading wallet: live mode, its limits, and the arm switch. */
-function Wallet() {
+export function Wallet() {
   const sw = useSwarm();
   const w = sw.wallet;
   const [secret, setSecret] = useState('');

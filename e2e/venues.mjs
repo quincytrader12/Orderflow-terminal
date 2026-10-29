@@ -232,7 +232,7 @@ try {
   });
 
   const venues = Object.keys(VENUE_OFFSET);
-  await page.goto(`http://localhost:${PORT}/?base=BTC&venue=binancef&agg=${venues.join(',')}&history=none`);
+  await page.goto(`http://localhost:${PORT}/?base=BTC&venue=binancef&agg=${venues.join(',')}&history=none&view=terminal`);
   await unlock(page);
   await page.waitForSelector('.topbar');
   await page.waitForTimeout(8000);

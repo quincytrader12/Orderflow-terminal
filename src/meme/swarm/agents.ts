@@ -232,18 +232,77 @@ export interface StrategyConfig {
   maxMcapUsd: number;
   /** pools: least liquidity, USD */
   minLiquidityUsd: number;
+  /** conviction needed to buy (0–100) */
+  minConviction: number;
+  /** room needed: the target market cap ÷ the market cap now */
+  minRoom: number;
+  targetMcapUsd: number;
+  /** no buying straight after a vertical run. Pools: most the price may have risen in the last 5 min (0.6 = +60 %) */
+  maxRun5m: number;
+  /** on the curve: most the price may stand above its 5-minute average (1.5 = 50 % above) — a steady climb passes, a spike does not */
+  maxExtension: number;
+  /** buyers must outweigh sellers over the last 5 min: least share of the buying (SOL on the curve, trades on a pool) */
+  minBuyShare: number;
 }
 
 export const STRATEGY_DEFAULTS: StrategyConfig = {
   minHeat: 55,
-  minVirality: 40,
+  minVirality: 45,
   minViability: 60,
   maxAgeMin: 45,
   minCurve: 0.12,
   maxCurve: 0.85,
-  maxMcapUsd: 250_000,
+  maxMcapUsd: 200_000,
   minLiquidityUsd: 20_000,
+  minConviction: 80,
+  minRoom: 5,
+  targetMcapUsd: 1_000_000,
+  maxRun5m: 0.6,
+  maxExtension: 1.5,
+  minBuyShare: 0.58,
 };
+
+/** How far the price ran over the last 5 minutes (0.6 = +60 %), or null when it cannot be told. */
+export function run5m(tok: MemeToken, now: number): number | null {
+  if (tok.source === 'pump' && !tok.migrated && tok.trades.length) {
+    const from = now - 300_000;
+    let before = null as number | null;
+    for (const tr of tok.trades) {
+      if (tr.t > from) break;
+      before = tr.mcapSol;
+    }
+    // younger than 5 minutes: measured from the first trade
+    const base = before ?? tok.trades[0].mcapSol;
+    return base > 0 ? tok.mcapSol / base - 1 : null;
+  }
+  const c = tok.dex?.change.m5;
+  return Number.isFinite(c) ? c! / 100 : null;
+}
+
+/** On the curve: the price now over its trade-weighted average of the last 5 minutes (1 = flat), or null. */
+export function extension5m(tok: MemeToken, now: number): number | null {
+  if (tok.source !== 'pump' || tok.migrated) return null;
+  const from = now - 300_000;
+  let sum = 0;
+  let w = 0;
+  for (let i = tok.trades.length - 1; i >= 0; i--) {
+    const tr = tok.trades[i];
+    if (tr.t < from) break;
+    sum += tr.mcapSol * tr.sol;
+    w += tr.sol;
+  }
+  return w > 0 && sum > 0 ? tok.mcapSol / (sum / w) : null;
+}
+
+/** The buying's share over the last 5 minutes (SOL on the curve, trade count on a pool), or null. */
+export function buyShare5m(tok: MemeToken, now: number): number | null {
+  if (tok.source === 'pump' && !tok.migrated) {
+    const f = flow(tok, now, 300);
+    return f.buySol + f.sellSol > 0 ? f.buySol / (f.buySol + f.sellSol) : null;
+  }
+  const t = tok.dex?.txns.m5;
+  return t && t.buys + t.sells > 0 ? t.buys / (t.buys + t.sells) : null;
+}
 
 export interface Decision {
   enter: boolean;
@@ -260,12 +319,29 @@ export function strategist(tok: MemeToken, a: Assessment, v: Viability, x: Viral
   if (x.score < cfg.minVirality) return skip(`virality ${x.score} < ${cfg.minVirality}`);
   if (a.ageSec > cfg.maxAgeMin * 60) return skip(`older than ${cfg.maxAgeMin} min`);
   if (Number.isFinite(a.mcapUsd) && a.mcapUsd > cfg.maxMcapUsd) return skip(`market cap above $${Math.round(cfg.maxMcapUsd / 1000)}k — little room`);
+  // room for the multiple worth the risk: a 5× needs the target to be 5× the market cap now
+  if (Number.isFinite(a.mcapUsd) && a.mcapUsd > 0 && cfg.targetMcapUsd / a.mcapUsd < cfg.minRoom) return skip(`only ${(cfg.targetMcapUsd / a.mcapUsd).toFixed(1)}× of room to $${Math.round(cfg.targetMcapUsd / 1000)}k — needs ${cfg.minRoom}×`);
   const onCurve = tok.source === 'pump' && !tok.migrated;
   if (onCurve) {
     const p = curveProgress(tok.vTokens);
     if (p < cfg.minCurve) return skip(`curve ${pct(p)} — too early to tell`);
     if (p > cfg.maxCurve) return skip(`curve ${pct(p)} — late, graduation sells into it`);
   } else if (!tok.dex || tok.dex.liquidityUsd < cfg.minLiquidityUsd) return skip('pool too thin');
+  // not straight after a vertical candle: those mostly give it back (the buyer is the exit liquidity)
+  const now = tok.lastTradeAt || Date.now();
+  if (onCurve) {
+    const ext = extension5m(tok, now);
+    if (ext !== null && ext > cfg.maxExtension) return skip(`price ${Math.round((ext - 1) * 100)}% above its 5-min average — not chasing the spike, waiting for it to settle`);
+  } else {
+    const run = run5m(tok, now);
+    if (run !== null && run > cfg.maxRun5m) return skip(`up ${Math.round(run * 100)}% in 5 min — not chasing the spike, waiting for it to settle`);
+  }
+  // net buying, not a churn of buys and sells
+  const share = buyShare5m(tok, now);
+  if (share !== null && share < cfg.minBuyShare) return skip(`buyers only ${Math.round(share * 100)}% of the flow — needs ${Math.round(cfg.minBuyShare * 100)}%`);
+  if (conviction < cfg.minConviction) return skip(`conviction ${conviction} < ${cfg.minConviction}`);
   const lead = [`heat ${a.heat}`, `virality ${x.score}`, `viability ${v.score}`];
-  return { enter: true, conviction, why: `${lead.join(' · ')} — ${[...x.reasons.slice(0, 2), a.summary].filter(Boolean).join('; ')}` };
+  const room = Number.isFinite(a.mcapUsd) && a.mcapUsd > 0 ? ` · ${(cfg.targetMcapUsd / a.mcapUsd).toFixed(0)}× room to $${Math.round(cfg.targetMcapUsd / 1000)}k` : '';
+  const flowNote = share !== null ? ` · ${Math.round(share * 100)}% buys` : '';
+  return { enter: true, conviction, why: `${lead.join(' · ')}${room}${flowNote} — ${[...x.reasons.slice(0, 2), a.summary].filter(Boolean).join('; ')}` };
 }

@@ -64,7 +64,7 @@ describe('the swarm, trading live', () => {
       symbol: tok.symbol,
       openedAt: now - 60_000,
       costSol: 0.05,
-      entryPx: px / 2.2,
+      entryPx: px / 3.2,
       tokens: 1000,
       left: 1000,
       realizedSol: 0,
@@ -81,7 +81,7 @@ describe('the swarm, trading live', () => {
     fake.sell.mockRejectedValueOnce(new Error('RPC timeout'));
     swarm.tick(now);
     // half of what is left, in raw units
-    expect(fake.sell).toHaveBeenCalledWith(tok.mint, '500000000', undefined);
+    expect(fake.sell).toHaveBeenCalledWith(tok.mint, '340000000', undefined);
     await flush();
     const q = useSwarm.getState().positions.find((x) => x.id === 'live-1')!;
     expect(q.retryAt).toBeGreaterThan(Date.now());
@@ -90,21 +90,21 @@ describe('the swarm, trading live', () => {
     swarm.tick(now + 1_000);
     expect(fake.sell).toHaveBeenCalledTimes(1);
     q.retryAt = 0;
-    fake.sell.mockResolvedValueOnce({ signature: 'SellTx', via: 'pump.fun', solDelta: 0.054, tokenDelta: '-500000000', decimals: 6 } satisfies SwarmFill);
+    fake.sell.mockResolvedValueOnce({ signature: 'SellTx', via: 'pump.fun', solDelta: 0.054, tokenDelta: '-340000000', decimals: 6 } satisfies SwarmFill);
     swarm.tick(now + 2_000);
     await flush();
     const r = useSwarm.getState().positions.find((x) => x.id === 'live-1')!;
-    expect(r).toMatchObject({ tpDone: 1, realizedSol: 0.054, left: 500, live: { rawLeft: '500000000' } });
+    expect(r).toMatchObject({ tpDone: 1, realizedSol: 0.054, left: 660, live: { rawLeft: '660000000' } });
     expect(r.closedAt).toBeUndefined();
     expect(r.milestones).toEqual([2]);
-    expect(useSwarm.getState().log.map((l) => l.text)).toEqual(expect.arrayContaining([expect.stringMatching(/sold live — 0\.0540 SOL back — take profit at 2×/), expect.stringMatching(/: 2× — position worth/)]));
+    expect(useSwarm.getState().log.map((l) => l.text)).toEqual(expect.arrayContaining([expect.stringMatching(/sold live — 0\.0540 SOL back — take profit at 3×/), expect.stringMatching(/: 2× — position worth/)]));
   });
 });
 
 describe('the swarm, live, when things go wrong', () => {
   const held = (tok: ReturnType<typeof setup>['tok'], now: number, over: Partial<Position> = {}): Position => {
     const px = markPrice(tok, 150);
-    return { id: 'live-2', mint: tok.mint, symbol: tok.symbol, openedAt: now - 60_000, costSol: 0.05, entryPx: px / 2.2, tokens: 1000, left: 1000, realizedSol: 0, peakMult: 1, peakAt: now - 60_000, tpDone: 0, fills: [], why: 'test', conviction: 80, live: { rawLeft: '1000000000', decimals: 6, buyTx: 'BuyTx' }, ...over };
+    return { id: 'live-2', mint: tok.mint, symbol: tok.symbol, openedAt: now - 60_000, costSol: 0.05, entryPx: px / 3.2, tokens: 1000, left: 1000, realizedSol: 0, peakMult: 1, peakAt: now - 60_000, tpDone: 0, fills: [], why: 'test', conviction: 80, live: { rawLeft: '1000000000', decimals: 6, buyTx: 'BuyTx' }, ...over };
   };
   beforeEach(() => {
     fake.buy.mockReset();
@@ -119,8 +119,8 @@ describe('the swarm, live, when things go wrong', () => {
     swarm.tick(now);
     await flush();
     const p = useSwarm.getState().positions.find((x) => x.id === 'live-2')!;
-    expect(p).toMatchObject({ tpDone: 1, left: 500, live: { rawLeft: '500000000' } });
-    expect(p.realizedSol).toBeCloseTo(500 * p.entryPx * 2.2, 6);
+    expect(p).toMatchObject({ tpDone: 1, left: 660, live: { rawLeft: '660000000' } });
+    expect(p.realizedSol).toBeCloseTo(340 * p.entryPx * 3.2, 6);
     expect(useSwarm.getState().log.map((l) => l.text)).toContain(`${tok.symbol}: the RPC did not report the sale's amounts yet — booked at the price now`);
   });
 

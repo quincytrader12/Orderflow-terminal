@@ -9,6 +9,7 @@ import { fetchJson, ManagedSocket } from '../exchanges/ws';
 import { DEFAULT_RPC } from '../shared/solana';
 import { getSettings } from '../store/settings';
 import { dexListings, dexTokens, solPriceUsd, type DexListing } from './dexscreener';
+import { addSample } from './history';
 import { parsePumpMessage, pumpSub, PUMPPORTAL_WS, vTokensAtMcap, type PumpEvent } from './pump';
 import { checkSafety, type Rpc } from './safety';
 import { assess } from './score';
@@ -315,6 +316,9 @@ class Scanner {
       const onCurve = pair.dexId === 'pumpfun';
       if (tok) {
         tok.dex = pair;
+        // pool coins: a market-cap sample at every refresh (their charts have no trade feed)
+        const solUsdNow = useMeme.getState().solUsd;
+        if (!onCurve && solUsdNow > 0) addSample(tok, Date.now(), pair.mcapUsd / solUsdNow);
         tok.image ??= pair.imageUrl ?? l?.icon;
         if (!tok.symbol) {
           tok.symbol = r.symbol;
