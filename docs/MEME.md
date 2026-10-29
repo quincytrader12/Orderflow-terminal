@@ -70,7 +70,8 @@ it remembers):
 | **Sentinel** | viability — rejects the rugs | rejects: live mint or freeze authority; top 10 wallets over 50 %; the creator buying 20 %+ at launch or selling half the bag; 4+ wallets taking 10 %+ of supply within 3 s of launch (bundled or sniped); most buyers also selling (wash trading); 3 minutes without a trade; pool liquidity under $5k; a creator whose earlier coin rugged. Penalises: top 10 over 30 %, one wallet over 15 %, a big creator bag, partial creator sells, concentrated buying, serial launchers. Waits for the on-chain check before passing anything. |
 | **Herald** | virality — is it catching on | new buyers per minute and whether they are arriving faster; the meme's narrative (how many coins share its name this hour, and whether this one leads them); linked X / Telegram / website; DexScreener profile or paid boosts; total wallets in |
 | **Strategist** | picks the entries — only ones with room for 5× | Sentinel pass, viability 60+, heat 55+, virality 45+, **conviction 80+** (40 % heat + 35 % virality + 25 % viability), under 45 min old, **room for 5× to a $1M market cap** (so under $200k now), 12–85 % of the curve sold; pools need $20k liquidity. **Not after a spike**: on the curve, no buying while the price stands 50 %+ above its own 5-minute average; on a pool, not after +60 % in 5 minutes. **Net buying**: buyers at least 58 % of the last 5 minutes' flow. All adjustable under Rules. |
-| **Manager** | runs the trades — on paper, or live from the swarm wallet | Sized to the account (Wallet → Set up for my balance). Exits: rug (creator dumps, danger flag, trading stops) → stop loss −35 % → take profits (a third at 3× — the cost back — and half of the rest at 5×) → trailing 40 % from the peak once up 2× → out after 20 min without a new high under 1.3×. Multiples are the price against the price paid. |
+| **Insider tracker** (part of the Strategist) | catches insiders and smart money early | Learns from every trade it watches: a wallet that bought a coin and sold it at 3× its buy or better scores a hit, and one with two hits and right on 30 %+ of its coins since is **proven** (kept between runs, the best 1,500). A coin scores when proven wallets are buying and holding (35 each), when 3+ wallets each put 1 SOL+ in within 3 minutes without selling (30; 5+ wallets and 8 SOL+: 45), when the buying is one-sided (80 %+), when there are still few wallets (before the crowd), or when the creator adds to the bag; proven wallets already selling count against it. Launch-second buys are left to the Sentinel (bundles and snipers dump). **At 65+ it buys without waiting for heat and virality** — the same Sentinel pass, the same 5× room, 3–85 % of the curve, buyers 60 %+, a looser spike limit (their buying lifts the price) — and it **sells everything once half the wallets it followed in have sold**. |
+| **Manager** | runs the trades — on paper, or live from the swarm wallet | Sized to the account (Wallet → Set up for my balance). Exits: rug (creator dumps, danger flag, trading stops) → insiders out (insider-lane buys) → stop loss −35 % → take profits (a third at 3× — the cost back — and half of the rest at 5×) → trailing 40 % from the peak once up 2×, and **60 % for the runner left after both take profits** (room for a 50× or 100×) → out after 20 min without a new high under 1.3×. Multiples are the price against the price paid. |
 
 Trades are **on paper** by default: fills priced exactly on the bonding curve
 (1.25 % fee and price impact) or against the pool with an impact estimate, so
@@ -142,7 +143,7 @@ transaction. Exits follow the same Manager rules; a failed sell is retried
 after 15 s. **Disarm** stops buying at once; open positions keep being
 managed and sold. **Sell** on a trade, or **Sell everything**, exits now.
 
-**Telegram** (Settings → Telegram, with bot stories on) gets a card — the
+**Telegram** (Telegram Bot panel → Swarm trades on Telegram) gets a card — the
 coin's logo, a market-cap chart with the buy and sells marked, and the
 numbers — with the reasoning:
 
@@ -150,6 +151,10 @@ numbers — with the reasoning:
 - at each new multiple: 2×, 5×, 10×, 25×, 50×, 100×, 250×, 500×, 1000×, with
   what the position is worth and what has been banked;
 - on each take-profit and on the close: why, and the result.
+
+Buys and closes also show as a pop-up with a sound on the computer (Telegram
+Bot panel → Pop-up and sound here). The order-flow alerts and reports
+(liquidations, big prints, VAH/POC reports, feed-down notices) are gone.
 
 Most meme coins go to zero. Fund the swarm wallet only with what you can
 afford to lose, and start with small sizes.
@@ -177,7 +182,10 @@ Chrome** theme (the other themes still work):
   autonomous), what the bots are doing scrolling past, and Start/Stop.
 - **Left**: wallet and P&L (total, in USD, banked and open, the equity curve,
   the wallet balance); the coin in focus (the newest open trade, else the
-  strongest read) with its buys and sells on the chart; the feeds — pump.fun
+  strongest read, held for at least 20 seconds) with its buys and sells on the
+  chart — a coin with no trade history yet is drawn from what is known (a
+  pool's 24 h / 6 h / 1 h / 5 min price changes, a new coin's launch and now)
+  until the pool's minute candles arrive; the feeds — pump.fun
   messages per second, DexScreener and RPC response times, how long since each
   last answered; capital at risk per open coin with its multiple.
 - **Centre — the swarm core**, in 3D (WebGL with bloom; the flat version is
@@ -195,7 +203,8 @@ Chrome** theme (the other themes still work):
 - **Right**: results and the execution tape, every fill as it happens.
 - **Bottom**: a gauge per bot — Scout (new coins a minute), Sentinel (pass
   rate), Herald (viral share), Strategist (the best read's conviction against
-  the 80 it needs), Manager (positions open) — plus the daily loss limit used
+  the 80 it needs), Insiders (the best insider score against the 65 it buys
+  at, and how many proven wallets it knows), Manager (positions open) — plus the daily loss limit used
   and the budget spent, and the bots' live log.
 - **Right**: the Wallet (balance, where profits go, Open wallet), results and
   the execution tape.
@@ -223,6 +232,18 @@ slows right down when the system asks for reduced motion.
 - High-risk launches: fewer buyers buying more each, concentrated holdings, bundled early accounts ([MemeTrans / MELT](https://arxiv.org/html/2602.13480v1)).
 - Rugs are visible within minutes as idle gaps between trades, and on pools as liquidity pulled ([Catching the Rug](https://arxiv.org/html/2608.20271v1)).
 - Wash trading: one address buying and selling against the same curve ([Meme Coin Factories](https://arxiv.org/html/2609.10246v1)); about a quarter of coins launch off a social post.
+- Insiders take most of the gains, and follow-the-wallet is how traders try to
+  share them: 15 insider wallets netted about $20M on FOCAI after buying it on
+  pump.fun for a few SOL ([Cointelegraph](https://cointelegraph.com/news/focai-memecoin-insider-trading-solana-profit));
+  whale and cluster wallets drive Solana meme trading across 384M swaps
+  ([White Whale Labs](https://www.kucoin.com/news/flash/white-whale-labs-solana-meme-coin-trading-driven-by-cluster-wallets));
+  pump-and-dump detection relies on wallet-cluster behaviour more than single
+  trades ([Elliptic](https://www.elliptic.co/corpus/gen-2924/cryptorama/solana-meme-coin-pump-and-dump-detection-and-aml-risk-signals.html)).
+  Early buyers are not always smart — bots and insiders who sell to you look
+  the same at first, and smart money rotates out fast — hence proven wallets
+  only (seen actually selling at 3×+), the Sentinel's checks still apply, and
+  the lane leaves as soon as the wallets it followed do. No peer-reviewed
+  study measures how well following them pays; **Results** will.
 - Filtering on "safe" launches alone still lost money in one backtest of 1,411 launches ([Arrow Algo](https://arrowalgo.com/solana-memecoin-trading/)) — which is why the swarm measures its own results instead of trusting its rules.
 
 ## Next steps
@@ -230,4 +251,4 @@ slows right down when the system asks for reduced motion.
 2. **Trading by hand** from the token panel (preset SOL amounts) through the
    swarm wallet or Phantom.
 3. **Alerts and wallets**: Telegram alerts for coins matching your filters, a
-   creator dumping, a coin about to graduate; follow wallets that buy early.
+   creator dumping, a coin about to graduate.

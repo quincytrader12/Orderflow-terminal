@@ -89,10 +89,3 @@ export function startTelegramService() {
     if (s.telegramCommands !== prev.telegramCommands || s.telegramSecretId !== prev.telegramSecretId) void apply();
   });
 }
-
-/** Forward an alert to Telegram when enabled. Errors are logged, never thrown. */
-export function forwardAlert(title: string, message: string) {
-  const s = getSettings();
-  if (!s.telegramAlerts || !s.telegramSecretId) return;
-  telegram.send(s.telegramSecretId, `🔔 <b>${escapeHtml(title)}</b>\n${escapeHtml(message)}`).catch((e) => console.warn('telegram alert', e));
-}

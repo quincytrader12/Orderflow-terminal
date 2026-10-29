@@ -103,24 +103,15 @@ export interface Settings {
   recordTrades: boolean;
   recordScope: 'primary' | 'aggregate';
   wallets: SavedWallet[];
-  /** Telegram bot (vault key id), alert forwarding and command replies */
+  /** Telegram bot (vault key id) and command replies */
   telegramSecretId: string;
-  telegramAlerts: boolean;
-  /** the bots' plain-English story: watching, entry, safe, exit */
-  telegramBotStory: boolean;
+  /** the swarm's trades on Telegram: each buy with its chart and reasoning, new multiples, exits */
+  telegramSwarm: boolean;
+  /** the swarm's buys and exits as a pop-up and a sound on this computer */
+  swarmDesktopAlerts: boolean;
   telegramCommands: boolean;
   /** ask before sending each order from the ticket */
   confirmOrders: boolean;
-  /** scheduled Telegram reports (local time of this computer) */
-  telegramDaily: boolean;
-  telegramWeekly: boolean;
-  reportTime: string;
-  /** 0 = Sunday … 6 = Saturday */
-  reportWeekday: number;
-  lastDailyReport: string;
-  lastWeeklyReport: string;
-  /** instant Telegram notice when the primary data feed goes down / recovers */
-  telegramFeedAlerts: boolean;
   /** meme scanner: Solana RPC (vault key id; '' = public RPC) */
   memeRpcSecretId: string;
   byodUrl: string;
@@ -159,10 +150,8 @@ interface Actions {
 
 export const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 
-export const DEFAULT_ALERTS: AlertRule[] = [
-  { id: 'a-large', type: 'large_trade', enabled: true, scope: 'primary', value: 1_000_000, windowSec: 0, cooldownSec: 10, sound: true, notify: false },
-  { id: 'a-liq', type: 'liquidation', enabled: true, scope: 'primary', value: 250_000, windowSec: 0, cooldownSec: 10, sound: true, notify: false },
-];
+/** no order-flow alerts out of the box: the app is the meme terminal, and the swarm says what it does */
+export const DEFAULT_ALERTS: AlertRule[] = [];
 
 const initial: Settings = {
   base: 'BTC',
@@ -177,17 +166,10 @@ const initial: Settings = {
   recordScope: 'primary',
   wallets: [],
   telegramSecretId: '',
-  telegramAlerts: false,
-  telegramBotStory: true,
+  telegramSwarm: true,
+  swarmDesktopAlerts: true,
   telegramCommands: false,
   confirmOrders: true,
-  telegramDaily: true,
-  telegramWeekly: true,
-  reportTime: '16:00',
-  reportWeekday: 0,
-  lastDailyReport: '',
-  lastWeeklyReport: '',
-  telegramFeedAlerts: true,
   memeRpcSecretId: '',
   byodUrl: 'http://localhost:8080',
   byodToken: '',
@@ -242,22 +224,24 @@ export const useSettings = create<Settings & Actions>()(
     }),
     {
       name: 'oft-settings',
-      version: 6,
+      version: 7,
       // v1 had dark/light themes only
       migrate: (persisted, version) => {
         const p = (persisted ?? {}) as Record<string, unknown>;
         if (version < 2) p.theme = p.theme === 'light' ? 'white' : 'grey';
         // v3: alerts follow the market on the chart, not every venue of the coin
         if (version < 3 && Array.isArray(p.alerts)) p.alerts = (p.alerts as AlertRule[]).map((r) => ({ ...r, scope: 'primary' }));
-        // too many messages: Telegram now carries the bots' plain-English story; chart alerts and orders are opt-in
-        if (version < 4) {
-          p.telegramAlerts = false;
-          p.telegramBotStory = true;
-        }
         // v5: the black-and-chrome look is the default
         if (version < 5) p.theme = 'void';
         // v6: the app is the meme terminal; the order-flow layout is in Settings
         if (version < 6) p.view = 'command';
+        // v7: order-flow alerts are gone (reports, liquidations, big trades, feed and bot notices); the swarm's trades take their place
+        if (version < 7) {
+          for (const k of ['telegramAlerts', 'telegramBotStory', 'telegramDaily', 'telegramWeekly', 'reportTime', 'reportWeekday', 'lastDailyReport', 'lastWeeklyReport', 'telegramFeedAlerts']) delete p[k];
+          p.alerts = [];
+          p.telegramSwarm = true;
+          p.swarmDesktopAlerts = true;
+        }
         return p as unknown as Settings & Actions;
       },
       storage: createJSONStorage(() => safeStorage),

@@ -306,6 +306,9 @@ export function Rules() {
       {row('Not after a spike', <NumberInput value={Math.round(s.maxExtension * 100 - 100)} onChange={(v) => setStrategy({ maxExtension: 1 + v / 100 })} min={0} step={10} suffix="%" />, 'on the curve: no buying while the price stands this far above its 5-minute average')}
       {row('Pool spike', <NumberInput value={Math.round(s.maxRun5m * 100)} onChange={(v) => setStrategy({ maxRun5m: v / 100 })} min={0} step={10} suffix="%" />, 'on a pool: no buying after more than this rise in 5 minutes')}
       {row('Min buyers', <NumberInput value={Math.round(s.minBuyShare * 100)} onChange={(v) => setStrategy({ minBuyShare: v / 100 })} min={0} step={2} suffix="%" />, 'share of the last 5 minutes’ flow that is buying — net accumulation, not churn')}
+      <div className="section-title">Insider lane — follow the wallets that win</div>
+      {row('Buy at insider score', <NumberInput value={s.insiderMin} onChange={(insiderMin) => setStrategy({ insiderMin })} min={0} step={5} />, 'proven wallets (seen selling coins at 3×+) or quiet 1 SOL+ buyers in early — buys before the crowd, same safety checks and room rule, out when they sell. 0 = off')}
+      {row('Insider spike limit', <NumberInput value={Math.round(s.insiderMaxExtension * 100 - 100)} onChange={(v) => setStrategy({ insiderMaxExtension: 1 + v / 100 })} min={0} step={10} suffix="%" />, 'their buying lifts the price: how far above its 5-minute average it may still buy')}
       <div className="section-title">Manager — how to run the trade</div>
       {row('Size', <NumberInput value={m.sizeSol} onChange={(sizeSol) => setManager({ sizeSol })} min={0.01} step={0.05} suffix="SOL" />, 'per trade')}
       {row('Max open', <NumberInput value={m.maxOpen} onChange={(maxOpen) => setManager({ maxOpen })} min={1} step={1} />, 'positions at once')}
@@ -331,6 +334,7 @@ export function Rules() {
       {row('Stop loss', <NumberInput value={Math.round(m.stopLoss * 100)} onChange={(v) => setManager({ stopLoss: v / 100 })} min={5} step={5} suffix="%" />, 'out when down this much')}
       {row('Trail from', <NumberInput value={m.trailFrom} onChange={(trailFrom) => setManager({ trailFrom })} min={1} step={0.25} suffix="×" />, 'start trailing once up this much')}
       {row('Trail', <NumberInput value={Math.round(m.trail * 100)} onChange={(v) => setManager({ trail: v / 100 })} min={5} step={5} suffix="%" />, 'give back at most this from the peak')}
+      {row('Runner trail', <NumberInput value={Math.round((m.runnerTrail ?? m.trail) * 100)} onChange={(v) => setManager({ runnerTrail: v / 100 })} min={5} step={5} suffix="%" />, 'after every take profit: the bag left trails wider, room to become a 50× or 100×')}
       {row('Stale after', <NumberInput value={m.staleMin} onChange={(staleMin) => setManager({ staleMin })} min={1} step={5} suffix="min" />, `no new high, and under ${m.staleBelow}×`)}
       {row('Daily loss limit', <NumberInput value={m.dailyLossSol} onChange={(dailyLossSol) => setManager({ dailyLossSol })} min={0.01} step={0.1} suffix="SOL" />, 'no new trades for the day after this')}
       <div className="muted swarm-note">The Sentinel's rejections (live mint or freeze authority, creator dumping, bundled launches, top 10 over 50 %, wash trading, idle trading, thin pools, creators whose earlier coins rugged) are not adjustable: they are the rugs.</div>

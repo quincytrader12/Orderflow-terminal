@@ -1,5 +1,4 @@
 import type { Kline } from '../core/types';
-import type { MainReportData, ReportKind } from '../shared/report';
 import type { TokenInfo, WalletActivity, WalletBalances } from '../shared/solana';
 
 /** Shapes returned by the desktop main process (electron/*.mjs). */
@@ -584,7 +583,6 @@ export interface NovusApi {
     setLimits(l: Partial<TradingLimits>): Promise<TradingLimits>;
     log(limit?: number): Promise<OrderLogRow[]>;
   };
-  report: { data(kind: ReportKind, venue?: string, symbol?: string): Promise<MainReportData> };
   amt: {
     list(): Promise<AmtBot[]>;
     defaults(): Promise<AmtParams>;

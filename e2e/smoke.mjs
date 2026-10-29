@@ -155,7 +155,7 @@ try {
   await page.click('.cc-drawer-head .chip:has-text("Scanner")');
   await page.waitForSelector('.cc-drawer .panel.meme');
   await page.screenshot({ path: `${OUT}meme-terminal.png` });
-  if ((await page.locator('.cc-gauges .cc-gauge').count()) !== 7) errors.push('meme terminal: expected 7 swarm gauges');
+  if ((await page.locator('.cc-gauges .cc-gauge').count()) !== 8) errors.push('meme terminal: expected 8 swarm gauges');
   console.log('meme terminal: ok');
 } catch (e) {
   failed = true;

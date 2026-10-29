@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { fmtNum, fmtPrice, fmtTime, fmtUsd } from '../core/format';
 import { desktop, DesktopOnlyError, type MarketInfo, type OrderLogRow, type OrderRequest, type OrderType, type TimeInForce, type TradingLimits } from '../desktop/bridge';
-import { forwardAlert } from '../desktop/telegram';
 import { describeOrder, estimateValue, pickSymbol, TYPE_LABEL, unifiedCandidates, useTicket } from '../desktop/trading';
 import { useVaultKeys } from '../desktop/vault';
 import { hub } from '../market/hub';
@@ -168,7 +167,6 @@ export function OrderTicket({ config: c, setConfig }: PanelProps<TicketConfig>) 
       const res = await desktop!.trade.place(c.secretId, r);
       const text = `${res.sandbox ? 'TESTNET · ' : ''}${res.side.toUpperCase()} ${res.amount.toLocaleString('en-US', { maximumFractionDigits: 10 })} ${res.symbol} ${res.status}${res.id ? ` · id ${res.id}` : ''}`;
       setResult({ ok: true, text });
-      forwardAlert('Order placed', describeOrder(r, info!));
     } catch (e) {
       setResult({ ok: false, text: String((e as Error).message ?? e) });
     } finally {

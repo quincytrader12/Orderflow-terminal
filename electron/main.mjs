@@ -8,7 +8,6 @@ import { Db } from './db.mjs';
 import { connectPhantom } from './phantom.mjs';
 import { DEFAULT_RPC, recentActivity, SOL_MINT, tokenInfo, walletBalances } from '../src/shared/solana.ts';
 import { TelegramCommands, tgDetectChat, tgMe, tgSendLong, tgSendPhoto } from '../src/shared/telegram.ts';
-import { reportData } from './reports.mjs';
 import { AttemptGate, isLedgerRecord, ledgerMatches, makeLedger, PUBLIC_CHANNELS } from '../src/shared/ledger.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { Vault } from './vault.mjs';
@@ -247,7 +246,7 @@ const ledgerRecord = () => {
 };
 
 // channels that need the exchange services, which load after the window is up
-const NEEDS_SERVICES = /^(ccxt|trade|amt|report):|^vault:test$/;
+const NEEDS_SERVICES = /^(ccxt|trade|amt):|^vault:test$/;
 
 function registerIpc() {
   // the swarm keeps trading behind the lock screen: its own trades, balances and Telegram updates only
@@ -736,9 +735,6 @@ Trades are signed here without asking you each time. Most meme coins go to zero 
     const s = tg(id);
     return tgSendPhoto(s.fields.token, s.fields.chatId, new Uint8Array(png), caption);
   });
-  handle('report:data', (_e, kind, venue, symbol) =>
-    reportData({ db, vault, ccxt: ccxtSvc, wallets: { balances: walletBalances, tokenInfo }, defaultRpc: DEFAULT_RPC, solMint: SOL_MINT }, kind === 'weekly' ? 'weekly' : 'daily', { venue, symbol }),
-  );
   function startCommands(id) {
     const s = tg(id);
     if (!s.fields.chatId) throw new Error('detect the chat first');

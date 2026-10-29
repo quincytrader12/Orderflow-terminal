@@ -20,6 +20,13 @@
 //    (arXiv 2609.10246). → churn.
 //  - About a quarter of coins launch off a tweet or a trend; many copy the
 //    same name. → narrative clusters: how many coins share the meme right now.
+//  - A few wallets take most of the gains: 15 insider wallets netted ~$20M on
+//    FOCAI after buying on pump.fun for a few SOL (Lookonchain, 2025); whale
+//    and cluster wallets drive Solana meme trading (White Whale Labs, 384M
+//    swaps); smart money rotates out fast (Nansen). Early buyers are not always
+//    smart — bots and insiders who dump look the same at first. → the insider
+//    tracker: learn which wallets really sell at 3×+, follow them and quiet big
+//    buyers in early, and leave the moment they start selling.
 import { flow, devActivity, type MemeToken } from '../token';
 import { curveProgress } from '../pump';
 import type { Assessment } from '../score';
@@ -217,6 +224,182 @@ export function herald(tok: MemeToken, now: number, narratives: Narratives, lead
   return { score: Math.round(clamp(score, 0, 100)), reasons, narrative };
 }
 
+// ---------- Insider tracker: smart money and quiet accumulation ----------
+
+/** A wallet the swarm has seen trade: coins it sold at 3×+ of its buy (hits) out of the coins it was seen in since. */
+export interface SmartWallet {
+  hits: number;
+  tries: number;
+  at: number;
+}
+export type SmartBook = Record<string, SmartWallet>;
+
+/** Proven: at least two coins sold at 3×+ and right on at least 30 % of the coins since. */
+export const isSmart = (w?: SmartWallet) => Boolean(w && w.hits >= 2 && w.hits / Math.max(1, w.tries) >= 0.3);
+
+const SMART_MULT = 3;
+const SMART_MAX = 1500;
+
+/**
+ * Learn from what the swarm watches: a wallet that bought a coin and sold it
+ * at 3× its average buy (or better) scores a hit; a known wallet's other coins
+ * count once they are 30 minutes old. Mutates `book`; `done` holds the
+ * wallet:coin pairs already counted. Returns the new hits.
+ */
+export function learnSmart(book: SmartBook, tokens: MemeToken[], now: number, done: Set<string>, skip?: string): number {
+  let fresh = 0;
+  for (const tok of tokens) {
+    if (tok.trades.length < 10) continue;
+    const by = new Map<string, { buy: number; buyW: number; sell: number; sellW: number }>();
+    for (const tr of tok.trades) {
+      if (tr.dev || tr.wallet === skip || !(tr.mcapSol > 0)) continue;
+      const w = by.get(tr.wallet) ?? { buy: 0, buyW: 0, sell: 0, sellW: 0 };
+      if (tr.side === 'buy') {
+        w.buy += tr.sol;
+        w.buyW += tr.sol * tr.mcapSol;
+      } else {
+        w.sell += tr.sol;
+        w.sellW += tr.sol * tr.mcapSol;
+      }
+      by.set(tr.wallet, w);
+    }
+    const settled = now - tok.createdAt > 30 * 60_000;
+    for (const [wallet, w] of by) {
+      if (w.buy < 0.1) continue;
+      const key = `${wallet}:${tok.mint}`;
+      if (done.has(key)) continue;
+      const hit = w.sell >= 0.1 && w.sellW / w.sell >= SMART_MULT * (w.buyW / w.buy);
+      const rec = book[wallet];
+      if (hit) {
+        book[wallet] = { hits: (rec?.hits ?? 0) + 1, tries: (rec?.tries ?? 0) + 1, at: now };
+        done.add(key);
+        fresh++;
+      } else if (rec && settled) {
+        rec.tries++;
+        done.add(key);
+      }
+    }
+  }
+  // keep the best wallets when the book is full
+  const keys = Object.keys(book);
+  if (keys.length > SMART_MAX) {
+    keys.sort((a, b) => book[a].hits - book[b].hits || book[a].at - book[b].at);
+    for (const k of keys.slice(0, keys.length - SMART_MAX)) delete book[k];
+  }
+  return fresh;
+}
+
+export interface InsiderRead {
+  /** 0–100 */
+  score: number;
+  reasons: string[];
+  /** the wallets behind it, followed for the exit */
+  wallets: string[];
+}
+
+/**
+ * Signs that people who know are buying, before the crowd: proven wallets
+ * (see learnSmart) holding it, several wallets each buying 1 SOL+ in the last
+ * 3 minutes without selling, the buying one-sided, few wallets but big sizes,
+ * and the creator adding to the launch bag. Proven wallets already selling
+ * count against it. Launch-second buys are the Sentinel's (bundles, snipers).
+ */
+export function insiderRead(tok: MemeToken, now: number, book: SmartBook): InsiderRead {
+  const none: InsiderRead = { score: 0, reasons: [], wallets: [] };
+  if (tok.trades.length < 5) return none;
+  const launchEnd = tok.createdAt + 3000;
+  const from10 = now - 600_000;
+  const from3 = now - 180_000;
+  const by = new Map<string, { buy: number; sell: number; buy3: number; sell3: number }>();
+  let buy3 = 0;
+  let sell3 = 0;
+  let devAdded = false;
+  for (const tr of tok.trades) {
+    if (tr.t < from10 || tr.t > now) continue;
+    if (tr.dev) {
+      if (tr.side === 'buy' && tr.t > tok.createdAt + 60_000) devAdded = true;
+      continue;
+    }
+    if (tr.t <= launchEnd) continue;
+    const w = by.get(tr.wallet) ?? { buy: 0, sell: 0, buy3: 0, sell3: 0 };
+    const recent = tr.t >= from3;
+    if (tr.side === 'buy') {
+      w.buy += tr.sol;
+      if (recent) (w.buy3 += tr.sol), (buy3 += tr.sol);
+    } else {
+      w.sell += tr.sol;
+      if (recent) (w.sell3 += tr.sol), (sell3 += tr.sol);
+    }
+    by.set(tr.wallet, w);
+  }
+  const reasons: string[] = [];
+  const wallets: string[] = [];
+  let score = 0;
+  // 1. proven wallets in and holding; proven wallets already out
+  const holding: string[] = [];
+  let leaving = 0;
+  for (const [wallet, w] of by) {
+    if (!isSmart(book[wallet])) continue;
+    if (w.buy >= 0.1 && w.sell < w.buy * 0.5) holding.push(wallet);
+    else if (w.sell >= w.buy * 0.5 && w.sell > 0) leaving++;
+  }
+  if (holding.length) {
+    score += Math.min(60, holding.length * 35);
+    const wins = holding.reduce((a, w) => a + book[w].hits, 0);
+    reasons.push(`${holding.length} proven wallet${holding.length > 1 ? 's' : ''} buying (${wins} earlier coins sold at ${SMART_MULT}×+)`);
+    wallets.push(...holding);
+  }
+  // 2. quiet accumulation: several 1 SOL+ buyers in 3 minutes, none selling
+  const whales = [...by].filter(([, w]) => w.buy3 >= 1 && w.sell3 < w.buy3 * 0.1);
+  const whaleSol = whales.reduce((a, [, w]) => a + w.buy3, 0);
+  if (whales.length >= 5 && whaleSol >= 8) score += 45;
+  else if (whales.length >= 3 && whaleSol >= 4) score += 30;
+  if (whales.length >= 3 && whaleSol >= 4) {
+    reasons.push(`${whales.length} wallets bought ${whaleSol.toFixed(1)} SOL in 3 min and sold nothing`);
+    for (const [w] of whales) if (!wallets.includes(w)) wallets.push(w);
+  }
+  const strong = holding.length > 0 || (whales.length >= 3 && whaleSol >= 4);
+  // 3. the buying one-sided
+  if (strong && buy3 + sell3 > 0 && buy3 / (buy3 + sell3) >= 0.8) {
+    score += 10;
+    reasons.push(`${Math.round((buy3 / (buy3 + sell3)) * 100)}% of the last 3 min is buying`);
+  }
+  // 4. before the crowd: few wallets, big sizes
+  if (strong && by.size < 25) {
+    score += 10;
+    reasons.push(`only ${by.size} wallets so far — before the crowd`);
+  }
+  // 5. the creator adding to the bag, not selling it
+  if (devAdded && !devActivity(tok).sold) {
+    score += 10;
+    reasons.push('creator bought more after launch');
+  }
+  if (leaving) {
+    score -= 30 * leaving;
+    reasons.push(`${leaving} proven wallet${leaving > 1 ? 's' : ''} already selling`);
+  }
+  return { score: Math.round(clamp(score, 0, 100)), reasons, wallets: wallets.slice(0, 12) };
+}
+
+/** Of the wallets a trade followed in, how many have since sold at least half of what they bought. */
+export function insidersOut(tok: MemeToken, wallets: string[], since: number): number {
+  const want = new Set(wallets);
+  const by = new Map<string, { buy: number; sell: number; soldAfter: boolean }>();
+  for (const tr of tok.trades) {
+    if (!want.has(tr.wallet)) continue;
+    const w = by.get(tr.wallet) ?? { buy: 0, sell: 0, soldAfter: false };
+    if (tr.side === 'buy') w.buy += tr.sol;
+    else {
+      w.sell += tr.sol;
+      if (tr.t >= since) w.soldAfter = true;
+    }
+    by.set(tr.wallet, w);
+  }
+  let n = 0;
+  for (const w of by.values()) if (w.soldAfter && w.sell >= w.buy * 0.5) n++;
+  return n;
+}
+
 // ---------- Strategist: entry ----------
 
 export interface StrategyConfig {
@@ -243,6 +426,10 @@ export interface StrategyConfig {
   maxExtension: number;
   /** buyers must outweigh sellers over the last 5 min: least share of the buying (SOL on the curve, trades on a pool) */
   minBuyShare: number;
+  /** the insider lane: insider score that buys on its own, without waiting for heat and virality (0 = off) */
+  insiderMin: number;
+  /** insider lane, on the curve: most the price may stand above its 5-minute average (insiders buying lift it) */
+  insiderMaxExtension: number;
 }
 
 export const STRATEGY_DEFAULTS: StrategyConfig = {
@@ -260,6 +447,8 @@ export const STRATEGY_DEFAULTS: StrategyConfig = {
   maxRun5m: 0.6,
   maxExtension: 1.5,
   minBuyShare: 0.58,
+  insiderMin: 65,
+  insiderMaxExtension: 2.5,
 };
 
 /** How far the price ran over the last 5 minutes (0.6 = +60 %), or null when it cannot be told. */
@@ -308,12 +497,40 @@ export interface Decision {
   enter: boolean;
   conviction: number;
   why: string;
+  /** the insider lane: the wallets it followed in (sold when they sell) */
+  insiders?: string[];
 }
 
-export function strategist(tok: MemeToken, a: Assessment, v: Viability, x: Virality, cfg: StrategyConfig): Decision {
+/**
+ * The insider lane: proven wallets or quiet big buyers are in early, so buy
+ * before the heat and virality show — the same safety checks, the same 5× room,
+ * a looser spike limit (their buying lifts the price), and out when they sell.
+ */
+function insiderEntry(tok: MemeToken, a: Assessment, ins: InsiderRead, cfg: StrategyConfig): Decision | null {
+  if (!(cfg.insiderMin > 0) || ins.score < cfg.insiderMin || !ins.wallets.length) return null;
+  if (a.ageSec > cfg.maxAgeMin * 60) return null;
+  if (!Number.isFinite(a.mcapUsd) || a.mcapUsd <= 0 || a.mcapUsd > cfg.maxMcapUsd || cfg.targetMcapUsd / a.mcapUsd < cfg.minRoom) return null;
+  const onCurve = tok.source === 'pump' && !tok.migrated;
+  const now = tok.lastTradeAt || Date.now();
+  if (onCurve) {
+    const p = curveProgress(tok.vTokens);
+    if (p < 0.03 || p > cfg.maxCurve) return null;
+    const ext = extension5m(tok, now);
+    if (ext !== null && ext > cfg.insiderMaxExtension) return null;
+  } else if (!tok.dex || tok.dex.liquidityUsd < cfg.minLiquidityUsd) return null;
+  const share = buyShare5m(tok, now);
+  if (share !== null && share < 0.6) return null;
+  const room = (cfg.targetMcapUsd / a.mcapUsd).toFixed(0);
+  return { enter: true, conviction: ins.score, insiders: ins.wallets, why: `INSIDER ${ins.score} · ${room}× room to $${Math.round(cfg.targetMcapUsd / 1000)}k — ${ins.reasons.slice(0, 3).join('; ')}; out when they sell` };
+}
+
+export function strategist(tok: MemeToken, a: Assessment, v: Viability, x: Virality, cfg: StrategyConfig, ins?: InsiderRead): Decision {
   const conviction = Math.round(0.4 * a.heat + 0.35 * x.score + 0.25 * v.score);
   const skip = (why: string): Decision => ({ enter: false, conviction, why });
   if (v.verdict !== 'pass') return skip(v.verdict === 'reject' ? `rejected: ${v.reasons[0]}` : `watching: ${v.reasons[0] ?? 'checks pending'}`);
+  // insiders in early: the same safety, without waiting for the crowd
+  const inside = ins ? insiderEntry(tok, a, ins, cfg) : null;
+  if (inside) return inside;
   if (v.score < cfg.minViability) return skip(`viability ${v.score} < ${cfg.minViability}`);
   if (a.heat < cfg.minHeat) return skip(`heat ${a.heat} < ${cfg.minHeat}`);
   if (x.score < cfg.minVirality) return skip(`virality ${x.score} < ${cfg.minVirality}`);

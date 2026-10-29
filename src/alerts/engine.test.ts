@@ -102,10 +102,13 @@ describe('AlertEngine', () => {
     dropOther(other);
   });
 
-  it('moves saved rules to the chart’s market once', () => {
+  it('drops the order-flow alerts and reports for the swarm’s own notices (v7)', () => {
     const migrate = useSettings.persist.getOptions().migrate!;
-    const out = migrate({ alerts: [rule({ type: 'large_trade', scope: 'aggregate' }), rule({ type: 'liquidation', scope: 'aggregate' })] }, 2) as { alerts: AlertRule[] };
-    expect(out.alerts.map((r) => r.scope)).toEqual(['primary', 'primary']);
+    const old = { alerts: [rule({ type: 'liquidation' })], telegramBotStory: true, telegramDaily: true, telegramWeekly: true, telegramFeedAlerts: true, telegramAlerts: true, reportTime: '16:00' };
+    const out = migrate(old, 6) as Record<string, unknown>;
+    expect(out.alerts).toEqual([]);
+    expect(out).toMatchObject({ telegramSwarm: true, swarmDesktopAlerts: true });
+    for (const k of ['telegramBotStory', 'telegramDaily', 'telegramWeekly', 'telegramFeedAlerts', 'telegramAlerts', 'reportTime']) expect(out).not.toHaveProperty(k);
   });
 });
 

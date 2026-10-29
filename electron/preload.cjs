@@ -81,7 +81,6 @@ contextBridge.exposeInMainWorld('novus', {
     setLimits: (l) => call('trade:setLimits', l),
     log: (limit) => call('trade:log', limit),
   },
-  report: { data: (kind, venue, symbol) => call('report:data', kind, venue, symbol) },
   amt: {
     list: () => call('amt:list'),
     defaults: () => call('amt:defaults'),

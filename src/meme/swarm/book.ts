@@ -5,17 +5,20 @@
 //
 // Exits, in the order they are checked (meme coins move in minutes, and most
 // die on day one, so profits are taken early and losers cut fast):
-//  1. rug: the creator dumps, a danger flag appears, or trading stops
+//  1. rug: the creator dumps, a danger flag appears, or trading stops; for
+//     an insider-lane buy, half the wallets it followed in have sold
 //  2. stop loss: price down `stopLoss` from what was paid
 //  3. take profits: sell a share at each price multiple (default a third at
 //     3× — the cost is back — and half of the rest at 5×)
 //  4. trailing: once the price is up `trailFrom`×, give back at most `trail`
 //     from its peak (on the price, so it still guards the bag left after
-//     profits were taken)
+//     profits were taken); once every take profit is done, the runner left
+//     trails by the wider `runnerTrail`, room to become a 50× or 100×
 //  5. time: no new high for `staleMin` minutes while under `staleBelow`×
 // Multiples are the price against the price paid (fee and impact included).
 import { curveBuyTokens, curveSellSol, PUMP_FEE } from '../pump';
 import { devActivity, type MemeToken } from '../token';
+import { insidersOut } from './agents';
 
 export interface ManagerConfig {
   /** SOL per trade */
@@ -26,6 +29,8 @@ export interface ManagerConfig {
   stopLoss: number;
   trailFrom: number;
   trail: number;
+  /** the trail once every take profit is done (the runner) */
+  runnerTrail: number;
   staleMin: number;
   staleBelow: number;
   /** stop opening new trades for the day after losing this much SOL */
@@ -44,6 +49,7 @@ export const MANAGER_DEFAULTS: ManagerConfig = {
   stopLoss: 0.35,
   trailFrom: 2,
   trail: 0.4,
+  runnerTrail: 0.6,
   staleMin: 20,
   staleBelow: 1.3,
   dailyLossSol: 0.5,
@@ -87,6 +93,8 @@ export interface Position {
   retryAt?: number;
   /** price multiples already reported (Telegram progress) */
   milestones?: number[];
+  /** insider lane: the wallets it followed in; out when half of them sell */
+  insiders?: string[];
 }
 
 const POOL_FEE = 0.0025;
@@ -200,10 +208,15 @@ export function decideExit(p: Position, tok: MemeToken, now: number, solUsd: num
   }
   const rug = rugReason(tok, now, dangers);
   if (rug) return { share: 1, why: rug, mult: m, tp: false };
+  if (p.insiders?.length) {
+    const out = insidersOut(tok, p.insiders, p.openedAt);
+    if (out >= Math.ceil(p.insiders.length / 2)) return { share: 1, why: `${out} of the ${p.insiders.length} insider wallets it followed are selling — out with them`, mult: m, tp: false };
+  }
   if (m <= 1 - cfg.stopLoss) return { share: 1, why: `stop loss at ${m.toFixed(2)}×`, mult: m, tp: false };
   const tp = cfg.takeProfits[p.tpDone];
   if (tp && m >= tp.at) return { share: tp.sell, why: `take profit at ${tp.at}× (sold ${Math.round(tp.sell * 100)}% of what was left)`, mult: m, tp: true };
-  if (p.peakMult >= cfg.trailFrom && m <= p.peakMult * (1 - cfg.trail)) return { share: 1, why: `trailing stop: ${m.toFixed(2)}× after a ${p.peakMult.toFixed(2)}× peak`, mult: m, tp: false };
+  const trail = p.tpDone >= cfg.takeProfits.length ? (cfg.runnerTrail ?? cfg.trail) : cfg.trail;
+  if (p.peakMult >= cfg.trailFrom && m <= p.peakMult * (1 - trail)) return { share: 1, why: `trailing stop: ${m.toFixed(2)}× after a ${p.peakMult.toFixed(2)}× peak`, mult: m, tp: false };
   if (now - p.peakAt >= cfg.staleMin * 60_000 && m < cfg.staleBelow) return { share: 1, why: `no new high for ${cfg.staleMin} min at ${m.toFixed(2)}× — out`, mult: m, tp: false };
   return null;
 }

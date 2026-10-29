@@ -5,7 +5,6 @@ import { startAlerts, useToasts } from '../alerts/engine';
 import { startAmtService } from '../desktop/amt';
 import { CommandCenter } from '../command/CommandCenter';
 import { startSwarmService } from '../meme/swarm/swarm';
-import { startReportScheduler } from '../desktop/reports';
 import { startTelegramService } from '../desktop/telegram';
 import { startCollectors } from '../market/collectors';
 import { hub } from '../market/hub';
@@ -54,7 +53,6 @@ export function App() {
     startTelegramService();
     startAmtService();
     startSwarmService();
-    startReportScheduler();
   }, []);
 
   // panels ask for the Connections window through a window event

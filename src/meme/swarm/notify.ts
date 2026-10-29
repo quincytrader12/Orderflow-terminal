@@ -3,6 +3,7 @@
 // the reasoning — on the buy, at each new multiple (2×, 5×, 10×, 25×, 50×,
 // 100× …), and on every exit. Through the swarm's own channels, so it keeps
 // reporting while the terminal is locked.
+import { beep, useToasts, type Toast } from '../../alerts/engine';
 import { fmtNum, fmtTime } from '../../core/format';
 import { desktop } from '../../desktop/bridge';
 import { telegram } from '../../desktop/telegram';
@@ -202,7 +203,7 @@ const html = (text: string) => {
 /** Send a coin card with a caption (text alone when the picture cannot be made). */
 export async function tellWithCard(tok: MemeToken | undefined, p: Position | null, headline: string, text: string, solUsd: number) {
   const s = getSettings();
-  if (!s.telegramBotStory || !s.telegramSecretId) return;
+  if (!s.telegramSwarm || !s.telegramSecretId) return;
   const caption = html(text);
   try {
     if (!tok || !desktop) throw new Error('no card');
@@ -214,4 +215,22 @@ export async function tellWithCard(tok: MemeToken | undefined, p: Position | nul
   }
   const send = desktop ? (h: string) => desktop!.swarm.notify(s.telegramSecretId, h) : (h: string) => telegram.send(s.telegramSecretId, h);
   await send(caption).catch(() => undefined);
+}
+
+/**
+ * The swarm's buys and exits on this computer: a toast in the terminal, a
+ * sound, and a system notification (seen with the window in the background).
+ */
+export function alertHere(title: string, message: string, tone: Toast['tone']) {
+  const s = getSettings();
+  if (!s.swarmDesktopAlerts) return;
+  useToasts.getState().push({ title, message, tone });
+  if (s.soundEnabled) beep(tone === 'sell' ? 520 : tone === 'buy' ? 980 : 760, 220);
+  if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
+    try {
+      new Notification(title, { body: message, tag: `swarm-${title}`, silent: true });
+    } catch {
+      /* not available here */
+    }
+  }
 }

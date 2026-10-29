@@ -170,8 +170,11 @@ describe('Manager — paper trades', () => {
     expect(p.realizedSol).toBeGreaterThan(0.09);
     expect(pump(5.1).map((f) => f.why)).toEqual(['take profit at 5× (sold 50% of what was left)']);
     expect(p.tpDone).toBe(2);
-    // the top: price falls 45 % from the peak → trailing stop
+    // the runner left after both take profits trails wider: a 45 % pullback holds…
     while (multiple(p, tok, 150) > p.peakMult * 0.58) applyTrade(tok, trade(tok, 'sell', `D${w++}`, 2, (t += 1_000)));
+    expect(managePosition(p, tok, t, 150, MANAGER_DEFAULTS, [])).toEqual([]);
+    // …a fall of more than 60 % from the peak closes it
+    while (multiple(p, tok, 150) > p.peakMult * 0.39) applyTrade(tok, trade(tok, 'sell', `D${w++}`, 2, (t += 1_000)));
     const f = managePosition(p, tok, t, 150, MANAGER_DEFAULTS, []);
     expect(f[0].why).toMatch(/^trailing stop: [\d.]+× after a [\d.]+× peak$/);
     expect(p.closedAt).toBe(t);

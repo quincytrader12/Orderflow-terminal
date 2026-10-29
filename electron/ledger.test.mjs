@@ -66,7 +66,7 @@ describe('ledger key', () => {
   });
 
   it('keeps secrets, trading and bots sealed while locked', () => {
-    for (const ch of ['vault:list', 'vault:copy', 'trade:place', 'amt:start', 'telegram:send', 'wallet:balances', 'ccxt:account', 'report:data', 'db:exportCsv']) expect(PUBLIC_CHANNELS.has(ch)).toBe(false);
+    for (const ch of ['vault:list', 'vault:copy', 'trade:place', 'amt:start', 'telegram:send', 'wallet:balances', 'ccxt:account', 'db:exportCsv']) expect(PUBLIC_CHANNELS.has(ch)).toBe(false);
     for (const ch of ['ccxt:subscribe', 'net:fetchJson', 'db:record', 'app:unlock', 'app:seal']) expect(PUBLIC_CHANNELS.has(ch)).toBe(true);
     // changing the key needs an unlocked terminal (and the current key)
     expect(PUBLIC_CHANNELS.has('app:changeKey')).toBe(false);

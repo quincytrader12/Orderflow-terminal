@@ -83,6 +83,9 @@ function Card({ n, title, right, className = '', children }: { n: string; title:
   );
 }
 
+/** How long a read keeps the focus chart before a stronger one takes it. */
+const FOCUS_HOLD_MS = 20_000;
+
 /** Feed rates, sampled once a second for as long as the app runs. */
 const rates = { pump: new Rate(90), dex: new Rate(90), rpc: new Rate(90) };
 let sampling = false;
@@ -97,13 +100,13 @@ function startSampling() {
 }
 
 /** A small area chart. */
-function drawArea(ctx: CanvasRenderingContext2D, w: number, h: number, pal: Palette, pts: { t: number; v: number }[], o: { color: [number, number, number]; cap?: number; zero?: boolean; t0?: number; t1?: number; marks?: { t: number; side: 'buy' | 'sell' }[]; label?: (v: number) => string; hover?: PointerState | null; fmt?: (v: number) => string }) {
+function drawArea(ctx: CanvasRenderingContext2D, w: number, h: number, pal: Palette, pts: { t: number; v: number }[], o: { color: [number, number, number]; cap?: number; zero?: boolean; t0?: number; t1?: number; marks?: { t: number; side: 'buy' | 'sell' }[]; label?: (v: number) => string; hover?: PointerState | null; fmt?: (v: number) => string; empty?: string }) {
   if (pts.length < 2) {
     ctx.fillStyle = pal.muted;
     ctx.font = font(11, 500, false);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('waiting for data', w / 2, h / 2);
+    ctx.fillText(o.empty ?? 'waiting for data', w / 2, h / 2);
     return;
   }
   const t0 = o.t0 ?? pts[0].t;
@@ -328,14 +331,26 @@ export function CommandCenter() {
   const spentToday = live && sw.wallet ? sw.wallet.spentToday : st.spentToday;
 
   // the coin in focus: the newest open trade, else the strongest read, else the one picked in the scanner
-  const focusMint = [...sw.positions].reverse().find((p) => !p.closedAt)?.mint ?? sw.reads.find((r) => r.enter)?.mint ?? sw.reads[0]?.mint ?? selected ?? undefined;
+  // a read holds the focus for at least FOCUS_HOLD_MS, so the chart is not swapped every tick
+  const focusHold = useRef<{ mint: string; at: number } | null>(null);
+  const openMint = [...sw.positions].reverse().find((p) => !p.closedAt)?.mint;
+  const readMint = sw.reads.find((r) => r.enter)?.mint ?? sw.reads[0]?.mint ?? selected ?? undefined;
+  const nowMs = Date.now();
+  if (!openMint && readMint && (!focusHold.current || !tokens[focusHold.current.mint] || (focusHold.current.mint !== readMint && nowMs - focusHold.current.at > FOCUS_HOLD_MS))) focusHold.current = { mint: readMint, at: nowMs };
+  const focusMint = openMint ?? focusHold.current?.mint ?? readMint;
   const focus: MemeToken | undefined = focusMint ? tokens[focusMint] : undefined;
   const focusPos = focus ? [...sw.positions].reverse().find((p) => p.mint === focus.mint) : undefined;
 
-  // pool coins have no trade feed: their chart comes from the pool's candles
+  // pool coins have no trade feed: their chart comes from the pool's candles, refreshed while in focus
   useEffect(() => {
-    if (focus && focus.trades.length < 2) void ensureHistory(focus, solUsd, fetchJson).catch(() => undefined);
-  }, [focus?.mint, solUsd]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!focus) return;
+    const load = () => {
+      if (focus.trades.length < 2) void ensureHistory(focus, useMeme.getState().solUsd, fetchJson).catch(() => undefined);
+    };
+    load();
+    const id = setInterval(load, 15_000);
+    return () => clearInterval(id);
+  }, [focus?.mint, solUsd > 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [drawer, setDrawer] = useState<DrawerTab | null>(null);
   useEffect(() => {
@@ -428,7 +443,7 @@ export function CommandCenter() {
             {solUsd > 0 ? <Num value={st.pnlSol * solUsd} format={(v) => `${v >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v), 2)}`} /> : '—'} · banked {sol(st.realizedSol)} · open {sol(st.unrealizedSol)}
           </div>
           <div className="cc-spark">
-            <Chart draw={(ctx, w, h, pal, hover) => drawArea(ctx, w, h, pal, st.equity.length === 1 ? [{ t: st.equity[0].t - 60_000, v: 0 }, ...st.equity] : st.equity, { color: st.pnlSol >= 0 ? pal.buyRgb : pal.sellRgb, zero: true, hover, fmt: (v) => `${sol(v)} SOL` })} />
+            <Chart draw={(ctx, w, h, pal, hover) => drawArea(ctx, w, h, pal, st.equity.length === 1 ? [{ t: st.equity[0].t - 60_000, v: 0 }, ...st.equity] : st.equity, { color: st.pnlSol >= 0 ? pal.buyRgb : pal.sellRgb, zero: true, hover, fmt: (v) => `${sol(v)} SOL`, empty: 'no trades yet' })} />
           </div>
           <div className="cc-row mono">
             <span>
@@ -453,7 +468,7 @@ export function CommandCenter() {
                   h,
                   pal,
                   (focus ? priceSeries(focus) : []).slice(-300).map((x) => ({ t: x.t, v: x.mcapSol * (solUsd || 1) })),
-                  { color: pal.accentRgb, marks: focusPos?.fills.map((f) => ({ t: f.t, side: f.side })), label: (v) => (solUsd ? `$${fmtNum(v, 1)}` : `${fmtNum(v, 1)}◎`), hover },
+                  { color: pal.accentRgb, marks: focusPos?.fills.map((f) => ({ t: f.t, side: f.side })), label: (v) => (solUsd ? `$${fmtNum(v, 1)}` : `${fmtNum(v, 1)}◎`), hover, empty: focus ? 'loading this coin’s price history…' : sw.enabled ? 'reading coins — the strongest shows here' : 'start the swarm — its strongest coin shows here' },
                 )
               }
             />
@@ -587,6 +602,7 @@ export function CommandCenter() {
             <Gauge value={passRate} label="Sentinel" sub="pass rate" tone="cyan" />
             <Gauge value={viralShare} label="Herald" sub="viral share" tone="magenta" />
             <Gauge value={sw.reads.length ? bestRead / 100 : null} text={sw.reads.length ? String(bestRead) : '—'} label="Strategist" sub={`best read · buys at ${sw.strategy.minConviction}+`} tone={bestRead >= sw.strategy.minConviction ? 'mint' : 'cyan'} />
+            <Gauge value={ss.strategist.insiderBest / 100} text={String(ss.strategist.insiderBest)} label="Insiders" sub={`${ss.strategist.proven} proven wallets · buys at ${sw.strategy.insiderMin}+`} tone={sw.strategy.insiderMin > 0 && ss.strategist.insiderBest >= sw.strategy.insiderMin ? 'mint' : 'magenta'} />
             <Gauge value={st.open.length / Math.max(1, sw.manager.maxOpen)} text={`${st.open.length}/${sw.manager.maxOpen}`} label="Manager" sub="positions open" tone="mint" />
             <Gauge value={sw.manager.dailyLossSol ? st.lostToday / sw.manager.dailyLossSol : null} label="Loss limit" sub={`${st.lostToday.toFixed(2)} / ${sw.manager.dailyLossSol} SOL`} tone="chrome" />
             <Gauge value={spentToday / budget} label="Budget" sub={`${spentToday.toFixed(2)} / ${budget} SOL`} tone="chrome" />
