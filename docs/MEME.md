@@ -71,7 +71,7 @@ it remembers):
 | **Herald** | virality — is it catching on | new buyers per minute and whether they are arriving faster; the meme's narrative (how many coins share its name this hour, and whether this one leads them); linked X / Telegram / website; DexScreener profile or paid boosts; total wallets in |
 | **Strategist** | picks the entries — only ones with room for 5× | Sentinel pass, viability 60+, heat 55+, virality 45+, **conviction 80+** (40 % heat + 35 % virality + 25 % viability), under 45 min old, **room for 5× to a $1M market cap** (so under $200k now), 12–85 % of the curve sold; pools need $20k liquidity. **Not after a spike**: on the curve, no buying while the price stands 50 %+ above its own 5-minute average; on a pool, not after +60 % in 5 minutes. **Net buying**: buyers at least 58 % of the last 5 minutes' flow. All adjustable under Rules. |
 | **Insider tracker** (part of the Strategist) | catches insiders and smart money early | Learns from every trade it watches: a wallet that bought a coin and sold it at 3× its buy or better scores a hit, and one with two hits and right on 30 %+ of its coins since is **proven** (kept between runs, the best 1,500). A coin scores when proven wallets are buying and holding (35 each), when 3+ wallets each put 1 SOL+ in within 3 minutes without selling (30; 5+ wallets and 8 SOL+: 45), when the buying is one-sided (80 %+), when there are still few wallets (before the crowd), or when the creator adds to the bag; proven wallets already selling count against it. Launch-second buys are left to the Sentinel (bundles and snipers dump). **At 65+ it buys without waiting for heat and virality** — the same Sentinel pass, the same 5× room, 3–85 % of the curve, buyers 60 %+, a looser spike limit (their buying lifts the price) — and it **sells everything once half the wallets it followed in have sold**. |
-| **Manager** | runs the trades — on paper, or live from the swarm wallet | Sized to the account (Wallet → Set up for my balance). Exits: rug (creator dumps, danger flag, trading stops) → insiders out (insider-lane buys) → stop loss −35 % → take profits (a third at 3× — the cost back — and half of the rest at 5×) → trailing 40 % from the peak once up 2×, and **60 % for the runner left after both take profits** (room for a 50× or 100×) → out after 20 min without a new high under 1.3×. Multiples are the price against the price paid. |
+| **Manager** | runs the trades — on paper, or live from the swarm wallet | Sized to the account (Wallet → Set up for my balance): a fifth of the account a trade, at most two thirds in coins, a daily loss limit, a pause after three losses in a row, and a floor at half the starting account. Exits: rug (creator dumps, danger flag, trading stops) → insiders out (insider-lane buys) → stop loss −35 % → take profits (a third at 3× — the cost back — and half of the rest at 5×) → trailing 40 % from the peak once up 2×, and **60 % for the runner left after both take profits** (room for a 50× or 100×) → out after 20 min without a new high under 1.3×. Multiples are the price against the price paid. |
 
 Trades are **on paper** by default: fills priced exactly on the bonding curve
 (1.25 % fee and price impact) or against the pool with an impact estimate, so
@@ -90,13 +90,27 @@ swarm has **a wallet of its own** (Meme Swarm → **Wallet**):
 3. Set the **limits** (enforced in the main process, not the window): SOL per
    trade (default 0.1), SOL per day (0.5), SOL kept for fees (0.02), slippage
    (15 %) and the most it pays in priority fees.
-   **Set up for my balance** does it for you from the SOL in the wallet: up to
-   four positions, the rest of the account split between them (each new coin
-   also locks ~0.002 SOL of token-account rent until it is sold), 0.02 SOL kept
-   for fees, a daily loss limit of a third of the account and a priority fee
-   that stays small next to the trade. About R500 (0.30 SOL) becomes four
-   coins of 0.065 SOL and stops for the day after losing 0.1 SOL. When a coin
-   is sold out, its empty token account is closed and the rent comes back.
+   **Set up for my balance** does it for you from the SOL in the wallet, built
+   to keep a small account alive long enough to catch the big runners:
+   - each trade is **a fifth of what the account is worth now** — smaller after
+     losses, bigger after wins (the wallet's per-trade cap is set at twice
+     today's size, room to compound; Rules → Follow the account);
+   - **at most about two thirds of the account in coins at once** (three coins
+     under 0.5 SOL, four above): if every open coin rugged together, a third
+     would still be there to trade;
+   - **stop for the day** after losing a quarter of the account, **pause an hour
+     after three losses in a row**, and **stop buying altogether below half the
+     starting account** (the floor — open trades are still managed and sold;
+     Rules → Account floor to change it);
+   - 0.02 SOL kept for fees, and a priority fee that stays small next to the
+     trade. Each new coin locks ~0.002 SOL of token-account rent until it is
+     sold; when a coin is sold out its empty account is closed and the rent
+     comes back.
+
+   R480–R500 lands as roughly 0.16–0.30 SOL depending on the SOL price. At
+   0.28 SOL: three coins of 0.055 SOL, at most 0.171 SOL in coins, stop for
+   the day after losing 0.07 SOL, floor 0.14 SOL. At 0.16 SOL: three coins of
+   0.03 SOL (the smallest trade worth its fees).
 4. Switch the mode to **Live** and **Arm** it — a system dialog asks you to
    confirm. From then on the Strategist's picks are bought, managed and sold
    with no approval clicks, also while the terminal is locked.

@@ -35,6 +35,14 @@ export interface ManagerConfig {
   staleBelow: number;
   /** stop opening new trades for the day after losing this much SOL */
   dailyLossSol: number;
+  /** live: each trade is this share of what the account is worth now (0 = always `sizeSol`) */
+  autoSize: number;
+  /** live: stop buying when the account is worth less than this, SOL (0 = off) */
+  floorSol: number;
+  /** pause new trades after this many losses in a row (0 = off)… */
+  lossStreak: number;
+  /** …for this many minutes */
+  cooldownMin: number;
 }
 
 // aimed at 5× and more: a third out at 3× (the cost back, the rest rides free),
@@ -53,6 +61,10 @@ export const MANAGER_DEFAULTS: ManagerConfig = {
   staleMin: 20,
   staleBelow: 1.3,
   dailyLossSol: 0.5,
+  autoSize: 0.2,
+  floorSol: 0,
+  lossStreak: 3,
+  cooldownMin: 60,
 };
 
 export interface Fill {

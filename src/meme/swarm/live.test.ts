@@ -48,6 +48,22 @@ describe('the swarm, trading live', () => {
     expect(fake.buy).toHaveBeenCalledTimes(1);
   });
 
+  it('sizes a R500 account’s trade at a fifth of what it is worth, and stops buying under its floor', async () => {
+    const { tok, now } = setup();
+    fake.buy.mockRejectedValue(new Error('stop here'));
+    useSwarm.setState((s) => ({ wallet: { ...s.wallet!, sol: 0.28, limits: { ...LIMITS, maxBuySol: 0.11 } }, manager: { ...s.manager, autoSize: 0.2, floorSol: 0.14 } }));
+    swarm.tick(now);
+    expect(fake.buy).toHaveBeenCalledWith(tok.mint, 0.055, undefined);
+    await flush();
+    fake.buy.mockReset();
+    const { tok: next, now: later } = setup();
+    useSwarm.setState((s) => ({ wallet: { ...s.wallet!, sol: 0.12, limits: { ...LIMITS, maxBuySol: 0.11 } }, manager: { ...s.manager, autoSize: 0.2, floorSol: 0.14 } }));
+    swarm.tick(later);
+    expect(fake.buy).not.toHaveBeenCalled();
+    expect(useSwarm.getState().log.map((l) => l.text)).toEqual(expect.arrayContaining([expect.stringMatching(new RegExp(`^${next.symbol}: not bought — the account \\(0\\.120 SOL\\) is under its floor of 0\\.14 SOL`))]));
+    useSwarm.setState((s) => ({ manager: { ...s.manager, floorSol: 0 } }));
+  });
+
   it('does not buy unless the wallet is armed, and says why', () => {
     const { tok, now } = setup(false);
     swarm.tick(now);

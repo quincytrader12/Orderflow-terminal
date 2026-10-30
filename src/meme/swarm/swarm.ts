@@ -19,7 +19,8 @@ import { scanner, useMeme } from '../scanner';
 import { assess } from '../score';
 import type { MemeToken } from '../token';
 import { herald, insiderRead, isSmart, learnSmart, Narratives, sentinel, strategist, STRATEGY_DEFAULTS, type CreatorRecord, type SmartBook, type StrategyConfig, type Viability, type Virality } from './agents';
-import { applySell, decideExit, managePosition, MANAGER_DEFAULTS, multiple, newMilestone, openPosition, pnlSol, type ExitDecision, type ManagerConfig, type Position } from './book';
+import { MIN_TRADE_SOL, riskGate, tradeSize } from './bankroll';
+import { applySell, decideExit, managePosition, MANAGER_DEFAULTS, markPrice, multiple, newMilestone, openPosition, pnlSol, type ExitDecision, type ManagerConfig, type Position } from './book';
 import { alertHere, tellWithCard } from './notify';
 import { follow, newOutcome, type Outcome } from './outcomes';
 
@@ -148,6 +149,7 @@ class Swarm {
   private metaInFlight = 0;
   private verdicts = new Map<string, Viability['verdict']>();
   private smartDone = new Set<string>();
+  private floorHit = false;
   private lastLearn = 0;
 
   /** Run while enabled; the scanner runs with it, whatever panels are open. */
@@ -423,6 +425,23 @@ class Swarm {
     const lostToday = -sw.positions.filter((p) => p.closedAt && p.closedAt >= dayStart).reduce((a, p) => a + pnlSol(p, tokens[p.mint], solUsd), 0);
     const newPositions: Position[] = [];
     const newOutcomes: Outcome[] = [];
+    // live: what the account is worth now — the SOL in the wallet and the open coins at their price
+    const live = sw.mode === 'live';
+    const equity = live && sw.wallet?.sol != null ? sw.wallet.sol + open.filter((p) => p.live).reduce((a, p) => a + Math.max(0, p.left * (tokens[p.mint] ? markPrice(tokens[p.mint], solUsd) : 0) || 0), 0) : null;
+    const m = sw.manager;
+    const gate = riskGate(
+      sw.positions.filter((p) => Boolean(p.live) === live),
+      now,
+      { lossStreak: m.lossStreak ?? 0, cooldownMin: m.cooldownMin ?? 60, floorSol: live ? (m.floorSol ?? 0) : 0 },
+      equity,
+    );
+    const underFloor = Boolean(gate && live && equity !== null && (m.floorSol ?? 0) > 0 && equity < m.floorSol);
+    if (underFloor && !this.floorHit) {
+      this.say('manager', `Account floor: ${gate}`);
+      alertHere('Swarm stopped buying', gate!, 'warn');
+      void tellWithCard(undefined, null, '', `🛑 Swarm stopped buying — account floor\nWhy: ${gate}`, 0);
+    }
+    this.floorHit = underFloor;
 
     for (const tok of all) {
       const a = assess(tok, now, solUsd);
@@ -472,11 +491,16 @@ class Swarm {
         const room = open.length + newPositions.length + this.buying.size < sw.manager.maxOpen;
         const budget = lostToday < sw.manager.dailyLossSol;
         const mc = Number.isFinite(a.mcapUsd) ? ` at $${Math.round(a.mcapUsd).toLocaleString('en-US')} market cap` : '';
-        if (room && budget && sw.mode === 'live') {
+        // live: the trade follows the account (smaller after losses, bigger after wins), within the wallet's cap
+        const liveSize = equity !== null && (m.autoSize ?? 0) > 0 ? tradeSize(equity, m.autoSize) : m.sizeSol;
+        if (gate) this.say('manager', `${tok.symbol}: not bought — ${gate}`, tok.mint);
+        else if (room && budget && live) {
           const w = sw.wallet;
+          const size = w ? Math.min(liveSize, w.limits.maxBuySol) : 0;
           if (!desktop || !w) this.say('manager', `${tok.symbol}: not bought — live mode needs the swarm wallet (Wallet tab)`, tok.mint);
           else if (!w.limits.armed) this.say('manager', `${tok.symbol}: not bought — live trading is not armed (Wallet tab)`, tok.mint);
-          else if (!this.buying.has(tok.mint)) void this.liveBuy(tok, Math.min(sw.manager.sizeSol, w.limits.maxBuySol), d.why, d.conviction, mc, d.insiders);
+          else if (size < MIN_TRADE_SOL) this.say('manager', `${tok.symbol}: not bought — a trade would be ${size} SOL, too small for its fees (under ${MIN_TRADE_SOL})`, tok.mint);
+          else if (!this.buying.has(tok.mint)) void this.liveBuy(tok, size, d.why, d.conviction, mc, d.insiders);
         } else if (room && budget) {
           const p = openPosition(tok, sw.manager.sizeSol, now, solUsd, d.why, d.conviction);
           if (p) {

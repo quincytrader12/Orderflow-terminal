@@ -310,7 +310,11 @@ export function Rules() {
       {row('Buy at insider score', <NumberInput value={s.insiderMin} onChange={(insiderMin) => setStrategy({ insiderMin })} min={0} step={5} />, 'proven wallets (seen selling coins at 3×+) or quiet 1 SOL+ buyers in early — buys before the crowd, same safety checks and room rule, out when they sell. 0 = off')}
       {row('Insider spike limit', <NumberInput value={Math.round(s.insiderMaxExtension * 100 - 100)} onChange={(v) => setStrategy({ insiderMaxExtension: 1 + v / 100 })} min={0} step={10} suffix="%" />, 'their buying lifts the price: how far above its 5-minute average it may still buy')}
       <div className="section-title">Manager — how to run the trade</div>
-      {row('Size', <NumberInput value={m.sizeSol} onChange={(sizeSol) => setManager({ sizeSol })} min={0.01} step={0.05} suffix="SOL" />, 'per trade')}
+      {row('Size', <NumberInput value={m.sizeSol} onChange={(sizeSol) => setManager({ sizeSol })} min={0.01} step={0.05} suffix="SOL" />, 'per trade on paper (and live when Follow the account is 0)')}
+      {row('Follow the account', <NumberInput value={Math.round((m.autoSize ?? 0) * 100)} onChange={(v) => setManager({ autoSize: v / 100 })} min={0} step={5} suffix="%" />, 'live: each trade is this share of what the account is worth now — smaller after losses, bigger after wins (0 = always Size)')}
+      {row('Account floor', <NumberInput value={m.floorSol ?? 0} onChange={(floorSol) => setManager({ floorSol })} min={0} step={0.01} suffix="SOL" />, 'live: stop buying if the account is worth less than this (0 = off) — keeps it alive')}
+      {row('Pause after', <NumberInput value={m.lossStreak ?? 0} onChange={(lossStreak) => setManager({ lossStreak })} min={0} step={1} suffix="losses" />, 'in a row (0 = off)…')}
+      {row('Pause for', <NumberInput value={m.cooldownMin ?? 60} onChange={(cooldownMin) => setManager({ cooldownMin })} min={5} step={15} suffix="min" />, '…before buying again')}
       {row('Max open', <NumberInput value={m.maxOpen} onChange={(maxOpen) => setManager({ maxOpen })} min={1} step={1} />, 'positions at once')}
       {row(
         'Take profits',
@@ -444,13 +448,13 @@ export function Wallet() {
                 <button
                   className="chip"
                   disabled={!!busy || !plan || 'error' in plan}
-                  title="Size the swarm to the SOL in this wallet: positions, per-trade and daily caps, loss limit, fee reserve, priority fee"
+                  title="Size the swarm to the SOL in this wallet: positions, trade size that follows the account, per-trade and daily caps, daily loss limit, account floor, fee reserve, priority fee"
                   onClick={() =>
                     plan &&
                     !('error' in plan) &&
                     run('limits', async () => {
-                      await desktop!.swarm.setLimits({ maxBuySol: plan.sizeSol, dailySpendSol: plan.dailySpendSol, reserveSol: plan.reserveSol, priorityLamports: plan.priorityLamports });
-                      sw.setManager({ sizeSol: plan.sizeSol, maxOpen: plan.maxOpen, dailyLossSol: plan.dailyLossSol });
+                      await desktop!.swarm.setLimits({ maxBuySol: plan.maxBuySol, dailySpendSol: plan.dailySpendSol, reserveSol: plan.reserveSol, priorityLamports: plan.priorityLamports });
+                      sw.setManager({ sizeSol: plan.sizeSol, maxOpen: plan.maxOpen, dailyLossSol: plan.dailyLossSol, autoSize: plan.tradeShare, floorSol: plan.floorSol });
                     })
                   }
                 >
@@ -461,8 +465,8 @@ export function Wallet() {
                     ? 'Balance not known yet (waiting for the Solana network).'
                     : 'error' in plan
                       ? plan.error
-                      : `${plan.maxOpen} coin${plan.maxOpen > 1 ? 's' : ''} × ${plan.sizeSol} SOL${usd > 0 ? ` (≈ $${(plan.sizeSol * usd).toFixed(2)} each)` : ''}, ${plan.reserveSol} SOL kept for fees, stop for the day after losing ${plan.dailyLossSol} SOL — uses ${(plan.deployedSol + plan.reserveSol).toFixed(3)} of ${plan.balanceSol.toFixed(3)} SOL.`}
-                  {sw.manager.sizeSol === (plan && !('error' in plan) ? plan.sizeSol : NaN) && sw.manager.maxOpen === (plan && !('error' in plan) ? plan.maxOpen : NaN) ? ' ✓ in use' : ''}
+                      : `Up to ${plan.maxOpen} coin${plan.maxOpen > 1 ? 's' : ''} at once, each ${Math.round(plan.tradeShare * 100)}% of the account (${plan.sizeSol} SOL now${usd > 0 ? ` ≈ $${(plan.sizeSol * usd).toFixed(2)}` : ''} — smaller after losses, bigger after wins). At most ${plan.deployedSol.toFixed(3)} SOL in coins; the rest stays safe. Stops for the day after losing ${plan.dailyLossSol} SOL, pauses an hour after 3 losses in a row, and stops buying if the account falls under ${plan.floorSol} SOL. ${plan.reserveSol} SOL kept for fees.`}
+                  {sw.manager.maxOpen === (plan && !('error' in plan) ? plan.maxOpen : NaN) && sw.manager.floorSol === (plan && !('error' in plan) ? plan.floorSol : NaN) ? ' ✓ in use' : ''}
                 </span>
               </div>
             );
@@ -479,7 +483,7 @@ export function Wallet() {
             )}
             <span className="muted">{w.limits.armed ? 'Armed: the swarm signs its own trades within the limits below. Open positions keep being managed and sold after you disarm.' : 'Arming asks for confirmation in a system dialog.'}</span>
           </div>
-          {row('Per trade', <NumberInput value={w.limits.maxBuySol} onChange={(v) => limit('maxBuySol', v)} min={0.001} step={0.01} suffix="SOL" />, `hard cap; the swarm buys ${Math.min(sw.manager.sizeSol, w.limits.maxBuySol)} SOL (the smaller of this and Rules → Size)`)}
+          {row('Per trade', <NumberInput value={w.limits.maxBuySol} onChange={(v) => limit('maxBuySol', v)} min={0.001} step={0.01} suffix="SOL" />, (sw.manager.autoSize ?? 0) > 0 ? `hard cap; trades are ${Math.round(sw.manager.autoSize * 100)}% of the account, never above this` : `hard cap; the swarm buys ${Math.min(sw.manager.sizeSol, w.limits.maxBuySol)} SOL (the smaller of this and Rules → Size)`)}
           {row('Per day', <NumberInput value={w.limits.dailySpendSol} onChange={(v) => limit('dailySpendSol', v)} min={0.001} step={0.1} suffix="SOL" />, 'total bought per day, then it stops')}
           {row('Keep for fees', <NumberInput value={w.limits.reserveSol} onChange={(v) => limit('reserveSol', v)} min={0} step={0.01} suffix="SOL" />, 'never spent on coins, so sells can always pay their fee')}
           {row(
