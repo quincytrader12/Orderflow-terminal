@@ -420,9 +420,11 @@ class Swarm {
     const why = new Map<string, { text: string; n: number }>();
     let scored = 0;
     let viral = 0;
-    const open = sw.positions.filter((p) => !p.closedAt);
+    // paper and live are separate books: paper trades never take a live slot or count against the live loss limit
+    const sameBook = (p: Position) => Boolean(p.live) === (sw.mode === 'live');
+    const open = sw.positions.filter((p) => !p.closedAt && sameBook(p));
     const dayStart = new Date(now).setHours(0, 0, 0, 0);
-    const lostToday = -sw.positions.filter((p) => p.closedAt && p.closedAt >= dayStart).reduce((a, p) => a + pnlSol(p, tokens[p.mint], solUsd), 0);
+    const lostToday = -sw.positions.filter((p) => p.closedAt && p.closedAt >= dayStart && sameBook(p)).reduce((a, p) => a + pnlSol(p, tokens[p.mint], solUsd), 0);
     const newPositions: Position[] = [];
     const newOutcomes: Outcome[] = [];
     // live: what the account is worth now — the SOL in the wallet and the open coins at their price
@@ -430,7 +432,7 @@ class Swarm {
     const equity = live && sw.wallet?.sol != null ? sw.wallet.sol + open.filter((p) => p.live).reduce((a, p) => a + Math.max(0, p.left * (tokens[p.mint] ? markPrice(tokens[p.mint], solUsd) : 0) || 0), 0) : null;
     const m = sw.manager;
     const gate = riskGate(
-      sw.positions.filter((p) => Boolean(p.live) === live),
+      sw.positions.filter(sameBook),
       now,
       { lossStreak: m.lossStreak ?? 0, cooldownMin: m.cooldownMin ?? 60, floorSol: live ? (m.floorSol ?? 0) : 0 },
       equity,

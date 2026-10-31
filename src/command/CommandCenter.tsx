@@ -468,7 +468,7 @@ export function CommandCenter() {
                   h,
                   pal,
                   (focus ? priceSeries(focus) : []).slice(-300).map((x) => ({ t: x.t, v: x.mcapSol * (solUsd || 1) })),
-                  { color: pal.accentRgb, marks: focusPos?.fills.map((f) => ({ t: f.t, side: f.side })), label: (v) => (solUsd ? `$${fmtNum(v, 1)}` : `${fmtNum(v, 1)}◎`), hover, empty: focus ? 'loading this coin’s price history…' : sw.enabled ? 'reading coins — the strongest shows here' : 'start the swarm — its strongest coin shows here' },
+                  { color: pal.accentRgb, marks: focusPos?.fills.map((f) => ({ t: f.t, side: f.side })), label: (v) => (solUsd ? `$${fmtNum(v, 1)}` : `${fmtNum(v, 1)}◎`), hover, empty: focus ? 'loading price history…' : sw.enabled ? 'reading coins…' : 'press Start swarm' },
                 )
               }
             />
@@ -516,7 +516,7 @@ export function CommandCenter() {
               </div>
             ))
           ) : (
-            <div className="muted cc-empty">Nothing open. The Manager holds at most {sw.manager.maxOpen} coins, {sw.manager.sizeSol} SOL each.</div>
+            <div className="muted cc-empty">Nothing open. The Manager holds at most {sw.manager.maxOpen} coins, {live && (sw.manager.autoSize ?? 0) > 0 ? `${Math.round(sw.manager.autoSize * 100)}% of the account each` : `${sw.manager.sizeSol} SOL each`}.</div>
           )}
         </Card>
       </div>

@@ -371,6 +371,12 @@ export function Wallet() {
       })
       .catch(() => undefined);
   useEffect(() => void loadPhantoms(), []);
+  // the balance while the wallet is on screen, whether or not the swarm runs (a deposit shows within seconds)
+  useEffect(() => {
+    void swarm.refreshWallet();
+    const id = setInterval(() => void swarm.refreshWallet(), 10_000);
+    return () => clearInterval(id);
+  }, []);
   useEffect(() => {
     vault
       .list()

@@ -64,6 +64,18 @@ describe('the swarm, trading live', () => {
     useSwarm.setState((s) => ({ manager: { ...s.manager, floorSol: 0 } }));
   });
 
+  it('paper trades left open, or lost today, do not hold up live buying', async () => {
+    const { tok, now } = setup();
+    fake.buy.mockRejectedValue(new Error('stop here'));
+    const paperOpen = { id: 'paper-1', mint: 'OtherMint', symbol: 'PAPR', openedAt: now - 60_000, costSol: 0.1, entryPx: 1, tokens: 1, left: 1, realizedSol: 0, peakMult: 1, peakAt: now, tpDone: 0, fills: [], why: 'paper', conviction: 80 } as Position;
+    const paperLost = { ...paperOpen, id: 'paper-2', mint: 'OtherMint2', closedAt: now - 1_000, realizedSol: 0 } as Position;
+    useSwarm.setState((s) => ({ positions: [paperOpen, paperLost], manager: { ...s.manager, maxOpen: 1, dailyLossSol: 0.05 } }));
+    swarm.tick(now);
+    expect(fake.buy).toHaveBeenCalledWith(tok.mint, 0.05, undefined);
+    await flush();
+    useSwarm.setState((s) => ({ positions: [], manager: { ...s.manager, maxOpen: 4, dailyLossSol: 0.5 } }));
+  });
+
   it('does not buy unless the wallet is armed, and says why', () => {
     const { tok, now } = setup(false);
     swarm.tick(now);
