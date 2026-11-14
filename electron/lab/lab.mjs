@@ -54,7 +54,7 @@ const plainMarkets = (byTf) => Object.fromEntries(Object.entries(byTf).map(([tf,
 
 export class LabService {
   /**
-   * @param o {{ ccxt, dir: string, emit: (ch, msg) => void, makeWorker: () => import('node:worker_threads').Worker, makeFarmWorker?: () => import('node:worker_threads').Worker, now?: () => number }}
+   * @param o {{ ccxt, dir: string, emit: (ch, msg) => void, makeWorker: () => import('node:worker_threads').Worker, makeFarmWorker?: () => import('node:worker_threads').Worker, now?: () => number, fetchTimeout?: number, retryPause?: number, farmSilence?: number, reviveDelays?: number[], dogEvery?: number }}
    */
   constructor(o) {
     this.ccxt = o.ccxt;
@@ -79,6 +79,14 @@ export class LabService {
     this.farmTimer = null;
     this.farmNote = '';
     this.farmErr = '';
+    this.farmData = null;
+    this.farmRestarts = 0;
+    // how long a download may take, the pause before its second try, and how long the farm may be silent before it is restarted
+    this.fetchTimeout = o.fetchTimeout ?? 90_000;
+    this.retryPause = o.retryPause ?? 1500;
+    this.farmSilence = o.farmSilence ?? 5 * 60_000;
+    this.reviveDelays = o.reviveDelays ?? [15_000, 60_000, 300_000];
+    this.dogEvery = o.dogEvery ?? 30_000;
   }
 
   // ---------- the edge finder ----------
@@ -86,7 +94,7 @@ export class LabService {
   /** what the edge finder shows when asked: its live state, or the last one saved */
   farmState() {
     const base = this.farmSnap ?? { running: false, cfg: this.farmCfg, startedAt: 0, gen: 0, tried: 0, rate: 0, population: 0, funnel: { bred: 0, trained: 0, holdout: 0, steady: 0, costs: 0, random: 0, nudge: 0, shuffle: 0, proof: 0 }, ladder: { new: 0, incubating: 0, proving: 0, proven: 0, faded: 0 }, top: [], watch: [], survivors: 0, recent: [], fleet: [], dataTo: 0, dataAt: 0, note: '', error: '' };
-    return { ...base, running: !!this.farmW, starting: this.farmStarting ?? false, wanted: this.farmWanted, cfg: this.farmCfg, note: this.farmNote || base.note, error: this.farmErr || base.error };
+    return { ...base, running: !!this.farmW, starting: this.farmStarting ?? false, wanted: this.farmWanted, cfg: this.farmCfg, note: this.farmNote || base.note, error: this.farmErr || (this.farmW ? '' : base.error), data: this.farmData ?? null };
   }
 
   farmPush() {
@@ -98,7 +106,14 @@ export class LabService {
     this.write('farm.json', { wanted: this.farmWanted, cfg: this.farmCfg, save: this.farmSaved, state: this.farmSnap });
   }
 
-  /** the candles the edge finder breeds on: for each pace's timeframe, the longest history any of its paces wants */
+  /**
+   * The candles the edge finder breeds on: for each pace's timeframe, the
+   * longest history any of its paces wants. Every exchange is tried (the
+   * Lab's chosen one first); a coin whose download fails keeps the candles it
+   * had (from disk, or from the last load) — a coin is never dropped from a
+   * running farm because of an outage. Returns the markets and what went
+   * wrong: `stale` (old candles in use) and `missing` (no candles at all).
+   */
   async farmMarkets(cfg) {
     const years = {};
     for (const id of cfg.styles) {
@@ -106,30 +121,81 @@ export class LabService {
       if (st) years[st.timeframe] = Math.max(years[st.timeframe] ?? 0, st.years);
     }
     const out = {};
+    const stale = [];
+    const missing = [];
+    let error = '';
     for (const [tf, yrs] of Object.entries(years)) {
       const ms = [];
       for (const coin of cfg.coins) {
         this.farmNote = `Loading ${coin} ${tf} history…`;
         this.farmPush();
+        const last = this.farmLast?.[tf]?.find((m) => m.coin === coin);
         try {
-          const { bars } = await this.candles(coin, tf, yrs, this.cfg.source);
+          const got = await this.candles(coin, tf, yrs, this.cfg.source, { any: true });
+          if (got.stale) {
+            stale.push(`${coin} ${tf}`);
+            error ||= got.error;
+          }
+          // candles already in the farm that are fresher than what could be had now are kept
+          if (last && last.bars[last.bars.length - 1].time >= got.bars[got.bars.length - 1].time) {
+            ms.push(last);
+            continue;
+          }
           let funding = null;
           if (this.cfg.funding && tf !== '1d') {
             try {
-              funding = alignFunding(bars, await this.funding(coin, bars[0].time), TF_H[tf]);
+              funding = alignFunding(got.bars, await this.funding(coin, got.bars[0].time), TF_H[tf]);
             } catch {
               /* the funding rules sit this one out */
             }
           }
-          ms.push({ coin, tfH: TF_H[tf], bars, funding });
+          ms.push({ coin, tfH: TF_H[tf], bars: got.bars, funding });
         } catch (err) {
-          this.farmErr = String(err?.message ?? err).slice(0, 200);
+          error ||= String(err?.message ?? err);
+          if (last) {
+            ms.push(last);
+            stale.push(`${coin} ${tf}`);
+          } else missing.push(`${coin} ${tf}`);
         }
       }
       if (ms.length) out[tf] = ms;
     }
     this.farmNote = '';
-    return out;
+    this.farmLast = out;
+    return { markets: out, stale, missing, error: error.slice(0, 300) };
+  }
+
+  /** how the edge finder's data is doing, for the screen */
+  farmHealth(r) {
+    const prev = this.farmData ?? { tries: 0, lastOkAt: 0 };
+    const ok = !r.stale.length && !r.missing.length;
+    this.farmData = {
+      ok,
+      stale: r.stale,
+      missing: r.missing,
+      error: ok ? '' : r.error,
+      // how many loads in a row have had a problem
+      tries: ok ? 0 : prev.tries + 1,
+      lastOkAt: ok ? this.now() : prev.lastOkAt,
+      checkedAt: this.now(),
+      nextTryAt: 0,
+    };
+    // the banner is for what stops the farm; a problem it is working around is shown with the data
+    if (ok || Object.keys(r.markets).length) this.farmErr = '';
+    return this.farmData;
+  }
+
+  /** when the candles are loaded next: on the usual clock, or sooner and sooner-spaced while something is wrong (1, 2, 5, 10, then every 15 minutes — for as long as it takes) */
+  farmSchedule() {
+    clearTimeout(this.farmTimer);
+    if (!this.farmW && !this.farmHealing) return;
+    const fast = this.farmCfg.styles.some((s) => STYLE_MAP[s]?.tfH < 1);
+    const usual = fast ? 15 * 60_000 : 30 * 60_000;
+    const d = this.farmData;
+    const ms = d && !d.ok ? Math.min(usual, [60_000, 120_000, 300_000, 600_000][d.tries - 1] ?? 900_000) : usual;
+    if (d) d.nextTryAt = this.now() + ms;
+    this.farmTimer = setTimeout(() => void this.farmRefresh(), ms);
+    this.farmTimer.unref?.();
   }
 
   fleetOf() {
@@ -151,12 +217,19 @@ export class LabService {
     this.farmPersist();
     this.farmPush();
     try {
-      const markets = await this.farmMarkets(next);
-      if (!Object.keys(markets).length) throw new Error(this.farmErr || 'no history for these coins');
+      this.farmLast = null;
+      const r = await this.farmMarkets(next);
+      this.farmHealth(r);
+      if (!Object.keys(r.markets).length) throw new Error(r.error || 'no history for these coins');
       if (!this.makeFarmWorker) throw new Error('the edge finder needs the desktop app');
       const w = this.makeFarmWorker();
       this.farmW = w;
+      this.farmSeenAt = this.now();
       w.on('message', (m) => {
+        if (this.farmW !== w) return;
+        this.farmSeenAt = this.now();
+        // it has run for ten minutes: whatever stopped it before is behind it
+        if (this.farmRestarts && this.now() - this.farmBegan > 600_000) this.farmRestarts = 0;
         if (m.type === 'state' || m.type === 'save') {
           this.farmSnap = m.state;
           if (m.type === 'save') this.farmPersist(m.save);
@@ -168,19 +241,22 @@ export class LabService {
           this.farmPush();
         }
       });
-      w.on('error', (err) => {
-        this.farmErr = String(err?.message ?? err);
+      // the thread died (out of memory, a crash): it is started again by itself, from what was last saved
+      const died = (why) => {
+        if (this.farmW !== w || this.farmStopping) return;
         this.farmW = null;
-        this.farmPush();
-      });
-      w.postMessage({ type: 'start', cfg: next, save: this.farmSaved, markets: plainMarkets(markets), deployed: this.fleetOf() });
+        clearTimeout(this.farmTimer);
+        this.farmRevive(why);
+      };
+      w.on('error', (err) => died(String(err?.message ?? err)));
+      w.on('exit', (code) => died(`its thread stopped (code ${code})`));
+      w.postMessage({ type: 'start', cfg: next, save: this.farmSaved, markets: plainMarkets(r.markets), deployed: this.fleetOf() });
+      this.farmBegan = this.now();
       // fresher candles every so often: the survivors' and the fleet's forward tests move on
-      const every = next.styles.some((s) => STYLE_MAP[s]?.tfH < 1) ? 30 * 60_000 : 2 * 3_600_000;
-      clearInterval(this.farmTimer);
-      this.farmTimer = setInterval(() => void this.farmRefresh(), every);
-      this.farmTimer.unref?.();
+      this.farmSchedule();
+      this.farmWatch();
     } catch (err) {
-      this.farmErr = String(err?.message ?? err).slice(0, 200);
+      this.farmErr = String(err?.message ?? err).slice(0, 300);
       throw err;
     } finally {
       this.farmStarting = false;
@@ -189,18 +265,74 @@ export class LabService {
     return this.farmState();
   }
 
+  /** fresher candles for the running farm; whatever goes wrong, the next try is already scheduled */
   async farmRefresh() {
-    if (!this.farmW) return;
-    const markets = await this.farmMarkets(this.farmCfg);
-    if (this.farmW && Object.keys(markets).length) this.farmW.postMessage({ type: 'markets', markets: plainMarkets(markets) });
+    if (!this.farmW || this.farmRefreshing) return;
+    this.farmRefreshing = true;
+    try {
+      const before = this.farmNewest();
+      const r = await this.farmMarkets(this.farmCfg);
+      const was = this.farmData && !this.farmData.ok;
+      const d = this.farmHealth(r);
+      if (this.farmW && Object.keys(r.markets).length && (this.farmNewest() > before || (was && d.ok))) this.farmW.postMessage({ type: 'markets', markets: plainMarkets(r.markets) });
+    } catch (err) {
+      this.farmHealth({ markets: {}, stale: ['every market'], missing: [], error: String(err?.message ?? err).slice(0, 300) });
+    } finally {
+      this.farmRefreshing = false;
+      this.farmSchedule();
+      this.farmPush();
+    }
+  }
+
+  /** the newest candle the farm holds */
+  farmNewest() {
+    let t = 0;
+    for (const ms of Object.values(this.farmLast ?? {})) for (const m of ms) t = Math.max(t, m.bars[m.bars.length - 1]?.time ?? 0);
+    return t;
+  }
+
+  /** the farm's thread died or went silent: start it again from what was last saved — 15 seconds, a minute, then every five minutes, for as long as it takes */
+  farmRevive(why) {
+    if (!this.farmWanted) return;
+    this.farmRestarts = (this.farmRestarts ?? 0) + 1;
+    const ms = this.reviveDelays[Math.min(this.farmRestarts, this.reviveDelays.length) - 1];
+    this.farmErr = `The edge finder stopped unexpectedly (${String(why).slice(0, 120)}). It restarts by itself in ${ms < 60_000 ? `${ms / 1000} seconds` : `${ms / 60_000} minute${ms === 60_000 ? '' : 's'}`} — everything it found is kept.`;
+    this.farmPush();
+    this.farmHealing = true;
+    clearTimeout(this.farmReviveTimer);
+    this.farmReviveTimer = setTimeout(() => {
+      this.farmHealing = false;
+      if (!this.farmWanted || this.farmW || this.farmStarting) return;
+      this.farmStart().catch((err) => this.farmRevive(String(err?.message ?? err)));
+    }, ms);
+    this.farmReviveTimer.unref?.();
+  }
+
+  /** a watchdog: a farm that has said nothing for five minutes is stuck — it is stopped and started again */
+  farmWatch() {
+    clearInterval(this.farmDog);
+    this.farmDog = setInterval(() => {
+      const w = this.farmW;
+      if (!w || this.farmStarting || this.now() - (this.farmSeenAt ?? this.now()) < this.farmSilence) return;
+      this.farmW = null;
+      clearTimeout(this.farmTimer);
+      void Promise.resolve(w.terminate?.()).catch(() => {});
+      this.farmRevive(`it had not answered for ${Math.round(this.farmSilence / 60_000)} minutes`);
+    }, this.dogEvery);
+    this.farmDog.unref?.();
   }
 
   /** stop the edge finder; its survivors and counters are kept for next time (wanted = false: it stays stopped when the terminal opens) */
   async farmStop(user = true) {
     if (user) this.farmWanted = false;
-    clearInterval(this.farmTimer);
+    clearTimeout(this.farmTimer);
+    clearTimeout(this.farmReviveTimer);
+    clearInterval(this.farmDog);
     this.farmTimer = null;
+    this.farmHealing = false;
     const w = this.farmW;
+    // (its end now is not a crash to recover from)
+    this.farmStopping = true;
     if (w) {
       await new Promise((resolve) => {
         const t = setTimeout(resolve, 15_000);
@@ -214,6 +346,7 @@ export class LabService {
       void w.terminate();
       this.farmW = null;
     }
+    this.farmStopping = false;
     this.farmPersist();
     this.farmPush();
     return this.farmState();
@@ -223,9 +356,10 @@ export class LabService {
   farmAuto(delayMs = 90_000) {
     if (!this.farmWanted || !this.makeFarmWorker) return;
     const t = setTimeout(() => {
-      if (this.farmWanted && !this.farmW) this.farmStart().catch(() => {
-        // no history yet (no connection): try again in ten minutes
-        const again = setTimeout(() => this.farmAuto(0), 10 * 60_000);
+      if (this.farmWanted && !this.farmW && !this.farmStarting) this.farmStart().catch(() => {
+        // no history yet (no connection): try again — after a minute, two, five, then every ten
+        this.farmAutoTries = (this.farmAutoTries ?? 0) + 1;
+        const again = setTimeout(() => this.farmAuto(0), [60_000, 120_000, 300_000][this.farmAutoTries - 1] ?? 600_000);
         again.unref?.();
       });
     }, delayMs);
@@ -238,9 +372,12 @@ export class LabService {
   }
 
   shutdownFarm() {
-    clearInterval(this.farmTimer);
-    if (this.farmW) void this.farmW.terminate();
+    clearTimeout(this.farmTimer);
+    clearTimeout(this.farmReviveTimer);
+    clearInterval(this.farmDog);
+    const w = this.farmW;
     this.farmW = null;
+    if (w) void w.terminate();
   }
 
   read(name, fallback) {
@@ -294,20 +431,28 @@ export class LabService {
     this.push();
   }
 
-  /** candles for one coin: from the cache, topped up from the exchange */
-  async candles(coin, tf, years0, source) {
+  /**
+   * Candles for one coin: from the cache, topped up from the exchange. When no
+   * exchange answers (no connection, an outage, a rate limit), the candles
+   * already on disk are returned with `stale: true` — old data is better than
+   * none, and the caller can try again later. `o.any`: try every exchange,
+   * the chosen one first.
+   */
+  async candles(coin, tf, years0, source, o = {}) {
     const tfH = TF_H[tf];
     const years = Math.min(years0, MAX_YEARS[tf] ?? years0);
     const since = this.now() - years * 365 * 24 * HOUR;
     const need = Math.ceil((years * 365 * 24) / tfH);
     const tried = [];
-    for (const id of source === 'auto' ? SOURCES : [source]) {
+    let stale = null;
+    const order = source === 'auto' ? SOURCES : o.any ? [source, ...SOURCES.filter((x) => x !== source)] : [source];
+    for (const id of order) {
       const key = `cache/${id}-${coin}-${tf}.json`;
+      const cached = this.read(key, []);
+      const have = cached.filter((b) => b.time >= since);
       try {
-        const cached = this.read(key, []);
-        const have = cached.filter((b) => b.time >= since);
         const from = have.length && have[0].time <= since + 7 * 24 * HOUR ? have[have.length - 1].time + tfH * HOUR : since;
-        const fresh = from < this.now() - tfH * HOUR ? await this.ccxt.history(id, spotSymbol(id, coin), tf, from, need + 50) : [];
+        const fresh = from < this.now() - tfH * HOUR ? await this.fetchHistory(id, spotSymbol(id, coin), tf, from, need + 50) : [];
         const bars = [...(from === since ? [] : have), ...fresh.filter((b) => !have.length || b.time > have[have.length - 1].time)];
         // only closed candles
         const closed = bars.filter((b) => b.time + tfH * HOUR <= this.now());
@@ -318,9 +463,34 @@ export class LabService {
         return { bars: closed, source: id };
       } catch (err) {
         tried.push(`${id}: ${err?.message ?? err}`);
+        // what is on disk from this exchange: kept as a fallback (the freshest of them wins)
+        const closed = have.filter((b) => b.time + tfH * HOUR <= this.now());
+        if (closed.length >= 600 && (!stale || closed[closed.length - 1].time > stale.bars[stale.bars.length - 1].time)) stale = { bars: closed, source: id, stale: true };
       }
     }
+    if (stale && o.stale !== false) return { ...stale, error: tried.join('; ') };
     throw new Error(`no history for ${coin} — ${tried.join('; ')}`);
+  }
+
+  /** one download, with a time limit (a hung connection must not hang the Lab) and one quick second try */
+  async fetchHistory(id, symbol, tf, from, max) {
+    const once = () =>
+      new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error(`${id} did not answer in ${Math.round(this.fetchTimeout / 1000)} s`)), this.fetchTimeout);
+        t.unref?.();
+        this.ccxt.history(id, symbol, tf, from, max).then(
+          (v) => (clearTimeout(t), resolve(v)),
+          (e) => (clearTimeout(t), reject(e)),
+        );
+      });
+    try {
+      return await once();
+    } catch (err) {
+      // a coin the exchange does not list will not appear on a second try
+      if (/not listed|does not have|BadSymbol/i.test(String(err?.message ?? err))) throw err;
+      await new Promise((r) => setTimeout(r, this.retryPause));
+      return once();
+    }
   }
 
   async funding(coin, since) {
@@ -345,7 +515,8 @@ export class LabService {
     for (const coin of cfg.coins) {
       this.note(`Downloading ${coin} history (${cfg.years} years of ${cfg.timeframe} candles)…`);
       try {
-        const { bars, source } = await this.candles(coin, cfg.timeframe, cfg.years, cfg.source);
+        const { bars, source, stale } = await this.candles(coin, cfg.timeframe, cfg.years, cfg.source);
+        if (stale) notes.push(`${coin}: no exchange answered — tested on the candles already on this computer (to ${new Date(bars[bars.length - 1].time).toISOString().slice(0, 16).replace('T', ' ')} UTC)`);
         let funding = null;
         if (cfg.funding) {
           this.note(`Downloading ${coin} funding history…`);

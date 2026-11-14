@@ -114,6 +114,164 @@ describe('the edge finder service', () => {
   }, 120_000);
 });
 
+describe('the edge finder heals itself', () => {
+  const T0 = Date.UTC(2026, 10, 6, 12);
+  /** fixed markets that run on past the clock: what an exchange would return for candles from `since` up to now */
+  const exchange = (clock, state) => {
+    const all = { BTC: trendWalk(7000, T0 + 500 * HOUR, 3), ETH: trendWalk(7000, T0 + 500 * HOUR, 4) };
+    return {
+      history: vi.fn(async (id, sym, _tf, since) => {
+        if (state.down === true || state.down === id) throw new Error(`${id} GET https://api.${id}.com/api/v3/klines?interval=1h fetch failed`);
+        if (state.hang) return new Promise(() => {});
+        const rows = all[sym.split('/')[0]];
+        if (!rows) throw new Error(`${sym} is not listed on ${id}`);
+        return rows.filter((b) => b.time >= since && b.time <= clock());
+      }),
+      fundingHistory: vi.fn(async () => []),
+    };
+  };
+  const until = async (ok, ms = 4000) => {
+    const t0 = Date.now();
+    while (!ok() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 5));
+    return ok();
+  };
+
+  it('when no exchange answers, the candles already on disk are used; another exchange is tried; a hung download is cut off', async () => {
+    let now = T0;
+    const state = { down: false, hang: false };
+    const ccxt = exchange(() => now, state);
+    const lab = new LabService({ ccxt, dir: mkdtempSync(join(tmpdir(), 'lab-')), emit: () => {}, makeWorker: inlineWorker, now: () => now, retryPause: 1 });
+    const a = await lab.candles('BTC', '1h', 0.2, 'auto');
+    expect(a).toMatchObject({ source: 'binance' });
+    expect(a.stale).toBeUndefined();
+    // every exchange down: the candles on disk, marked stale, with what went wrong
+    state.down = true;
+    now += 5 * HOUR;
+    const calls = ccxt.history.mock.calls.length;
+    const b = await lab.candles('BTC', '1h', 0.2, 'auto');
+    expect(b.stale).toBe(true);
+    expect(b.source).toBe('binance');
+    expect(b.bars[b.bars.length - 1].time).toBe(a.bars[a.bars.length - 1].time);
+    expect(b.error).toMatch(/binance: binance GET/);
+    // each exchange got a quick second try
+    expect(ccxt.history.mock.calls.length - calls).toBe(8);
+    // nothing on disk and nothing to download: that is an error
+    await expect(lab.candles('ETH', '1h', 0.2, 'auto')).rejects.toThrow(/no history for ETH/);
+    // one exchange down: the next one answers, with fresh candles
+    state.down = 'binance';
+    const c = await lab.candles('BTC', '1h', 0.2, 'auto');
+    expect(c).toMatchObject({ source: 'okx' });
+    expect(c.stale).toBeUndefined();
+    expect(c.bars[c.bars.length - 1].time).toBeGreaterThan(a.bars[a.bars.length - 1].time);
+    // the Lab's chosen exchange alone when asked for it; every exchange, that one first, for the edge finder
+    await expect(lab.candles('ETH', '1h', 0.2, 'binance')).rejects.toThrow(/no history/);
+    expect(await lab.candles('ETH', '1h', 0.2, 'binance', { any: true })).toMatchObject({ source: 'okx' });
+    // a download that never answers is cut off, and the disk is used
+    state.down = false;
+    state.hang = true;
+    lab.fetchTimeout = 15;
+    now += 3 * HOUR;
+    const d = await lab.candles('BTC', '1h', 0.2, 'auto');
+    expect(d.stale).toBe(true);
+    expect(d.error).toMatch(/did not answer/);
+    // a coin no exchange lists is not retried
+    state.hang = false;
+    const before = ccxt.history.mock.calls.length;
+    await expect(lab.candles('NOPE', '1h', 0.2, 'auto')).rejects.toThrow(/not listed/);
+    expect(ccxt.history.mock.calls.length - before).toBe(4);
+  });
+
+  it('an outage does not stop it or drop a coin: it keeps its candles, tries again sooner and sooner-spaced, and heals when the exchange is back', async () => {
+    let now = T0;
+    const state = { down: false };
+    const ccxt = exchange(() => now, state);
+    let worker;
+    const lab = new LabService({ ccxt, dir: mkdtempSync(join(tmpdir(), 'lab-')), emit: () => {}, makeWorker: inlineWorker, makeFarmWorker: () => (worker = inlineFarmWorker()), now: () => now, retryPause: 1 });
+    const st = await lab.farmStart({ coins: ['BTC', 'ETH'], styles: ['intraday'] });
+    expect(st.data).toMatchObject({ ok: true, stale: [], missing: [], tries: 0 });
+    expect(st.data.nextTryAt).toBe(now + 30 * 60_000);
+    await until(() => worker.runner.farm?.dataTo > 0);
+    const to0 = worker.runner.farm.dataTo;
+    // the exchanges go down for hours
+    state.down = true;
+    now += 3 * HOUR;
+    await lab.farmRefresh();
+    let s1 = lab.farmState();
+    expect(s1.running).toBe(true);
+    expect(s1.error).toBe('');
+    expect(s1.data).toMatchObject({ ok: false, stale: ['BTC 1h', 'ETH 1h'], missing: [], tries: 1 });
+    expect(s1.data.error).toMatch(/fetch failed/);
+    expect(s1.data.nextTryAt).toBe(now + 60_000);
+    // both coins are still there, on the candles it had
+    expect(lab.farmLast['1h'].map((m) => m.coin)).toEqual(['BTC', 'ETH']);
+    expect(worker.runner.farm.dataTo).toBe(to0);
+    // it keeps trying: 1, 2, 5, 10 minutes, then every 15 — for as long as it takes
+    const waits = [];
+    for (let i = 0; i < 6; i++) {
+      now += 60_000;
+      await lab.farmRefresh();
+      waits.push((lab.farmState().data.nextTryAt - now) / 60_000);
+    }
+    expect(waits).toEqual([2, 5, 10, 15, 15, 15]);
+    expect(lab.farmState().data.tries).toBe(7);
+    expect(lab.farmState().data.lastOkAt).toBe(T0);
+    // the exchange is back: fresh candles reach the farm, the problem is gone
+    state.down = false;
+    now += HOUR;
+    await lab.farmRefresh();
+    s1 = lab.farmState();
+    expect(s1.data).toMatchObject({ ok: true, stale: [], tries: 0, error: '' });
+    expect(s1.data.lastOkAt).toBe(now);
+    expect(await until(() => worker.runner.farm.dataTo > to0)).toBe(true);
+    expect(worker.runner.farm.dataTo).toBeGreaterThanOrEqual(to0 + 3 * HOUR);
+    // one coin fails for good while the farm runs: it stays in, on its old candles
+    state.down = false;
+    ccxt.history.mockImplementationOnce(async () => {
+      throw new Error('binance rate limit');
+    });
+    now += HOUR;
+    await lab.farmRefresh();
+    expect(lab.farmLast['1h'].map((m) => m.coin)).toEqual(['BTC', 'ETH']);
+    await lab.farmStop();
+    expect(lab.farmState().running).toBe(false);
+  }, 60_000);
+
+  it('if its thread dies or goes silent it is started again by itself, from what was saved — unless you stopped it', async () => {
+    let now = T0;
+    const ccxt = exchange(() => now, { down: false });
+    let worker;
+    const made = [];
+    const lab = new LabService({ ccxt, dir: mkdtempSync(join(tmpdir(), 'lab-')), emit: () => {}, makeWorker: inlineWorker, makeFarmWorker: () => (made.push((worker = inlineFarmWorker())), worker), now: () => now, retryPause: 1, reviveDelays: [5, 5], farmSilence: 60_000, dogEvery: 5 });
+    await lab.farmStart({ coins: ['BTC', 'ETH'], styles: ['intraday'] });
+    await until(() => worker.runner.farm?.tried > 3);
+    const first = worker;
+    const stopLoop = (w) => w.runner.onMessage({ type: 'stop' });
+    // the thread crashes
+    first.emit('error', new Error('out of memory'));
+    await stopLoop(first);
+    expect(lab.farmState().running).toBe(false);
+    expect(lab.farmState().error).toMatch(/restarts by itself in/);
+    expect(await until(() => made.length === 2 && lab.farmState().running)).toBe(true);
+    expect(lab.farmState().error).toBe('');
+    // the thread hangs: nothing heard for longer than allowed
+    const second = worker;
+    await until(() => second.runner.farm?.tried > 0);
+    second.emit = () => false;
+    now += 2 * 60_000;
+    expect(await until(() => made.length === 3 && lab.farmState().running)).toBe(true);
+    await stopLoop(second);
+    // stopped by hand while a restart is pending: it stays stopped
+    const third = worker;
+    third.emit('exit', 1);
+    await stopLoop(third);
+    expect(lab.farmState().error).toMatch(/stopped unexpectedly/);
+    await lab.farmStop();
+    await new Promise((r) => setTimeout(r, 60));
+    expect(made.length).toBe(3);
+    expect(lab.farmState()).toMatchObject({ running: false, wanted: false });
+  }, 60_000);
+});
+
 describe('the optimizer and 15-minute history', () => {
   it('scores versions of a strategy in the worker and leaves no progress behind', async () => {
     const now = Date.UTC(2026, 10, 6, 12);
