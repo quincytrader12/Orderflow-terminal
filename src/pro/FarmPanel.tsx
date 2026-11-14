@@ -1243,15 +1243,19 @@ function Settings({
         <button
           className="btn bb2-primary"
           disabled={busy || !styles.length}
-          onClick={() =>
+          onClick={() => {
             onApply({
               coins: coins.split(/[\s,]+/).filter(Boolean),
               styles,
               sides,
               pace,
               maxDD,
-            })
-          }
+            });
+            // the settings box closes: the results are right under it
+            document.body.dispatchEvent(
+              new MouseEvent("mousedown", { bubbles: true }),
+            );
+          }}
         >
           Apply and run
         </button>
