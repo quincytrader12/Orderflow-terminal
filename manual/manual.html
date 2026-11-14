@@ -387,6 +387,7 @@
     <tr><td>Breeds from its survivors</td><td>Each generation, a few new bots are refinements of survivors, or two survivors merged into one.</td></tr>
     <tr><td>Measures its own overfitting</td><td>The <b>overfit meter</b> asks: does the bot that trained best stay ahead on other data? Low is good. Near 50 % or more means the search is fitting noise — there may be no edge to find in those coins and paces.</td></tr>
   </table>
+  <div style="break-inside: avoid">
   <h3>Reading the top fives</h3>
   <table>
     <tr><th style="width:26%">Evidence</th><th>What it means</th></tr>
@@ -395,6 +396,7 @@
     <tr><td><b>Significant</b></td><td>Its result on the unseen data is strong enough to stand after every kind of bot tried (fluke odds under 10 %).</td></tr>
     <tr><td><b>Candidate</b></td><td>It passed every check, but has too few trades on fresh data to judge and is not yet significant. Worth watching, not yet worth trusting.</td></tr>
   </table>
+  </div>
   <p>The lists are worked out every 20 seconds, not at every bot, and a listed strategy keeps its place unless a newcomer is clearly better — so the screen holds still while thousands of bots are tested behind it. The strategy you are looking at stays on show until you click another.</p>
   <h3>It looks after itself</h3>
   <p>The edge finder is built to run unattended for days.</p>
@@ -405,7 +407,7 @@
   </ul>
   <h3>The team: strategies that fit together</h3>
   <p>Strategies that make money at different times smooth each other out: together they earn more for the same risk than the best of them alone. The edge finder picks <b>the team</b> — up to five survivors, never two of the same kind, never two that move as one — and sets each member's share so all carry the same risk. It shows the team's Sharpe ratio, worst drop and a year's return beside the best member alone.</p>
-  <figure><img src="img/farm-team.jpg" /><figcaption>The team (here on test data): three survivors of different kinds, their shares of the risk, and the combined result against the best member alone. Below it, the blocks the search has found to be working.</figcaption></figure>
+  <figure><img src="img/farm-team.jpg" /><figcaption>The team (here on test data): three survivors of different kinds and paces, their shares of the risk, and the combined result against the best member alone.</figcaption></figure>
   <p><b>⇢ Deploy the team</b> deploys every member to the crypto swarm after you confirm. The team is picked on the same stretch of data its numbers are read on, so they flatter it a little — fresh data is the judge.</p>
   <h3>Using it</h3>
   <ul>
