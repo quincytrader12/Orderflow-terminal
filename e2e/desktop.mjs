@@ -350,6 +350,10 @@ try {
     await page.locator('[data-farm] [data-blocks]').scrollIntoViewIfNeeded();
     await page.waitForTimeout(300);
     await page.screenshot({ path: `${OUT}desktop-farm-blocks.png` });
+    // the whole screen from the top, now that the boards have filled
+    await page.evaluate(() => document.querySelector('[data-farm] .pro-scroll')?.scrollTo(0, 0));
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: `${OUT}desktop-farm-boards.png` });
     await page.locator('[data-farm] .farm-funnel').scrollIntoViewIfNeeded();
     expect(tm.members.length >= 2 && Math.abs(wsum - 1) < 1e-6 && new Set(tm.members.map((m) => m.name)).size === tm.members.length, `the team: ${tm.members.length} survivors of different kinds, shares of risk summing to 100 %, Sharpe ${tm.sharpe.toFixed(2)} together against ${tm.solo.sharpe.toFixed(2)} for the best alone`);
   } else expect(true, 'the team: not formed in this short run (it needs two unlike survivors) — covered by the unit tests');
