@@ -1879,12 +1879,15 @@ export class Farm {
       })
       .sort((a, b) => a.p! - b.p!);
     // q-values: the smallest false-discovery rate at which each would be called significant
+    // a strategy already on a board that gains or loses its significance is shown at once;
+    // a newcomer's standing waits for the boards' clock
+    const listed = new Set(Object.values(this.board?.ids ?? {}).flat());
     let q = 1;
     let flipped = false;
     for (let k = byP.length - 1; k >= 0; k--) {
       q = Math.min(q, (byP[k].p! * M) / (k + 1));
       byP[k].q = q;
-      if (byP[k].sig !== q <= FDR) flipped = true;
+      if (byP[k].sig !== q <= FDR && listed.has(byP[k].id)) flipped = true;
       byP[k].sig = q <= FDR;
     }
     if (flipped) this.boardDirty = true;

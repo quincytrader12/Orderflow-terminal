@@ -657,11 +657,19 @@ describe('one survivor of a kind, and steady lists', () => {
     // after the clock comes round it is still not enough: 1.65 against 1.6 is within the listed one's margin
     now += 20_000;
     expect(ids()).toEqual(['s0', 's1', 's2', 's3', 's4']);
-    // one that is clearly better does take a place, at the next round
-    farm.survivors.push(fake('n2', 2.6, ['vsmom']));
+    // a newcomer found significant by the ranking does not jump the queue either: it waits for the clock
+    farm.survivors.push(fake('n0', 1.7, ['squeeze'], { oos: { sharpe: 2, trades: 40, t: 6, maxDD: 0.05 } as Survivor['oos'] }));
+    farm.rank();
+    expect(farm.survivors.find((x) => x.id === 'n0')!.sig).toBe(true);
     expect(ids()).toEqual(['s0', 's1', 's2', 's3', 's4']);
     now += 20_000;
-    expect(ids()).toEqual(['n2', 's0', 's1', 's2', 's3']);
+    // (significant goes ahead of not, whatever the score)
+    expect(ids()).toEqual(['n0', 's0', 's1', 's2', 's3']);
+    // one that is clearly better on the score does take a place, at the next round
+    farm.survivors.push(fake('n2', 2.6, ['vsmom']));
+    expect(ids()).toEqual(['n0', 's0', 's1', 's2', 's3']);
+    now += 20_000;
+    expect(ids()).toEqual(['n0', 'n2', 's0', 's1', 's2']);
     // one further up the ladder goes first, whatever its score — and fresh candles are shown at once
     farm.survivors.push(fake('p', 0.5, ['kalman'], { stage: 'proven' }));
     farm.setMarkets({});
