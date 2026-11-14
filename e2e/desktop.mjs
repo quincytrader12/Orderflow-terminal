@@ -323,9 +323,17 @@ try {
     seen.push(await page.evaluate(() => [...document.querySelectorAll('[data-farm] [data-survivor]')].map((r) => r.getAttribute('data-survivor')).join()));
     await page.waitForTimeout(500);
   }
-  const changes = seen.filter((x, i) => i && x !== seen[i - 1]).length;
+  // a reshuffle: a listed strategy drops out, or two that stay swap places (a new one joining a list that is still filling is not one)
+  const reshuffled = (a, b) => {
+    const A = a.split(',').filter(Boolean);
+    const B = b.split(',').filter(Boolean);
+    if (A.some((id) => !B.includes(id))) return true;
+    return B.filter((id) => A.includes(id)).join() !== A.join();
+  };
+  const changes = seen.filter((x, i) => i && reshuffled(seen[i - 1], x)).length;
+  const grew = seen.filter((x, i) => i && x !== seen[i - 1]).length - changes;
   const triedNow = (await page.evaluate(() => window.novus.lab.farm.state())).tried;
-  expect(changes <= 2 && triedNow > farm0.tried, `steady lists: ${changes} change${changes === 1 ? '' : 's'} in eight seconds while ${triedNow - farm0.tried} more bots were tried`);
+  expect(changes <= 1 && triedNow > farm0.tried, `steady lists: ${changes} reshuffle${changes === 1 ? '' : 's'} in eight seconds (${grew} new arrival${grew === 1 ? '' : 's'} to lists still filling) while ${triedNow - farm0.tried} more bots were tried`);
   expect((await page.locator('[data-farm] [data-detail] .pro-section').first().innerText()).replace(/^[A-Z ]+#\d+ — |^NO LONGER LISTED — /, '') === shownBefore.replace(/^[A-Z ]+#\d+ — |^NO LONGER LISTED — /, ''), 'the strategy on show stays on show until another is clicked');
   // the search itself: the overfit meter, the kinds of bot kept, what is working
   await page.waitForFunction(() => document.querySelectorAll('[data-farm] [data-blocks] tbody tr').length > 0, null, { timeout: 120_000 });
