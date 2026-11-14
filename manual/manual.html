@@ -71,7 +71,7 @@
 <!-- ============ copyright / about ============ -->
 <section>
   <div style="padding-top:36px">
-    <div class="ch-num">Novus Ordo · Operator's Manual · Edition 1.5</div>
+    <div class="ch-num">Novus Ordo · Operator's Manual · Edition 1.6</div>
     <h1 style="font-size:22pt">About this manual</h1>
     <p>This manual explains how to use every part of Novus Ordo, the professional crypto trading terminal: the market terminal, the Quant desk, the Strategy Lab and its bot builder, the crypto swarm, and the wallet and exchange connections that link it to your accounts. It is written in plain English. Where a technical term is unavoidable, it is explained where it first appears and again in the glossary at the back.</p>
     <p>Each chapter starts with what a part of the terminal is for, then shows how to use it step by step. Function codes — short names you type on the command line, such as <code>VAR</code> or <code>BOT</code> — appear in a box like this so you can find them on screen.</p>
@@ -362,19 +362,20 @@
 <section class="chapter" data-ch="5">
   <div class="ch-head"><div class="ch-num">Chapter 5</div><h1>The Strategy Lab</h1><p class="ch-lead">Strategy Lab (F2): build a strategy, test it honestly on years of data, and deploy it to the crypto swarm.</p></div>
   <h2 data-toc>The edge finder: strategies found for you</h2>
-  <p>The edge finder (<code>FARM</code>) is a strategy farm that runs by itself for as long as the terminal is open. You do not need to build and test bots one at a time: it builds them from the bot builder's blocks — every strategy and filter, and the Quant desk's models — tests them, and lists the best five that survive. It treats every bot as curve-fitted until the bot proves it is not.</p>
+  <p>The edge finder (<code>FARM</code>) is a strategy farm that runs by itself for as long as the terminal is open — for days, if you leave it. You do not need to build and test bots one at a time: it builds them from the bot builder's blocks — every strategy and filter, and the Quant desk's models — tests them, and keeps a <b>top five for each pace</b>: scalping, intraday and swing. It treats every bot as curve-fitted until the bot proves it is not.</p>
   <ol class="steps">
-    <li><b>Breed.</b> Bots are built from the blocks — one to three strategies, joined in any of five ways — and scored on the first 70 % of the history. The best are crossed, <i>merged</i> (the strategies of two bots joined into one) and varied into the next generation, and new random bots keep arriving.</li>
-    <li><b>The unseen 30 %.</b> A bot that did well in training is tested on the last 30 % of the history, which it never saw. It must make money there, and do at least half as well as in training.</li>
+    <li><b>Breed.</b> Bots are built from the blocks — one to three strategies, joined in any of five ways — and scored on the first part of the history. Each pace has its own population, bred side by side. The best are crossed, <i>merged</i> (the strategies of two bots joined into one) and varied into the next generation, and new random bots keep arriving.</li>
+    <li><b>The unseen 30 %.</b> A bot that did well in training is tested on a later stretch of the history, which it never saw. It must make money there, and do at least half as well as in training.</li>
     <li><b>Steady.</b> Not one lucky stretch, coin or trade: it must be in profit in at least two of the three thirds of the unseen stretch, on at least half of its coins, and still in profit with its best 5 % of trades taken away.</li>
     <li><b>Double costs.</b> It is tested again with twice the fees and slippage. An edge that only exists at perfect prices is not an edge.</li>
     <li><b>100 random bots.</b> It must beat at least 75 of 100 bots that make the same number of trades at random.</li>
     <li><b>Its settings nudged.</b> Every setting is moved one step each way. If fewer than half of those versions still make money, its result was luck in its exact settings, and it is thrown out.</li>
     <li><b>1,000 shuffles.</b> Its trades are put in 1,000 random orders. If the unlucky orders cause too deep a drawdown, it is thrown out.</li>
-    <li><b>Significant after every bot tried.</b> The more bots are tried, the better the luckiest of them looks. So the bar for "significant" rises with every bot that reaches the unseen data: of the bots called significant, at most about 1 in 10 should be flukes. Each survivor shows its <b>fluke odds</b>. Those that miss the bar go on a <b>watch list</b>.</li>
-    <li><b>Fresh data.</b> Survivors keep being tested on new candles that arrive after they were found, and climb a ladder: new → incubating → proving → proven. Those that fade are dropped.</li>
+    <li><b>The vault.</b> The most recent 15 % of the history is locked away: no bot is bred or checked on it. A bot that passes everything above is tested on it once. If it loses there, it is out — and so is its kind. This is why a survivor has a result on fresh data the moment it is found, instead of weeks later.</li>
+    <li><b>Significant after every kind tried.</b> The more ideas are tried, the better the luckiest of them looks. So the bar for "significant" rises with every kind of bot that reaches the unseen data: of those called significant, at most about 1 in 10 should be flukes. Each survivor shows its <b>fluke odds</b>. Those that miss the bar are <b>candidates</b>: still listed, and still tested on fresh data.</li>
+    <li><b>Fresh data.</b> A survivor's record starts with the vault and carries on into the new candles that arrive, and it climbs a ladder: incubating (fewer than 5 trades) → proving (5 to 14, in profit) → proven (15 or more, in profit). One that loses fades and is dropped.</li>
   </ol>
-  <figure><img src="img/farm.jpg" /><figcaption>The edge finder running (here on test data): how many bots got through each of the nine checks, where the survivors stand on fresh data, and the search's own overfit meter. The top five are listed below this, with their returns and checks.</figcaption></figure>
+  <figure><img src="img/farm.jpg" /><figcaption>The edge finder running (here on test data). The strip at the top shows the engine, the health of its data, what is standing and how the search is going; below it, a top five for each pace, with the evidence for each strategy.</figcaption></figure>
   <h3>How the search works</h3>
   <table>
     <tr><th style="width:26%">What it does</th><th>Why it matters</th></tr>
@@ -382,9 +383,26 @@
     <tr><td>Scores AI rules honestly</td><td>A bot with a neural network, forest or other learned part is scored on training candles its model never saw, so a model that memorised its lessons no longer looks like an edge.</td></tr>
     <tr><td>Keeps the best of every kind</td><td>The best bot of each kind — pace, type of strategy, long and short or long only — is kept. The search cannot collapse onto one idea, and when it gets stuck it restarts from these champions.</td></tr>
     <tr><td>Learns which blocks work</td><td>It keeps count for every block — tried, faced the gauntlet, survived — and draws the ones that keep producing more often. <b>What is working</b> on the screen lists them.</td></tr>
+    <tr><td>Keeps one survivor of a kind</td><td>Variations of one idea — another stop, another look-back — are one idea. The first of a kind to survive holds its place; copies are not tested again. The work goes into new ideas, the lists stop filling with near-copies, and significance counts ideas, not copies.</td></tr>
     <tr><td>Breeds from its survivors</td><td>Each generation, a few new bots are refinements of survivors, or two survivors merged into one.</td></tr>
     <tr><td>Measures its own overfitting</td><td>The <b>overfit meter</b> asks: does the bot that trained best stay ahead on other data? Low is good. Near 50 % or more means the search is fitting noise — there may be no edge to find in those coins and paces.</td></tr>
   </table>
+  <h3>Reading the top fives</h3>
+  <table>
+    <tr><th style="width:26%">Evidence</th><th>What it means</th></tr>
+    <tr><td><b>Proven on fresh data</b></td><td>15 or more trades in the vault and on the candles since, and in profit. The strongest evidence the edge finder gives.</td></tr>
+    <tr><td><b>Proving on fresh data</b></td><td>5 to 14 trades on fresh data, in profit so far.</td></tr>
+    <tr><td><b>Significant</b></td><td>Its result on the unseen data is strong enough to stand after every kind of bot tried (fluke odds under 10 %).</td></tr>
+    <tr><td><b>Candidate</b></td><td>It passed every check, but has too few trades on fresh data to judge and is not yet significant. Worth watching, not yet worth trusting.</td></tr>
+  </table>
+  <p>The lists are worked out every 20 seconds, not at every bot, and a listed strategy keeps its place unless a newcomer is clearly better — so the screen holds still while thousands of bots are tested behind it. The strategy you are looking at stays on show until you click another.</p>
+  <h3>It looks after itself</h3>
+  <p>The edge finder is built to run unattended for days.</p>
+  <ul>
+    <li><b>If an exchange cannot be reached</b>, it tries the others. If none answers, it carries on with the candles it already has — it never drops a coin — and tries again after 1, 2, 5 and 10 minutes, then every 15 minutes, for as long as it takes. The <b>DATA</b> tile turns amber and says what it is doing. When the exchange is back, the fresh candles arrive and the tile clears. You do not need to stop and start it.</li>
+    <li><b>If the engine itself stops or hangs</b>, it is started again by itself from what was last saved — after 15 seconds, then a minute, then every five minutes.</li>
+    <li><b>Candles are refreshed</b> every half hour (every quarter of an hour for 15-minute paces), so the fresh-data tests keep moving.</li>
+  </ul>
   <h3>The team: strategies that fit together</h3>
   <p>Strategies that make money at different times smooth each other out: together they earn more for the same risk than the best of them alone. The edge finder picks <b>the team</b> — up to five survivors, never two of the same kind, never two that move as one — and sets each member's share so all carry the same risk. It shows the team's Sharpe ratio, worst drop and a year's return beside the best member alone.</p>
   <figure><img src="img/farm-team.jpg" /><figcaption>The team (here on test data): three survivors of different kinds, their shares of the risk, and the combined result against the best member alone. Below it, the blocks the search has found to be working.</figcaption></figure>
@@ -392,7 +410,7 @@
   <h3>Using it</h3>
   <ul>
     <li>It starts by itself a minute and a half after the terminal opens, and carries on from where it was. Press <b>■ Stop</b> when you are satisfied; it keeps everything it found and stays stopped until you press <b>▶ Start</b>.</li>
-    <li><b>⚙ Settings</b>: the coins, the paces to breed (scalping, intraday, swing, one-week and the 15-minute styles), long and short or long only, the speed (<i>gentle</i> keeps the terminal smooth; <i>full</i> tries more bots an hour) and the drawdown limit for the shuffle test.</li>
+    <li><b>⚙ Settings</b>: the coins, the paces to breed (scalping, intraday and swing by default; one-week, position and the 15-minute styles can be added), long and short or long only, the speed (<i>gentle</i> uses about half of one processor core and keeps the terminal smooth; <i>full</i> tries more bots an hour) and the drawdown limit for the shuffle test.</li>
     <li>Click a top-five strategy to see its rules in words, its curve, and every check it passed, with the numbers. Then <b>Open in the bot builder</b> to see what it is built of, block by block, or <b>Deploy to the crypto swarm</b> — choosing <i>Council decides</i> or <i>Trade as tested</i>. Deploying is always your decision.</li>
     <li><b>The live fleet</b> shows every strategy you deployed, checked on the candles since: healthy, slipping or fading. When one fades, a top-five strategy at the same pace is offered as its replacement.</li>
   </ul>
@@ -814,7 +832,7 @@
     <p style="margin-top:40px;font-size:10pt;color:#5a6371;letter-spacing:0.2em;text-transform:uppercase">Conceived, designed and constructed by</p>
     <p style="font-family:'Inter Display','Inter',sans-serif;font-size:26pt;font-weight:700;margin:6px 0 4px">Quincy Gininda</p>
     <p style="max-width:420px;margin:24px auto 0;color:#4a5361">The market terminal, the Quant desk, the Strategy Lab and bot builder, the crypto swarm and its agents, and this manual are the work of Quincy Gininda.</p>
-    <p class="small" style="margin-top:60px">Operator's Manual · Edition 1.5 · November 2026<br />© 2026 Quincy Gininda. All rights reserved.</p>
+    <p class="small" style="margin-top:60px">Operator's Manual · Edition 1.6 · November 2026<br />© 2026 Quincy Gininda. All rights reserved.</p>
   </div>
 </section>
 

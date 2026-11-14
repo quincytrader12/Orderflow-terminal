@@ -23,6 +23,7 @@ Ornstein–Uhlenbeck rule, VaR and volatility sizing, the bitcoin hedge, the
 neural network and the other learned rules) — one to three strategies joined
 in any of five ways (all agree, majority, any one, the **regime switch**, or
 **setup, then trigger**). Each one is scored on the first 70 % of the history
+before the vault (the most recent 15 %, which is locked away — see below)
 only. The unseen data is never used to choose.
 
 - **The training score** is the Sharpe ratio on the training years, but half
@@ -51,7 +52,8 @@ only. The unseen data is never used to choose.
   survivors, or two survivors of the same pace merged into one.
 
 **The gauntlet.** A bot that trains well (a score of 0.7 or more, enough
-trades) then faces, in order:
+trades) and is not a copy of a kind already held or ruled out then faces, in
+order:
 
 1. **The unseen 30 %** — it must make money there, with a Sharpe of 0.5 or
    more and at least half its training Sharpe.
@@ -67,16 +69,33 @@ trades) then faces, in order:
    half of those versions must still make money on the unseen data.
 6. **1,000 shuffles** — its trades in 1,000 random orders at 1 % risk a trade:
    the unlucky 1-in-20 drawdown must stay within the limit (20 % by default).
-7. **Significant after every bot tried** — the more bots are tried, the better
-   the luckiest looks, so the bar rises with every bot that reaches the unseen
-   data. Survivors' one-sided p-values (Newey–West t on the unseen returns) go
-   through the Benjamini–Hochberg procedure against the number of gauntlet
-   entrants at a false-discovery rate of 10 %: of the bots called significant,
-   at most about 1 in 10 should be flukes. Each survivor shows its *fluke
-   odds* (the q-value). A survivor can lose its place as the search goes on;
-   those not significant are the **watch list** and must prove themselves on
-   fresh data. (The first version used t ≥ 2 whatever the number tried; saved
-   survivors are ranked again when the farm restarts.)
+7. **The vault** — the most recent 15 % of each timeframe's history is cut off
+   *before* anything is bred, trained or checked (one cut in time for every
+   coin), so no choice the farm makes can lean on it. A bot that passes the
+   six checks above is tested on it once. If it has 5 or more trades there and
+   lost money, or fell half as far again as it ever did on the unseen 30 %, it
+   is out. The vault moves forward as candles arrive. Because of it a survivor
+   has a fresh-data record the moment it is found, rather than weeks later.
+8. **Significant after every kind tried** — the more ideas are tried, the
+   better the luckiest looks, so the bar rises with every *kind* of bot (pace,
+   strategies, filters) that reaches the unseen data. Survivors' one-sided
+   p-values (Newey–West t on the unseen returns) go through the
+   Benjamini–Hochberg procedure against that count at a false-discovery rate
+   of 10 %: of those called significant, at most about 1 in 10 should be
+   flukes. Each survivor shows its *fluke odds* (the q-value). Those that miss
+   the bar are **candidates**: listed, and tested on fresh data all the same.
+
+**One survivor of a kind.** Variations of one idea — another stop, another
+look-back — are one idea. The first bot of a kind to survive holds the kind's
+place; a later bot of that kind that trains well is counted as a copy and is
+not put through the gauntlet again, and a kind that lost in the vault or faded
+on fresh data is ruled out for good (one look each). In a day-long run of the
+earlier version about 29,000 bots passed every check, nearly all of them
+copies of a few ideas: the copies took most of the work, replaced one another
+in the lists every second or two, and — each counted as a separate test —
+pushed the significance bar out of reach. Counting kinds fixes all three.
+(A save from before kinds were counted is taken to have tried as many kinds as
+it had gauntlet entrants, 2,000 at most; its copies are reduced to one a kind.)
 
 **The overfit meter.** The farm measures how overfit its own search is: the
 probability of backtest overfitting (Bailey, Borwein, López de Prado & Zhu
@@ -100,23 +119,45 @@ the unseen stretch every member has (45 at least). The team is chosen on the
 stretch its numbers are read on, so they flatter it; the forward test is the
 judge. **Deploy the team** deploys each member — after you confirm.
 
-**Fresh data.** Survivors are then tested on candles that arrive after they
-were found — data no test has seen at all (the history is refreshed every two
-hours, every half hour for 15-minute paces). They climb a ladder: **new**
-(nothing since), **incubating** (fewer than 5 trades), **proving** (5–14,
-still making money), **proven** (15 or more, still making money) — or
-**fade** (losing over 10 or more trades, or falling half as far again as they
-ever did in testing) and drop out.
+**Fresh data.** A survivor's fresh-data record starts with the vault and
+carries on into the candles that arrive after it was found (the history is
+refreshed every half hour, every quarter of an hour for 15-minute paces). The
+ladder: **new** (no candles yet), **incubating** (fewer than 5 trades),
+**proving** (5–14, in profit), **proven** (15 or more, in profit) — or
+**faded** (losing over 10 or more trades, or falling half as far again as it
+ever did in testing): dropped, and its kind ruled out.
 
-**The top five** are the best still standing — significant on the unseen
-data after every bot tried, or proven on fresh data — no two from the same family (pace, strategies
-and filters), proven ones first. Each shows its return a year, Sharpe, worst
-drop, months that made money, the random bots it beat, the nudges it kept, the
-shuffle drawdown, its fluke odds and its fresh-data result; open one for its rules in words,
-its curve and every check, then **Open in the bot builder** (every block shows
-what it is built of; test it there for the full read-out and the optimizer) or
-**Deploy to the crypto swarm**, choosing who decides its trades. Deploying is
-always yours to do.
+**A top five for each pace.** Scalping, intraday, swing and position are bred
+side by side, each in its own population of forty (they take turns, one bot at
+a time), and each has its own top five: proven on fresh data first, then
+proving, then the rest; significant ahead of not; then by score. Up to forty
+standing survivors are kept at each pace. Each row shows its evidence (proven,
+proving, significant or candidate), its return a year, Sharpe, worst drop and
+months up on the unseen 30 %, its fresh-data result, its fluke odds and its
+place on the ladder; open one for its rules in words, its curve and every
+check with its numbers, then **Open in the bot builder** or **Deploy to the
+crypto swarm**, choosing who decides its trades. Deploying is always yours to
+do.
+
+**Steady lists.** The boards are worked out every 20 seconds — at once when
+fresh candles arrive, a stage or a significance changes, or a pace has fewer
+than five to show — not at every bot, and a listed strategy keeps its place
+unless a newcomer is further up the ladder or 15 % better on the score. The
+team is worked out once a minute. The strategy on show stays on show until
+another is clicked.
+
+**It heals itself.** The farm is meant to run for days unattended.
+
+- *Data.* Every exchange is tried for each coin (the Lab's chosen one first),
+  each download with a 90-second limit and one quick second try. If none
+  answers, the candles on disk are used and the market is marked stale; a coin
+  is never dropped from a running farm. While anything is stale or missing it
+  tries again after 1, 2, 5 and 10 minutes and then every 15, for as long as
+  it takes, and the DATA tile says what it is doing; when the exchange is back
+  the fresh candles reach the farm and the tile clears. Nothing needs doing.
+- *The engine.* If its thread dies, or says nothing for five minutes, it is
+  started again from what was last saved (after 15 seconds, a minute, then
+  every five minutes). Stopping it by hand cancels a pending restart.
 
 **The live fleet.** Every strategy deployed to the swarm is watched on the
 candles since it was deployed: watching (too few trades), healthy, slipping
@@ -125,7 +166,7 @@ same pace offered as its replacement.
 
 **Settings**: the coins (up to 8), the paces bred (any of the bot builder's
 styles — each needs its candles), long and short or long only, the speed
-(*gentle*, about a third of one processor core, the default; or *full*) and
+(*gentle*, about half of one processor core, the default; or *full*) and
 the shuffle drawdown limit. `FARM` is in the Strategy Lab and on the Quant
 desk; the Research screen shows it at a glance.
 

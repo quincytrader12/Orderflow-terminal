@@ -314,6 +314,9 @@ try {
   expect(boards0.tops.flatMap((b) => b.rows).every((r) => r.vault && r.stage !== 'faded'), 'every listed survivor has its vault result and stands on the ladder');
   expect(boards0.data && boards0.data.ok === true && boards0.data.nextTryAt > Date.now() && (await page.locator('[data-farm] [data-data="ok"]').count()) === 1, 'the data tile: up to date, with the time of the next check');
   // the lists hold still while the farm runs flat out: watched for eight seconds, the rows change at most once (the 20-second clock) and the strategy on show stays on show
+  await page.evaluate(() => document.querySelector('[data-farm] .pro-scroll')?.scrollTo(0, 0));
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: `${OUT}desktop-farm-top.png` });
   const shownBefore = await page.locator('[data-farm] [data-detail] .pro-section').first().innerText();
   const seen = [];
   for (let i = 0; i < 16; i++) {
