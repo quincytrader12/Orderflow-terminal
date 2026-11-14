@@ -5,7 +5,7 @@
 // forward-tested on fresh data, and put together as a team.
 import { describe, expect, it } from 'vitest';
 import { checkFlow, buildSpec, FLOW_DEFAULT, type Flow } from './flow';
-import { dailyOf, Farm, farmKey, farmNiche, ladderOf, scoreOf, STAGES, type FarmSave, type Survivor } from './farm';
+import { dailyOf, Farm, farmKey, farmKind, farmNiche, ladderOf, paceIdOf, PACES, scoreOf, STAGES, VAULT, type FarmSave, type Survivor } from './farm';
 import { COSTS } from './backtest';
 import { ctxOf, type Market } from './library';
 import { runAll, withBench } from './research';
@@ -197,8 +197,15 @@ describe('the gauntlet', () => {
     expect(g.s.oos.sharpe).toBeGreaterThan(0.5);
     expect(g.s.summary.length).toBeGreaterThan(3);
     expect(g.s.curve.length).toBeGreaterThan(50);
-    expect(g.s.stage).toBe('new');
-    expect(g.s.seenTo).toBe(trending()['1h'][0].bars[5999].time);
+    // found on the history before the vault (its last 15 %), then tested on the vault at once
+    const cut = Math.floor(6000 * (1 - VAULT));
+    expect(g.s.seenTo).toBe(trending()['1h'][0].bars[cut - 1].time);
+    expect(g.s.vault!.bars).toBe(6000 - cut);
+    expect(g.s.vault!.trades).toBeGreaterThan(0);
+    expect(g.s.vault!.ret).toBeGreaterThan(0);
+    expect(g.s.forward).toMatchObject({ bars: 6000 - cut, trades: g.s.vault!.trades });
+    // it is on the ladder at once: fewer than 5 trades in the vault is incubating, 5 to 14 proving, more proven
+    expect(g.s.stage).toBe(g.s.vault!.trades < 5 ? 'incubating' : g.s.vault!.trades < 15 ? 'proving' : 'proven');
     // the steadiness and cost checks, with their numbers
     expect(g.s.checks!.thirds).toBeGreaterThanOrEqual(2);
     expect(g.s.checks!.coinsUp).toBeGreaterThanOrEqual(1);
@@ -206,8 +213,8 @@ describe('the gauntlet', () => {
     expect(g.s.checks!.cost2).toBeGreaterThan(0);
     expect(g.s.checks!.cost2).toBeLessThan(g.s.oos.sharpe);
     expect(g.s.p!).toBeLessThan(0.05);
-    // a return for every day of the unseen stretch (1,800 hours = 75 days)
-    expect(g.s.daily!.r.length).toBeGreaterThanOrEqual(75);
+    // a return for every day of the unseen stretch (30 % of the 5,100 hours before the vault: 63 days)
+    expect(g.s.daily!.r.length).toBeGreaterThanOrEqual(63);
     expect(Math.abs(g.s.daily!.r.reduce((a, b) => a + b, 0) - Math.log(1 + g.s.oos.totalReturn))).toBeLessThan(0.15);
   });
 
@@ -225,15 +232,15 @@ describe('the gauntlet', () => {
   }, 60_000);
 
   it('a result carried by one stretch of the unseen data is thrown out as not steady', () => {
-    // trending through training and the first quarter of the unseen stretch, then a choppy market with no trend
+    // trending through training and the first third of the unseen stretch (bars 3,570 to 5,100), then a choppy market with no trend
     const mk = (coin: string, seed: number): Market => {
       const h = gauss(rngOf(seed));
       let p = 100;
       let mu = 0;
       const bars = Array.from({ length: 6000 }, (_, i) => {
-        mu = i < 4700 ? 0.997 * mu + 0.00045 * h() : 0;
+        mu = i < 4050 ? 0.997 * mu + 0.00045 * h() : 0;
         const o = p;
-        p *= Math.exp(mu + (i < 4700 ? 0.005 : 0.007) * h());
+        p *= Math.exp(mu + (i < 4050 ? 0.005 : 0.007) * h());
         return { time: Date.UTC(2024, 0, 1) + i * HOUR, open: o, high: Math.max(o, p) * 1.0015, low: Math.min(o, p) * 0.9985, close: p, volume: 100 };
       });
       return { coin, tfH: 1, bars, funding: null };
@@ -266,8 +273,9 @@ describe('the gauntlet', () => {
     // the checks let a few lucky ones through when hundreds are tried; significance — allowing for all of them — stops them reaching the top five
     expect(st.funnel.shuffle).toBeLessThanOrEqual(Math.max(3, st.tried * 0.05));
     expect(st.funnel.proof).toBe(0);
-    expect(st.top).toEqual([]);
-    for (const w of st.watch) expect(w.sig).toBe(false);
+    // whatever is listed is a candidate, never called significant
+    for (const w of st.top) expect(w.sig).toBe(false);
+    expect(st.watch).toEqual([]);
     expect(st.gen).toBeGreaterThan(2);
     for (const r of st.recent) expect(r.why.length).toBeGreaterThan(10);
     // the overfit meter: with no edge to find, the best bot in training is no better than the rest on other data
@@ -287,7 +295,15 @@ describe('the gauntlet', () => {
     const fams = st.top.map((s) => JSON.stringify([s.style, [...s.flow.strategies].sort(), [...s.flow.models].sort()]));
     expect(new Set(fams).size).toBe(fams.length);
     for (const s of st.top) expect(s.beat).toBeGreaterThanOrEqual(75);
-    for (const s of st.top) expect(s.sig || s.stage === 'proven').toBe(true);
+    // every survivor made money in the vault, and stands on the ladder for it
+    for (const s of st.top) {
+      expect(s.vault!.trades).toBeGreaterThan(0);
+      expect(s.stage).not.toBe('faded');
+    }
+    // the same five, as the intraday pace's board
+    const board = st.tops!.find((b) => b.id === 'intraday')!;
+    expect(board.rows.map((r) => r.id)).toEqual(st.top.map((r) => r.id));
+    expect(st.tops!.map((b) => b.id)).toEqual(['intraday']);
   }, 120_000);
 });
 
@@ -301,12 +317,16 @@ describe('fresh data: forward tests, the ladder and the fleet', () => {
     expect(g.ok).toBe(true);
     if (!g.ok) return;
     farm.survivors.push(g.s);
+    const inVault = g.s.forward!.bars;
+    expect(inVault).toBe(900);
     // a thousand more hours of the same markets (the same seeds: the first 6,000 hours are the same)
     farm.setMarkets({ '1h': [market('BTC', 7000, 3, 1), market('ETH', 7000, 4, 1)] });
     const s = farm.survivors[0];
     expect(s.forward).toBeTruthy();
-    expect(s.forward!.bars).toBeGreaterThan(900);
-    expect(s.forward!.bars).toBeLessThanOrEqual(1001);
+    // its record carries on from the vault into the new candles
+    expect(s.forward!.bars).toBeGreaterThan(inVault + 900);
+    expect(s.forward!.bars).toBeLessThanOrEqual(inVault + 1001);
+    expect(s.vault!.bars).toBe(inVault);
     expect(['incubating', 'proving', 'proven', 'faded']).toContain(s.stage);
   });
 
@@ -367,30 +387,36 @@ describe('significance allows for every bot tried', () => {
   const fake = (id: string, t: number, strategies: string[], extra: Partial<Survivor> = {}): Survivor =>
     ({ id, key: id, flow: flow({ strategies }), name: id, style: 'intraday', tfH: 1, coins: ['BTC'], foundAt: 0, seenTo: 0, is: { sharpe: 2 }, oos: { sharpe: 2, trades: 40, t, maxDD: 0.05 }, beat: 90, nudge: { kept: 8, tried: 10 }, mc: { dd95: 0.1, pLoss: 0.1 }, periods: { unit: 'month', list: [], up: 1, worst: 0, avg: 0 }, dsr: 0.9, tried: 1, score: 1, forward: null, stage: 'new', summary: [], sig: true, curve: [], split: 0, ...extra }) as unknown as Survivor;
 
-  it('the bar rises with the number of bots that reached the unseen data', () => {
-    const farm = new Farm({ coins: ['BTC'], styles: ['intraday'] }, { seed: 1 });
-    // t of 3.3, 3.0, 2.1 and 0.8: one-sided p of about 0.0005, 0.0013, 0.018 and 0.21
-    farm.survivors = [fake('a', 3.3, ['tsmom']), fake('b', 3.0, ['donchian']), fake('c', 2.1, ['zrev']), fake('d', 0.8, ['macd'])];
-    farm.funnel.trained = 100;
-    farm.rank();
+  /** a farm that has had `kinds` kinds of bot reach the unseen data */
+  const after = (kinds: number, survivors: Survivor[]) => {
+    const save: FarmSave = { v: 3, cfg: { coins: ['BTC'], styles: ['intraday'], sides: 'both', pace: 'gentle', maxDD: 0.2 }, gen: 1, tried: 9000, funnel: { bred: 9000, trained: 5000, holdout: 0, steady: 0, costs: 0, random: 0, nudge: 0, shuffle: 0, vault: 0, proof: 0 }, survivors, population: [], seen: [], startedAt: 1, recent: [], entered: Array.from({ length: kinds }, (_, i) => `kind${i}`) };
+    return new Farm(save.cfg, { seed: 1, save });
+  };
+  // t of 3.3, 3.0, 2.1 and 0.8: one-sided p of about 0.0005, 0.0013, 0.018 and 0.21
+  const four = () => [fake('a', 3.3, ['tsmom']), fake('b', 3.0, ['donchian']), fake('c', 2.1, ['zrev']), fake('d', 0.8, ['macd'])];
+
+  it('the bar rises with the number of KINDS of bot that reached the unseen data — copies of a kind are one idea', () => {
+    // 5,000 bots faced the gauntlet, but they were 100 kinds: the bar is set by the 100
+    const farm = after(100, four());
     expect(farm.survivors.map((s) => s.sig)).toEqual([true, true, false, false]);
     // q: the false-discovery rate at which each would be called significant
     expect(farm.survivors[0].q!).toBeCloseTo(0.0484, 2);
     expect(farm.survivors[1].q!).toBeGreaterThan(farm.survivors[0].q!);
     expect(farm.survivors[3].q!).toBe(1);
-    expect(farm.top().map((s) => s.id)).toEqual(['a', 'b']);
-    expect(farm.watch().map((s) => s.id).sort()).toEqual(['c', 'd']);
-    expect(farm.state(false).funnel.proof).toBe(2);
-    // ten times as many bots tried: what was significant no longer is — unless it has proved itself on fresh data
-    farm.funnel.trained = 1000;
-    farm.survivors[1].stage = 'proven';
-    farm.rank();
-    expect(farm.survivors.map((s) => s.sig)).toEqual([false, false, false, false]);
-    expect(farm.top().map((s) => s.id)).toEqual(['b']);
+    const st = farm.state(false);
+    expect(st.kinds).toBe(100);
+    expect(st.funnel.proof).toBe(2);
+    // the top five lists every survivor still standing, the significant ones first; the rest are candidates
+    expect(farm.top().map((s) => s.id)).toEqual(['a', 'b', 'c', 'd']);
+    expect(farm.watch()).toEqual([]);
+    // ten times as many kinds tried: what was significant no longer is — and one proven on fresh data leads the list
+    const more = four();
+    more[1].stage = 'proven';
+    const farm2 = after(1000, more);
+    expect(farm2.survivors.map((s) => s.sig)).toEqual([false, false, false, false]);
+    expect(farm2.top()[0].id).toBe('b');
     // with only a handful tried, t = 2.1 is enough
-    farm.funnel.trained = 4;
-    farm.rank();
-    expect(farm.survivors.map((s) => s.sig)).toEqual([true, true, true, false]);
+    expect(after(4, four()).survivors.map((s) => s.sig)).toEqual([true, true, true, false]);
   });
 
   it('a save from before (significant at t ≥ 2) is ranked again when restored', () => {
@@ -401,8 +427,11 @@ describe('significance allows for every bot tried', () => {
     const st = farm.state(false);
     expect(st.funnel.steady).toBe(0);
     expect(st.funnel.proof).toBe(0);
-    expect(st.watch.map((s) => s.id)).toEqual(['old']);
-    expect(farm.save().v).toBe(2);
+    // (that save did not count kinds: its 600 gauntlet entrants stand in for them)
+    expect(st.kinds).toBe(600);
+    expect(st.top.map((s) => s.id)).toEqual(['old']);
+    expect(st.top[0].sig).toBe(false);
+    expect(farm.save().v).toBe(3);
   });
 
   it('the team: survivors that fit together, weighted by risk — never two of a kind, never two that move as one', () => {
@@ -448,8 +477,9 @@ describe('significance allows for every bot tried', () => {
     expect(farm.state(false).team!.members.length).toBe(t.members.length);
     // one survivor is no team
     farm.survivors = farm.survivors.slice(0, 1);
-    farm.rank();
-    expect(farm.team()).toBeNull();
+    // (the team is worked out once a minute; asked for afresh here)
+    expect(farm.team()).not.toBeNull();
+    expect(farm.team(true)).toBeNull();
   });
 
   it('daily returns from bar returns', () => {
@@ -464,7 +494,7 @@ describe('significance allows for every bot tried', () => {
 
 describe('the farm learns which blocks work', () => {
   it('blocks that keep passing are drawn more often, ones that never do less — but never dropped', () => {
-    const save: FarmSave = { v: 2, cfg: { coins: ['BTC', 'ETH'], styles: ['intraday'], sides: 'both', pace: 'gentle', maxDD: 0.2 }, gen: 1, tried: 400, funnel: { bred: 400, trained: 60, holdout: 0, steady: 0, costs: 0, random: 0, nudge: 0, shuffle: 0, proof: 0 }, survivors: [], population: [], seen: [], startedAt: 1, recent: [], stats: { 'strategy:tsmom': [120, 50, 4], 'strategy:zrev': [120, 0, 0], 'strategy:donchian': [3, 1, 0] } };
+    const save: FarmSave = { v: 2, cfg: { coins: ['BTC', 'ETH'], styles: ['intraday'], sides: 'both', pace: 'gentle', maxDD: 0.2 }, gen: 1, tried: 400, funnel: { bred: 400, trained: 60, holdout: 0, steady: 0, costs: 0, random: 0, nudge: 0, shuffle: 0, vault: 0, proof: 0 }, survivors: [], population: [], seen: [], startedAt: 1, recent: [], stats: { 'strategy:tsmom': [120, 50, 4], 'strategy:zrev': [120, 0, 0], 'strategy:donchian': [3, 1, 0] } };
     const farm = new Farm(save.cfg, { seed: 11, save });
     farm.setMarkets(trending());
     const count: Record<string, number> = {};
@@ -495,4 +525,170 @@ describe('the farm learns which blocks work', () => {
     expect(st2.niches).toBe(Math.min(80, st.niches!));
     expect(st2.pbo).toBeCloseTo(st.pbo!, 9);
   }, 120_000);
+});
+
+describe('the vault: the most recent candles, which nothing is bred or checked on', () => {
+  const tsmom = flow({ strategies: ['tsmom'], tunes: { 'strategy:tsmom': { lookback: 72 } }, takeProfit: 'trail' });
+  /** the same markets with the vault's candles (the last 15 %) replaced by something else entirely */
+  const otherVault = (): Record<string, Market[]> => {
+    const cut = Math.floor(6000 * (1 - VAULT));
+    return { '1h': trending()['1h'].map((m) => ({ ...m, bars: m.bars.map((b, i) => (i >= cut ? { ...b, open: b.open * 0.5, high: b.high * 0.55, low: b.low * 0.45, close: b.close * 0.5 } : b)) })) };
+  };
+
+  it('training and every check of the gauntlet read nothing from the vault: another vault, the same results', () => {
+    const a = new Farm({ coins: ['BTC', 'ETH'], styles: ['intraday'] }, { seed: 2 });
+    const b = new Farm({ coins: ['BTC', 'ETH'], styles: ['intraday'] }, { seed: 2 });
+    a.setMarkets(trending());
+    b.setMarkets(otherVault());
+    const ta = a.train(tsmom);
+    const tb = b.train(tsmom);
+    expect(tb.fit).toBe(ta.fit);
+    const ga = a.gauntlet(tsmom, ta.is!);
+    const gb = b.gauntlet(tsmom, tb.is!);
+    expect(ga.ok).toBe(true);
+    // the unseen 30 %, the random bots, the nudges and the shuffles came out the same …
+    const part = (g: typeof ga) => (g.ok ? { oos: g.s.oos, beat: g.s.beat, nudge: g.s.nudge, mc: g.s.mc, checks: g.s.checks, seenTo: g.s.seenTo } : null);
+    if (gb.ok) expect(part(gb)).toEqual(part(ga));
+    // … only the vault's own verdict can differ
+    if (!gb.ok) expect(gb.at).toBe('vault');
+    else expect(gb.s.vault!.ret).not.toBe(ga.ok ? ga.s.vault!.ret : NaN);
+  });
+
+  it('a bot that loses in the vault is out, and its kind has had its one look', () => {
+    // the trend the bot rides ends where the vault begins: after it, a choppy market
+    const mk = (coin: string, seed: number): Market => {
+      const h = gauss(rngOf(seed));
+      let p = 100;
+      let mu = 0;
+      const bars = Array.from({ length: 6000 }, (_, i) => {
+        mu = i < 5100 ? 0.997 * mu + 0.00045 * h() : 0;
+        const o = p;
+        p *= Math.exp(mu + (i < 5100 ? 0.005 : 0.009) * h());
+        return { time: Date.UTC(2024, 0, 1) + i * HOUR, open: o, high: Math.max(o, p) * 1.0015, low: Math.min(o, p) * 0.9985, close: p, volume: 100 };
+      });
+      return { coin, tfH: 1, bars, funding: null };
+    };
+    let out = 0;
+    for (const [x, y] of [[13, 14], [23, 24]]) {
+      const farm = new Farm({ coins: ['BTC', 'ETH'], styles: ['intraday'] }, { seed: 2 });
+      farm.setMarkets({ '1h': [mk('BTC', x), mk('ETH', y)] });
+      const f = flow({ strategies: ['tsmom'], tunes: { 'strategy:tsmom': { lookback: 72 } }, takeProfit: 'r15', hold: 'half' });
+      const t = farm.train(f);
+      expect(t.fit).toBeGreaterThan(0.7);
+      const g = farm.gauntlet(f, t.is!);
+      expect(g.ok).toBe(false);
+      if (g.ok) continue;
+      expect(g.at).toBe('vault');
+      expect(g.why).toMatch(/lost [\d.]+ % over \d+ trades in the vault/);
+      out++;
+      // through the farm's own loop the kind is ruled out: a copy with another stop is not tested again
+      expect(farm.taken(f)).toBe(false);
+      (farm as unknown as { runGauntlet: (g: unknown) => unknown }).runGauntlet({ flow: f, key: farmKey(f), fit: t.fit, done: true, is: t.is });
+      expect(farm.taken(f)).toBe(true);
+      expect(farm.taken({ ...f, stopWidth: 'wide' })).toBe(true);
+      expect(farm.taken({ ...f, strategies: ['donchian'] })).toBe(false);
+      const st = farm.state(false);
+      // it passed everything before the vault, and is counted there
+      expect(st.funnel.shuffle).toBe(1);
+      expect(st.funnel.vault).toBe(0);
+      expect(st.survivors).toBe(0);
+      expect(st.recent[0]).toMatchObject({ at: 'vault' });
+      // and the ruling survives a restart
+      expect(new Farm(st.cfg, { seed: 3, save: JSON.parse(JSON.stringify(farm.save())) }).taken(f)).toBe(true);
+    }
+    expect(out).toBe(2);
+  }, 60_000);
+});
+
+describe('one survivor of a kind, and steady lists', () => {
+  it('copies of a kind that already holds its place are not tested again; every survivor is a different kind', () => {
+    const farm = new Farm({ coins: ['BTC', 'ETH'], styles: ['intraday'] }, { seed: 4 });
+    farm.setMarkets(trending());
+    for (let i = 0; i < 600; i++) farm.step();
+    const st = farm.state(true);
+    expect(st.survivors).toBeGreaterThan(3);
+    const kinds = farm.survivors.map((s) => farmKind(s.flow));
+    expect(new Set(kinds).size).toBe(kinds.length);
+    // in this market most bots that train well are copies of a kind already held: they are skipped, not put through the gauntlet
+    expect(st.dupes!).toBeGreaterThan(0);
+    expect(st.kinds!).toBeLessThanOrEqual(st.funnel.trained);
+    for (const s of farm.survivors) expect(farm.taken(s.flow)).toBe(true);
+    expect(farm.taken({ ...farm.survivors[0].flow, stopWidth: farm.survivors[0].flow.stopWidth === 'wide' ? 'normal' : 'wide' })).toBe(true);
+    // far more of the work now goes into new ideas: the gauntlet ran for at most a bot of each kind that survived, plus those that failed
+    expect(st.funnel.vault).toBeGreaterThanOrEqual(farm.survivors.length);
+    expect(farm.survivors.filter((x) => x.stage !== 'faded').length).toBeLessThanOrEqual(40);
+  }, 120_000);
+
+  it('each pace has its own population and its own top five', () => {
+    const farm = new Farm({ coins: ['BTC', 'ETH'], styles: ['scalp', 'intraday'] }, { seed: 6 });
+    farm.setMarkets(trending());
+    for (let i = 0; i < 700; i++) farm.step();
+    const st = farm.state(true);
+    expect(st.tops!.map((b) => b.id)).toEqual(['scalp', 'intraday']);
+    for (const b of st.tops!) {
+      expect(b.rows.length).toBeGreaterThan(0);
+      expect(b.rows.length).toBeLessThanOrEqual(5);
+      for (const r of b.rows) expect(paceIdOf(r.style)).toBe(b.id);
+      expect(b.live).toBeGreaterThanOrEqual(b.rows.length);
+    }
+    // two populations of forty, bred side by side
+    expect(st.population).toBe(80);
+    expect(PACES.map((p) => p.id)).toEqual(['scalp', 'intraday', 'swing', 'position']);
+    // the overall five are drawn from the paces' own
+    const ids = new Set(st.tops!.flatMap((b) => b.rows.map((r) => r.id)));
+    for (const s of st.top) expect(ids.has(s.id)).toBe(true);
+  }, 120_000);
+
+  it('the lists hold still: they are worked out on a clock, and a listed strategy keeps its place unless a newcomer is clearly better', () => {
+    let now = 1_000_000;
+    const farm = new Farm({ coins: ['BTC'], styles: ['intraday'] }, { seed: 1, now: () => now });
+    const fake = (id: string, score: number, strategies: string[], extra: Partial<Survivor> = {}): Survivor =>
+      ({ id, key: id, flow: flow({ strategies }), name: id, style: 'intraday', tfH: 1, coins: ['BTC'], foundAt: 0, seenTo: 0, is: { sharpe: 2 }, oos: { sharpe: 2, trades: 40, t: 1, maxDD: 0.05 }, beat: 90, nudge: { kept: 8, tried: 10 }, mc: { dd95: 0.1, pLoss: 0.1 }, periods: { unit: 'month', list: [], up: 1, worst: 0, avg: 0 }, dsr: 0.9, tried: 1, score, forward: null, stage: 'incubating', summary: [], sig: false, curve: [], split: 0, ...extra }) as unknown as Survivor;
+    const five = ['tsmom', 'donchian', 'zrev', 'macd', 'rsi2'].map((x, i) => fake(`s${i}`, 2 - i * 0.1, [x]));
+    farm.survivors = [...five];
+    const ids = () => farm.tops()[0].rows.map((r) => r.id);
+    expect(ids()).toEqual(['s0', 's1', 's2', 's3', 's4']);
+    // a newcomer a little better than the fifth arrives: nothing moves, however often the screen asks
+    farm.survivors.push(fake('n1', 1.65, ['tma']));
+    for (let i = 0; i < 20; i++) {
+      now += 1000;
+      expect(ids()).toEqual(['s0', 's1', 's2', 's3', 's4']);
+    }
+    // after the clock comes round it is still not enough: 1.65 against 1.6 is within the listed one's margin
+    now += 20_000;
+    expect(ids()).toEqual(['s0', 's1', 's2', 's3', 's4']);
+    // one that is clearly better does take a place, at the next round
+    farm.survivors.push(fake('n2', 2.6, ['vsmom']));
+    expect(ids()).toEqual(['s0', 's1', 's2', 's3', 's4']);
+    now += 20_000;
+    expect(ids()).toEqual(['n2', 's0', 's1', 's2', 's3']);
+    // one further up the ladder goes first, whatever its score — and fresh candles are shown at once
+    farm.survivors.push(fake('p', 0.5, ['kalman'], { stage: 'proven' }));
+    farm.setMarkets({});
+    expect(ids()[0]).toBe('p');
+    // a listed strategy that fades leaves at once
+    farm.survivors.find((s) => s.id === 'n2')!.stage = 'faded';
+    expect(ids()).not.toContain('n2');
+    expect(ids().length).toBe(5);
+  });
+
+  it('a pace keeps forty standing at most: those with the most behind them stay', () => {
+    const farm = new Farm({ coins: ['BTC'], styles: ['intraday'] }, { seed: 1 });
+    const names = ['tsmom', 'donchian', 'zrev', 'macd', 'rsi2', 'tma', 'vsmom', 'kalman', 'bbreak', 'ou'];
+    const save: FarmSave = { v: 3, cfg: farm.cfg, gen: 1, tried: 1, funnel: farm.funnel, survivors: [], population: [], seen: [], startedAt: 1, recent: [], entered: [] };
+    // 50 kinds: every pair of two strategies
+    let k = 0;
+    for (let i = 0; i < names.length && k < 50; i++)
+      for (let j = i + 1; j < names.length && k < 50; j++, k++)
+        save.survivors.push({ id: `s${k}`, key: `s${k}`, flow: flow({ strategies: [names[i], names[j]] }), name: `s${k}`, style: 'intraday', tfH: 1, coins: ['BTC'], foundAt: k, seenTo: 0, is: { sharpe: 2 }, oos: { sharpe: 2, trades: 40, t: 1, maxDD: 0.05 }, beat: 90, nudge: { kept: 8, tried: 10 }, mc: { dd95: 0.1, pLoss: 0.1 }, periods: { unit: 'month', list: [], up: 1, worst: 0, avg: 0 }, dsr: 0.9, tried: 1, score: k, forward: null, stage: k < 3 ? 'proving' : 'incubating', summary: [], sig: false, curve: [], split: 0 } as unknown as Survivor);
+    // and a copy of a kind already there, from a save made before kinds were kept one each
+    save.survivors.push({ ...save.survivors[0], id: 'copy', score: -5, stage: 'new' });
+    const again = new Farm(save.cfg, { seed: 1, save });
+    expect(again.survivors.some((s) => s.id === 'copy')).toBe(false);
+    again.setMarkets({});
+    expect(again.survivors.length).toBe(40);
+    // the three that are proving stay, though their scores are the lowest
+    for (const id of ['s0', 's1', 's2']) expect(again.survivors.some((s) => s.id === id)).toBe(true);
+    expect(again.survivors.some((s) => s.id === 's3')).toBe(false);
+  });
 });

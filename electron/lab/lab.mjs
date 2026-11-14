@@ -74,6 +74,9 @@ export class LabService {
     this.farmSaved = farm?.save ?? null;
     this.farmWanted = farm ? farm.wanted !== false : true;
     this.farmCfg = { ...FARM_DEFAULTS, ...(farm?.cfg ?? {}) };
+    // settings saved before each pace had its own top five: scalping joins intraday and swing (it trades the same 1-hour candles as intraday)
+    if (farm?.cfg && !(farm.cfg.v >= 2) && !this.farmCfg.styles.some((x) => x === 'scalp' || x === 'scalp15')) this.farmCfg.styles = ['scalp', ...this.farmCfg.styles];
+    this.farmCfg.v = 2;
     this.farmSnap = farm?.state ? { ...farm.state, running: false } : null;
     this.farmW = null;
     this.farmTimer = null;
@@ -93,7 +96,7 @@ export class LabService {
 
   /** what the edge finder shows when asked: its live state, or the last one saved */
   farmState() {
-    const base = this.farmSnap ?? { running: false, cfg: this.farmCfg, startedAt: 0, gen: 0, tried: 0, rate: 0, population: 0, funnel: { bred: 0, trained: 0, holdout: 0, steady: 0, costs: 0, random: 0, nudge: 0, shuffle: 0, proof: 0 }, ladder: { new: 0, incubating: 0, proving: 0, proven: 0, faded: 0 }, top: [], watch: [], survivors: 0, recent: [], fleet: [], dataTo: 0, dataAt: 0, note: '', error: '' };
+    const base = this.farmSnap ?? { running: false, cfg: this.farmCfg, startedAt: 0, gen: 0, tried: 0, rate: 0, population: 0, funnel: { bred: 0, trained: 0, holdout: 0, steady: 0, costs: 0, random: 0, nudge: 0, shuffle: 0, vault: 0, proof: 0 }, ladder: { new: 0, incubating: 0, proving: 0, proven: 0, faded: 0 }, top: [], watch: [], survivors: 0, recent: [], fleet: [], dataTo: 0, dataAt: 0, note: '', error: '' };
     return { ...base, running: !!this.farmW, starting: this.farmStarting ?? false, wanted: this.farmWanted, cfg: this.farmCfg, note: this.farmNote || base.note, error: this.farmErr || (this.farmW ? '' : base.error), data: this.farmData ?? null };
   }
 

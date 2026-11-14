@@ -6748,3 +6748,16 @@ tr.bb2-together td { border-top: 1px solid var(--border); background: color-mix(
 .farm-share { display: inline-block; width: 60px; height: 7px; border-radius: 4px; background: color-mix(in srgb, var(--text) 8%, transparent); vertical-align: middle; overflow: hidden; }
 .farm-share i { display: block; height: 100%; background: var(--pro-head, var(--accent)); }
 .farm-blocks td.l.b { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- edge finder: status strip and pace boards ---------- */
+.farm-status { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 8px 10px 4px; }
+@media (max-width: 1000px) { .farm-status { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.farm-status > div { display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; min-width: 0; }
+.farm-status > div[data-data="healing"] { border-color: color-mix(in srgb, var(--warn) 60%, transparent); }
+.farm-status small { font-size: 10px; letter-spacing: 0.12em; color: var(--muted); }
+.farm-status b { font-size: 14px; }
+.farm-status b.warn { color: var(--warn); }
+.farm-status span { font-size: 11px; line-height: 1.4; }
+.farm-board-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.farm-board-head .muted { font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 11px; }
+.farm-none { padding: 2px 10px 8px; }

@@ -283,7 +283,8 @@ try {
   await page.keyboard.type('FARM');
   await page.keyboard.press('Enter');
   await page.waitForSelector('[data-farm]', { timeout: 10_000 });
-  expect(/Stopped/.test(await page.locator('.farm-title').innerText()) && (await page.locator('[data-stage]').count()) === 9, 'FARM: the edge finder, stopped, with its nine-step gauntlet (steady and double costs among them)');
+  expect(/Stopped/.test(await page.locator('.farm-title').innerText()) && (await page.locator('[data-stage]').count()) === 10, 'FARM: the edge finder, stopped, with its ten-step gauntlet (steady, double costs and the vault among them)');
+  expect((await page.locator('[data-farm] [data-status] > div').count()) === 4, 'a status strip at the top: the engine, its data, what is standing, the search');
   await page.click('[data-farm] button:has-text("Settings")');
   await page.fill('.farm-settings input', 'BTC');
   for (const id of ['swing']) if (await page.locator(`.farm-settings [data-style="${id}"].active`).count()) await page.click(`.farm-settings [data-style="${id}"]`);
@@ -298,18 +299,35 @@ try {
   expect(true, 'it starts from its settings (BTC, intraday pace, full speed) and runs by itself');
   await page.waitForFunction(() => document.querySelectorAll('[data-farm] [data-survivor]').length > 0, null, { timeout: 240_000 });
   const farm0 = await page.evaluate(() => window.novus.lab.farm.state());
-  expect(farm0.running && farm0.tried > 0 && farm0.funnel.bred === farm0.tried && farm0.survivors > 0, `it bred and tested ${farm0.tried} bots; ${farm0.survivors} survived the checks (top ${farm0.top.length}, watch list ${farm0.watch.length})`);
-  const stagesOk = ['holdout', 'steady', 'costs', 'random', 'nudge', 'shuffle', 'proof'].every((k, i, a) => farm0.funnel[k] <= (i ? farm0.funnel[a[i - 1]] : farm0.funnel.trained));
+  expect(farm0.running && farm0.tried > 0 && farm0.funnel.bred === farm0.tried && farm0.survivors > 0, `it bred and tested ${farm0.tried} bots; ${farm0.survivors} survived the checks, one of each kind (${farm0.kinds} kinds tested, ${farm0.dupes} copies skipped)`);
+  const stagesOk = ['holdout', 'steady', 'costs', 'random', 'nudge', 'shuffle', 'vault'].every((k, i, a) => farm0.funnel[k] <= (i ? farm0.funnel[a[i - 1]] : farm0.funnel.trained));
   expect(stagesOk, 'the gauntlet narrows step by step: each check passes no more than the one before');
   await page.locator('[data-farm] [data-survivor]').first().click();
   await page.waitForSelector('[data-farm] [data-detail]', { timeout: 10_000 });
   const det = await page.locator('[data-farm] [data-detail]').innerText();
   expect(/100 random bots/.test(det) && /Settings nudged/.test(det) && /1,000 shuffles/.test(det) && /Significant/.test(det) && /Enters/.test(det), 'a survivor shows its rules in words, its curve and every check it passed');
-  expect(/Steady/.test(det) && /of 3 thirds/.test(det) && /Double costs/.test(det) && /odds it is a fluke/.test(det), 'the new checks are shown with their numbers: steady, double costs, and the fluke odds after every bot tried');
+  expect(/Steady/.test(det) && /of 3 thirds/.test(det) && /Double costs/.test(det) && /odds it is a fluke/.test(det), 'the new checks are shown with their numbers: steady, double costs, and the fluke odds after every kind tried');
+  expect(/The vault/.test(det) && /most recent days of the history, which nothing was bred or checked on/.test(det), 'a survivor has a fresh-data result the moment it is found: its trades in the vault');
+  // a top five for each pace, each survivor on the ladder at once, the data's health in the strip
+  const boards0 = await page.evaluate(() => window.novus.lab.farm.state().then((s) => ({ tops: s.tops.map((b) => ({ id: b.id, rows: b.rows.map((r) => ({ id: r.id, stage: r.stage, style: r.style, vault: r.vault })) })), data: s.data, styles: s.cfg.styles, dupes: s.dupes, kinds: s.kinds })));
+  expect(boards0.styles.includes('scalp') && boards0.styles.includes('intraday') && boards0.tops.map((b) => b.id).join() === 'scalp,intraday' && (await page.locator('[data-farm] [data-board]').count()) === 2, `scalping is bred beside intraday, and each pace has its own top five (${boards0.tops.map((b) => `${b.id}: ${b.rows.length}`).join(', ')})`);
+  expect(boards0.tops.flatMap((b) => b.rows).every((r) => r.vault && r.stage !== 'faded'), 'every listed survivor has its vault result and stands on the ladder');
+  expect(boards0.data && boards0.data.ok === true && boards0.data.nextTryAt > Date.now() && (await page.locator('[data-farm] [data-data="ok"]').count()) === 1, 'the data tile: up to date, with the time of the next check');
+  // the lists hold still while the farm runs flat out: watched for eight seconds, the rows change at most once (the 20-second clock) and the strategy on show stays on show
+  const shownBefore = await page.locator('[data-farm] [data-detail] .pro-section').first().innerText();
+  const seen = [];
+  for (let i = 0; i < 16; i++) {
+    seen.push(await page.evaluate(() => [...document.querySelectorAll('[data-farm] [data-survivor]')].map((r) => r.getAttribute('data-survivor')).join()));
+    await page.waitForTimeout(500);
+  }
+  const changes = seen.filter((x, i) => i && x !== seen[i - 1]).length;
+  const triedNow = (await page.evaluate(() => window.novus.lab.farm.state())).tried;
+  expect(changes <= 2 && triedNow > farm0.tried, `steady lists: ${changes} change${changes === 1 ? '' : 's'} in eight seconds while ${triedNow - farm0.tried} more bots were tried`);
+  expect((await page.locator('[data-farm] [data-detail] .pro-section').first().innerText()).replace(/^[A-Z ]+#\d+ — |^NO LONGER LISTED — /, '') === shownBefore.replace(/^[A-Z ]+#\d+ — |^NO LONGER LISTED — /, ''), 'the strategy on show stays on show until another is clicked');
   // the search itself: the overfit meter, the kinds of bot kept, what is working
   await page.waitForFunction(() => document.querySelectorAll('[data-farm] [data-blocks] tbody tr').length > 0, null, { timeout: 120_000 });
   const farmS = await page.evaluate(() => window.novus.lab.farm.state());
-  expect((await page.locator('[data-farm] [data-search]').count()) === 1 && farmS.niches > 0 && farmS.entrants === farmS.funnel.trained && farmS.blocks.length > 0, `the search reads itself: ${farmS.niches} kinds of bot kept, ${farmS.entrants} reached the unseen data, overfit meter ${farmS.pbo === null ? 'not yet measured' : `${Math.round(farmS.pbo * 100)} %`}, ${farmS.blocks.length} blocks ranked by what they produced`);
+  expect((await page.locator('[data-farm] [data-search]').count()) === 1 && farmS.niches > 0 && farmS.entrants === farmS.funnel.trained && farmS.blocks.length > 0, `the search reads itself: ${farmS.niches} niches kept, ${farmS.entrants} bots of ${farmS.kinds} kinds reached the unseen data, overfit meter ${farmS.pbo === null ? 'not yet measured' : `${Math.round(farmS.pbo * 100)} %`}, ${farmS.blocks.length} blocks ranked by what they produced`);
   // the team: survivors that fit together (it needs two of different kinds; the run goes on until there are)
   const teamUp = await page.waitForFunction(() => document.querySelectorAll('[data-farm] [data-team] [data-member]').length >= 2, null, { timeout: 180_000 }).then(() => true, () => false);
   if (teamUp) {
@@ -325,7 +343,7 @@ try {
     expect(tm.members.length >= 2 && Math.abs(wsum - 1) < 1e-6 && new Set(tm.members.map((m) => m.name)).size === tm.members.length, `the team: ${tm.members.length} survivors of different kinds, shares of risk summing to 100 %, Sharpe ${tm.sharpe.toFixed(2)} together against ${tm.solo.sharpe.toFixed(2)} for the best alone`);
   } else expect(true, 'the team: not formed in this short run (it needs two unlike survivors) — covered by the unit tests');
   await page.screenshot({ path: `${OUT}desktop-farm.png` });
-  const survivorName = (await page.locator('[data-farm] [data-detail] .pro-section').first().innerText()).replace(/^#\d+ — |^WATCH LIST — /, '');
+  const survivorName = (await page.locator('[data-farm] [data-detail] .pro-section').first().innerText()).replace(/^[A-Z ]+#\d+ — |^NO LONGER LISTED — /, '');
   await page.click('[data-farm] .farm-open');
   await page.waitForSelector('.bb2-arrived:has-text("the edge finder")', { timeout: 15_000 });
   const bchips = await page.locator('.bb-node[data-block="strategy"] .bb2-chip').allInnerTexts();

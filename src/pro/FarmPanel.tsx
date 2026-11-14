@@ -7,13 +7,14 @@
 // the team that fits together best, what the search has learned and how
 // overfit it is — ready to open in the bot builder or deploy to the crypto
 // swarm, which is the user's call.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { desktop, type FarmView } from "../desktop/bridge";
 import { sendToBot } from "../lab/bridge";
 import {
   LADDER,
   STAGES,
   type FleetItem,
+  type PaceBoard,
   type Survivor,
   type Team,
 } from "../lab/farm";
@@ -67,6 +68,15 @@ export function FarmPanel({ config: c, setConfig }: PanelProps<FarmConfig>) {
     const t = setInterval(() => setNow(Date.now()), 15_000);
     return () => clearInterval(t);
   }, []);
+  // the strategy on show stays on show: it is chosen once (the first listed) and then only by a click
+  const shown = useRef<Survivor | null>(null);
+  const firstId =
+    farm?.tops?.find((b) => b.rows.length)?.rows[0].id ??
+    farm?.top[0]?.id ??
+    null;
+  useEffect(() => {
+    if (!sel && firstId) setSel(firstId);
+  }, [sel, firstId]);
   if (!desktop?.lab?.farm)
     return (
       <div className="pro-empty">
@@ -84,9 +94,33 @@ export function FarmPanel({ config: c, setConfig }: PanelProps<FarmConfig>) {
       .catch((e) => setMsg(String(e?.message ?? e)))
       .finally(() => setBusy(false));
   };
-  const all = [...farm.top, ...farm.watch];
+  // a top five for each pace (a state saved by an earlier version has one list for all)
+  const boards: PaceBoard[] =
+    farm.tops ??
+    (farm.top.length + farm.watch.length
+      ? [
+          {
+            id: "all",
+            name: "All paces",
+            rows: [...farm.top, ...farm.watch],
+            held: farm.survivors,
+            live: farm.survivors,
+          },
+        ]
+      : []);
+  const all = boards.flatMap((b) => b.rows);
+  const found = all.find((s) => s.id === sel) ?? null;
+  if (found) shown.current = found;
+  // one that has left the lists since it was picked stays on show until another is clicked
   const pick =
-    all.find((s) => s.id === sel) ?? farm.top[0] ?? farm.watch[0] ?? null;
+    found ?? (sel && shown.current?.id === sel ? shown.current : null) ?? all[0] ?? null;
+  const rankOf = (s: Survivor) => {
+    for (const b of boards) {
+      const i = b.rows.findIndex((r) => r.id === s.id);
+      if (i >= 0) return { n: i + 1, pace: b.name };
+    }
+    return null;
+  };
   const running = farm.running;
   const starting = !!farm.starting;
   return (
@@ -156,20 +190,85 @@ export function FarmPanel({ config: c, setConfig }: PanelProps<FarmConfig>) {
         </div>
       )}
       <div className="pro-scroll">
+        <Status farm={farm} now={now} />
         {c.explain && (
           <div className="farm-intro">
             Every bot is treated as curve-fitted until it proves it is not. The
-            edge finder breeds bots from the bot builder’s blocks — the Strategy
-            Lab’s rules and the Quant desk’s models — trains each on the first
-            70 % of the history, and keeps it only if it survives every check
-            below. It learns which blocks have been working and draws them more
-            often, keeps the best bot of every kind so the search does not
-            collapse onto one idea, and merges survivors into new bots. It runs
-            by itself while the terminal is open; the best five that are still
-            standing are listed here for you to open, test and deploy — with
-            the team of survivors that fit together best.
+            edge finder breeds bots from the bot builder’s blocks, trains each
+            on the first part of the history, and keeps it only if it survives
+            every check of the gauntlet — the last of them the <b>vault</b>: the
+            most recent 15 % of the history, which nothing is bred or checked
+            on, so a bot that passes has a result on fresh data the moment it
+            is found. Each pace has its own population and its own top five.
+            One survivor is kept of each kind (pace, strategies, filters):
+            copies of a kind are one idea, tested once. It runs by itself while
+            the terminal is open; deploying is always your call.
           </div>
         )}
+
+        {boards.length === 0 && (
+          <div className="lab-note">
+            {running || starting
+              ? "No bot has survived every check yet. That is the point: most ideas do not hold up on data they never saw. Leave it running — a strategy appears here the moment one earns it."
+              : "Nothing has survived every check yet. Press Start and leave it running while you use the terminal."}
+          </div>
+        )}
+        {boards.map((b) => (
+          <div key={b.id} data-board={b.id}>
+            <div className="pro-section farm-board-head">
+              <span>
+                {b.name.toUpperCase()} — TOP {Math.max(5, b.rows.length)}
+              </span>
+              <span className="muted">
+                {b.live
+                  ? `${b.live} standing${b.held > b.live ? ` · ${b.held - b.live} faded` : ""}`
+                  : "none standing yet"}
+              </span>
+            </div>
+            {b.rows.length ? (
+              <Table rows={b.rows} sel={pick?.id ?? null} onSel={setSel} />
+            ) : (
+              <div className="lab-line muted farm-none">
+                {running || starting
+                  ? "Nothing has survived at this pace yet — it is being bred and tested alongside the others."
+                  : "Nothing has survived at this pace yet."}
+              </div>
+            )}
+          </div>
+        ))}
+        {pick && (
+          <Detail
+            key={pick.id}
+            s={pick}
+            rank={rankOf(pick)}
+            onMsg={setMsg}
+            explain={c.explain}
+          />
+        )}
+
+        {farm.team && farm.team.members.length > 1 && (
+          <>
+            <div className="pro-section">
+              THE TEAM — THE SURVIVORS THAT FIT TOGETHER BEST
+            </div>
+            <TeamCard
+              team={farm.team}
+              explain={c.explain}
+              onSel={(id) => all.some((x) => x.id === id) && setSel(id)}
+              onMsg={setMsg}
+            />
+          </>
+        )}
+
+        {farm.fleet.length > 0 && (
+          <>
+            <div className="pro-section">
+              THE LIVE FLEET — YOUR DEPLOYED STRATEGIES ON FRESH DATA
+            </div>
+            <Fleet fleet={farm.fleet} top={farm.top} onMsg={setMsg} />
+          </>
+        )}
+
         <div className="farm-grid">
           <div>
             <div className="pro-section">
@@ -195,77 +294,17 @@ export function FarmPanel({ config: c, setConfig }: PanelProps<FarmConfig>) {
             </div>
             {c.explain && (
               <div className="lab-line muted">
-                Survivors keep being tested on candles that arrive after they
-                were found — data no test has seen. Those that keep making money
-                climb to proven; those that fade are dropped from the top five.
+                A survivor’s fresh-data record starts with the vault and carries
+                on into the candles that arrive after it was found. Fewer than 5
+                trades there is incubating, 5 to 14 and in profit is proving, 15
+                or more and in profit is proven; one that loses fades and is
+                dropped — and its kind is not tried again.
               </div>
             )}
-            <div className="lab-line mono muted">
-              newest candle{" "}
-              {farm.dataTo
-                ? new Date(farm.dataTo)
-                    .toISOString()
-                    .slice(0, 16)
-                    .replace("T", " ")
-                : "—"}{" "}
-              UTC · data loaded {ago(farm.dataAt, now)} ·{" "}
-              {farm.cfg.coins.join(" ")} ·{" "}
-              {farm.cfg.styles.map(paceOf).join(", ")}
-            </div>
             <div className="pro-section">THE SEARCH ITSELF</div>
             <Search farm={farm} explain={c.explain} />
           </div>
         </div>
-
-        <div className="pro-section">
-          TOP 5 — THE BEST STILL STANDING{farm.top.length ? "" : " (NONE YET)"}
-        </div>
-        {farm.top.length ? (
-          <Table rows={farm.top} sel={pick?.id ?? null} onSel={setSel} />
-        ) : (
-          <div className="lab-note">
-            {running || starting
-              ? "No bot has survived every check yet. That is the point: most ideas do not hold up on data they never saw. Leave it running — it keeps breeding and testing in the background, and a strategy appears here the moment one earns it."
-              : "Nothing has survived every check yet. Press Start and leave it running while you use the terminal."}
-          </div>
-        )}
-        {farm.watch.length > 0 && (
-          <>
-            <div className="pro-section">
-              WATCH LIST — PASSED EVERY CHECK, NOT YET SIGNIFICANT AFTER EVERY
-              BOT TRIED; FORWARD-TESTING
-            </div>
-            <Table
-              rows={farm.watch}
-              sel={pick?.id ?? null}
-              onSel={setSel}
-              watch
-            />
-          </>
-        )}
-        {pick && (
-          <Detail
-            key={pick.id}
-            s={pick}
-            rank={farm.top.indexOf(pick) + 1}
-            onMsg={setMsg}
-            explain={c.explain}
-          />
-        )}
-
-        {farm.team && farm.team.members.length > 1 && (
-          <>
-            <div className="pro-section">
-              THE TEAM — THE SURVIVORS THAT FIT TOGETHER BEST
-            </div>
-            <TeamCard
-              team={farm.team}
-              explain={c.explain}
-              onSel={(id) => all.some((x) => x.id === id) && setSel(id)}
-              onMsg={setMsg}
-            />
-          </>
-        )}
 
         {(farm.blocks?.length ?? 0) > 0 && (
           <>
@@ -273,15 +312,6 @@ export function FarmPanel({ config: c, setConfig }: PanelProps<FarmConfig>) {
               WHAT IS WORKING — THE BLOCKS BEHIND THE BOTS THAT GOT FURTHEST
             </div>
             <Blocks farm={farm} explain={c.explain} />
-          </>
-        )}
-
-        {farm.fleet.length > 0 && (
-          <>
-            <div className="pro-section">
-              THE LIVE FLEET — YOUR DEPLOYED STRATEGIES ON FRESH DATA
-            </div>
-            <Fleet fleet={farm.fleet} top={farm.top} onMsg={setMsg} />
           </>
         )}
 
@@ -300,7 +330,7 @@ export function FarmPanel({ config: c, setConfig }: PanelProps<FarmConfig>) {
                   {r.at === "proof"
                     ? "survived"
                     : r.why.startsWith("passed every check")
-                      ? "watch list"
+                      ? "candidate"
                       : `out at: ${STAGES.find((x) => x.id === r.at)?.name.toLowerCase() ?? r.at}`}
                 </b>
                 <span className="farm-log-name">{r.name}</span>
@@ -355,25 +385,38 @@ function Funnel({ farm, explain }: { farm: FarmView; explain: boolean }) {
   );
 }
 
+/** how strong the evidence for a survivor is, in a word or two */
+function evidence(s: Survivor): { text: string; tone: string } {
+  if (s.stage === "proven")
+    return { text: s.sig ? "Proven · significant" : "Proven on fresh data", tone: "up b" };
+  if (s.stage === "proving")
+    return { text: s.sig ? "Proving · significant" : "Proving on fresh data", tone: "up" };
+  if (s.sig) return { text: "Significant", tone: "up" };
+  return { text: "Candidate", tone: "muted" };
+}
+
 function Table({
   rows,
   sel,
   onSel,
-  watch,
 }: {
   rows: Survivor[];
   sel: string | null;
   onSel: (id: string) => void;
-  watch?: boolean;
 }) {
   return (
     <div className="farm-wide">
-      <table className={`pro-table farm-table${watch ? " watch" : ""}`}>
+      <table className="pro-table farm-table">
         <thead>
           <tr>
             <th className="l">#</th>
             <th className="l">STRATEGY</th>
-            <th className="l">PACE</th>
+            <th
+              className="l"
+              title="Proven or proving on fresh data (the vault and the candles since), significant after every kind tried, or a candidate still to prove itself"
+            >
+              EVIDENCE
+            </th>
             <th title="A year’s return on the unseen 30 %">A YEAR</th>
             <th title="Return for the risk on the unseen 30 %">SHARPE</th>
             <th title="The biggest fall from a high on the unseen 30 %">
@@ -382,61 +425,56 @@ function Table({
             <th title="Share of months (or weeks) that made money on the unseen 30 %">
               MONTHS UP
             </th>
-            <th title="Random bots it beat, of 100">RANDOM</th>
-            <th title="Nudged versions of its settings that still made money">
-              NUDGES
-            </th>
-            <th title="The unlucky 1-in-20 drawdown of 1,000 shuffles, at 1 % risk a trade">
-              SHUFFLE
-            </th>
-            <th title="The chance it is a fluke, allowing for every bot that reached the unseen data (its q-value): under 10 % counts as significant">
-              FLUKE ODDS
-            </th>
-            <th title="Since it was found: on candles no test has seen">
+            <th title="Its result in the vault — the most recent 15 % of the history, which nothing is bred or checked on — and on the candles that have arrived since it was found">
               FRESH DATA
             </th>
-            <th className="l">STAGE</th>
+            <th title="The chance it is a fluke, allowing for every kind of bot that reached the unseen data (its q-value): under 10 % counts as significant">
+              FLUKE ODDS
+            </th>
+            <th className="l">LADDER</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((s, i) => (
-            <tr
-              key={s.id}
-              className={sel === s.id ? "sel" : ""}
-              onClick={() => onSel(s.id)}
-              data-survivor={s.id}
-            >
-              <td className="l b">{watch ? "·" : i + 1}</td>
-              <td className="l farm-name" title={s.name}>
-                {s.name.split(" · ").slice(0, 2).join(" · ")}
-              </td>
-              <td className="l muted">{paceOf(s.style)}</td>
-              <td className={`mono b ${s.oos.cagr >= 0 ? "up" : "down"}`}>
-                {pct(s.oos.cagr, 0)}
-              </td>
-              <td className="mono">{num(s.oos.sharpe)}</td>
-              <td className="mono down">{pct(-s.oos.maxDD)}</td>
-              <td className="mono">{pct(s.periods.up, 0)}</td>
-              <td className="mono">{s.beat}/100</td>
-              <td className="mono">
-                {s.nudge.kept}/{s.nudge.tried}
-              </td>
-              <td className="mono">{pct(s.mc.dd95, 0)}</td>
-              <td className={`mono ${s.sig ? "up" : "muted"}`}>
-                {s.q === undefined ? "—" : s.q < 0.001 ? "<0.1%" : pct(s.q, s.q < 0.1 ? 1 : 0)}
-              </td>
-              <td
-                className={`mono ${s.forward && s.forward.trades ? (s.forward.ret >= 0 ? "up" : "down") : "muted"}`}
+          {rows.map((s, i) => {
+            const ev = evidence(s);
+            return (
+              <tr
+                key={s.id}
+                className={sel === s.id ? "sel" : ""}
+                onClick={() => onSel(s.id)}
+                data-survivor={s.id}
               >
-                {s.forward && s.forward.trades
-                  ? `${pct(s.forward.ret)} · ${s.forward.trades} tr`
-                  : "waiting"}
-              </td>
-              <td className={`l ${STAGE_TONE[s.stage] ?? ""}`}>
-                {LADDER.find((l) => l.id === s.stage)?.name ?? s.stage}
-              </td>
-            </tr>
-          ))}
+                <td className="l b">{i + 1}</td>
+                <td className="l farm-name" title={s.name}>
+                  {s.name.split(" · ").slice(0, 2).join(" · ")}
+                </td>
+                <td className={`l ${ev.tone}`}>{ev.text}</td>
+                <td className={`mono b ${s.oos.cagr >= 0 ? "up" : "down"}`}>
+                  {pct(s.oos.cagr, 0)}
+                </td>
+                <td className="mono">{num(s.oos.sharpe)}</td>
+                <td className="mono down">{pct(-s.oos.maxDD)}</td>
+                <td className="mono">{pct(s.periods.up, 0)}</td>
+                <td
+                  className={`mono ${s.forward && s.forward.trades ? (s.forward.ret >= 0 ? "up" : "down") : "muted"}`}
+                >
+                  {s.forward && s.forward.trades
+                    ? `${pct(s.forward.ret)} · ${s.forward.trades} tr · ${num(s.forward.days, 0)} d`
+                    : "waiting"}
+                </td>
+                <td className={`mono ${s.sig ? "up" : "muted"}`}>
+                  {s.q === undefined
+                    ? "—"
+                    : s.q < 0.001
+                      ? "<0.1%"
+                      : pct(s.q, s.q < 0.1 ? 1 : 0)}
+                </td>
+                <td className={`l ${STAGE_TONE[s.stage] ?? ""}`}>
+                  {LADDER.find((l) => l.id === s.stage)?.name ?? s.stage}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -450,7 +488,7 @@ function Detail({
   explain,
 }: {
   s: Survivor;
-  rank: number;
+  rank: { n: number; pace: string } | null;
   onMsg: (m: string) => void;
   explain: boolean;
 }) {
@@ -499,14 +537,25 @@ function Detail({
     },
     {
       name: "Significant",
-      value: `t = ${num(s.oos.t)} · odds it is a fluke, allowing for every bot that reached the unseen data: ${s.q === undefined ? "—" : s.q < 0.001 ? "under 0.1 %" : pct(s.q, 1)} (under 10 % counts)${s.sig ? "" : " — the bar rises as more bots are tried; fresh data can still prove it"}`,
+      value: `t = ${num(s.oos.t)} · odds it is a fluke, allowing for every kind of bot that reached the unseen data: ${s.q === undefined ? "—" : s.q < 0.001 ? "under 0.1 %" : pct(s.q, 1)} (under 10 % counts)${s.sig ? "" : " — a candidate: fresh data can still prove it"}`,
       pass: s.sig,
     },
+    ...(s.vault
+      ? [
+          {
+            name: "The vault",
+            value: s.vault.trades
+              ? `${pct(s.vault.ret)} over ${s.vault.trades} trade${s.vault.trades === 1 ? "" : "s"} in the ${num(s.vault.days, 0)} most recent days of the history, which nothing was bred or checked on`
+              : `no trades in its ${num(s.vault.days, 0)} days yet`,
+            pass: s.vault.ret >= 0,
+          },
+        ]
+      : []),
     {
       name: "Fresh data",
       value:
         s.forward && s.forward.trades
-          ? `${pct(s.forward.ret)} over ${s.forward.trades} trades in ${num(s.forward.days, 0)} days (Sharpe ${num(s.forward.sharpe)})`
+          ? `${pct(s.forward.ret)} over ${s.forward.trades} trades in ${num(s.forward.days, 0)} days${s.vault ? " (the vault and the candles since)" : ""} · Sharpe ${num(s.forward.sharpe)}${s.vault && s.forward.trades > s.vault.trades ? ` · ${s.forward.trades - s.vault.trades} of them since it was found` : ""}`
           : "no trades on new candles yet",
       pass: !s.forward || s.forward.ret >= 0,
     },
@@ -553,7 +602,7 @@ function Detail({
   return (
     <div className="farm-detail" data-detail>
       <div className="pro-section">
-        {rank > 0 ? `#${rank} — ` : "WATCH LIST — "}
+        {rank ? `${rank.pace.toUpperCase()} #${rank.n} — ` : "NO LONGER LISTED — "}
         {s.name.toUpperCase()}
       </div>
       <div className="lab-grid2">
@@ -663,6 +712,79 @@ function Detail({
   );
 }
 
+/** the edge finder at a glance: the engine, its data, what is standing, how the search is going */
+function Status({ farm, now }: { farm: FarmView; now: number }) {
+  const d = farm.data;
+  const mins = (t: number) => Math.max(0, Math.round((t - now) / 60_000));
+  const newest = farm.dataTo
+    ? new Date(farm.dataTo).toISOString().slice(0, 16).replace("T", " ")
+    : "—";
+  const L = farm.ladder;
+  const standing = (L.new ?? 0) + (L.incubating ?? 0) + (L.proving ?? 0) + (L.proven ?? 0);
+  const bad = !!d && !d.ok;
+  return (
+    <div className="farm-status" data-status>
+      <div>
+        <small>ENGINE</small>
+        <b className={farm.running ? "up" : "muted"}>
+          {farm.running ? "Running" : farm.starting ? "Starting…" : "Stopped"}
+        </b>
+        <span className="muted">
+          {int(farm.tried)} bots tried
+          {farm.running ? ` · ${num(farm.rate, 0)} a minute` : ""} · generation{" "}
+          {int(farm.gen)}
+        </span>
+      </div>
+      <div data-data={bad ? "healing" : "ok"}>
+        <small>DATA</small>
+        <b className={bad ? "warn" : "up"}>
+          {bad
+            ? d!.missing.length
+              ? "Some markets missing — retrying"
+              : "On saved candles — retrying"
+            : "Up to date"}
+        </b>
+        <span className="muted">
+          {bad ? (
+            <>
+              {[...d!.stale, ...d!.missing].slice(0, 4).join(", ")}
+              {d!.stale.length + d!.missing.length > 4 ? "…" : ""} could not be
+              refreshed. It carries on with the candles it has and tries again
+              {d!.nextTryAt ? ` in ${mins(d!.nextTryAt) || "under 1"} min` : " shortly"} (try{" "}
+              {d!.tries + 1}); nothing needs doing.
+            </>
+          ) : (
+            <>
+              newest candle {newest} UTC · loaded {ago(farm.dataAt, now)}
+              {d?.nextTryAt ? ` · next check in ${mins(d.nextTryAt)} min` : ""}
+            </>
+          )}
+        </span>
+      </div>
+      <div>
+        <small>STANDING</small>
+        <b>
+          {int(standing)} survivor{standing === 1 ? "" : "s"}
+        </b>
+        <span className="muted">
+          {int(L.proven ?? 0)} proven · {int(L.proving ?? 0)} proving ·{" "}
+          {int(L.incubating ?? 0)} incubating · {int(farm.funnel.proof ?? 0)}{" "}
+          significant
+        </span>
+      </div>
+      <div>
+        <small>SEARCH</small>
+        <b>{int(farm.kinds ?? farm.entrants ?? 0)} kinds tested</b>
+        <span className="muted">
+          {int(farm.dupes ?? 0)} copies skipped · overfit meter{" "}
+          {typeof farm.pbo === "number" ? pct(farm.pbo, 0) : "—"} ·{" "}
+          {farm.cfg.coins.join(" ")}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 /** the search itself: how overfit it is, how many kinds of bot it keeps, how many reached the unseen data */
 function Search({ farm, explain }: { farm: FarmView; explain: boolean }) {
   const p = farm.pbo;
@@ -688,9 +810,9 @@ function Search({ farm, explain }: { farm: FarmView; explain: boolean }) {
         <span className={tone}>{word}</span>
       </div>
       <div className="lab-kv mono">
-        <span>{int(farm.niches ?? 0)} kinds of bot kept</span>
-        <span>{int(farm.entrants ?? farm.funnel.trained)} reached the unseen data</span>
-        <span>{int(farm.survivors)} survivors held</span>
+        <span>{int(farm.niches ?? 0)} niches kept</span>
+        <span>{int(farm.kinds ?? 0)} kinds reached the unseen data</span>
+        <span>{int(farm.dupes ?? 0)} copies skipped</span>
       </div>
       {explain && (
         <div className="lab-line muted">
@@ -698,9 +820,10 @@ function Search({ farm, explain }: { farm: FarmView; explain: boolean }) {
           every way of splitting them in half: does the bot that did best on
           one half stay in the top half on the other? The share of splits where
           it does not is the reading — near 50 % or more means the search is
-          fitting noise. The significance bar for the top five rises with
-          every bot that reaches the unseen data, so a long search cannot talk
-          itself into a fluke.
+          fitting noise. The significance bar rises with every kind of bot
+          that reaches the unseen data, so a long search cannot talk itself
+          into a fluke; copies of a kind already held are skipped, so the work
+          goes into new ideas.
         </div>
       )}
     </div>
@@ -869,7 +992,7 @@ function TeamCard({
               <td className="mono">{num(m.sharpe)}</td>
               <td className={`l ${STAGE_TONE[m.stage] ?? ""}`}>
                 {LADDER.find((l) => l.id === m.stage)?.name ?? m.stage}
-                {m.sig ? "" : " · watch list"}
+                {m.sig ? " · significant" : ""}
               </td>
               <td className="l">
                 {live(m.name) ? (
@@ -1093,7 +1216,7 @@ function Settings({
           <button
             className={`chip${pace === "gentle" ? " active" : ""}`}
             onClick={() => setPace("gentle")}
-            title="Uses about a third of one processor core: the terminal stays smooth"
+            title="Uses about half of one processor core: the terminal stays smooth"
           >
             Gentle
           </button>

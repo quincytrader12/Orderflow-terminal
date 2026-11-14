@@ -50,9 +50,9 @@ export function createFarmRunner(post, o = {}) {
         lastSave = now();
         save();
       }
-      // gentle: rest twice as long as the work took (about a third of one core); full: just let messages in
+      // gentle: rest as long as the work took (about half of one core); full: just let messages in
       await sleep(
-        farm.cfg.pace === "full" ? 0 : Math.max(5, Math.min(2000, dt * 2)),
+        farm.cfg.pace === "full" ? 0 : Math.max(5, Math.min(2000, dt)),
       );
     }
   }

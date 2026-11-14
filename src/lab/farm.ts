@@ -31,7 +31,7 @@
 //   8  proof     the bar for "significant" rises with every bot that has
 //                reached the unseen data (Benjamini–Hochberg: at most 1 in 10
 //                of the bots called significant should be flukes). The rest
-//                go on the watch list and must prove themselves forward.
+//                are candidates and must prove themselves forward.
 //
 // Survivors are then forward-tested on candles that arrive after they were
 // found (data no test has seen at all) and climb the incubation ladder — new,
@@ -98,14 +98,29 @@ export interface FarmCfg {
   /** the trading styles bred (each needs its candles: 15 m, 1 h, 4 h, 1 d) */
   styles: StyleId[];
   sides: "both" | "long";
-  /** gentle: uses about a third of one processor core, so the terminal stays smooth; full: as fast as it can */
+  /** gentle: uses about half of one processor core, so the terminal stays smooth; full: as fast as it can */
   pace: "gentle" | "full";
   /** the deepest drawdown allowed in the unlucky 1-in-20 shuffle, at 1 % risk a trade */
   maxDD: number;
+  /** the version of these settings (2: scalping is bred beside intraday and swing) */
+  v?: number;
 }
+
+/** the share of the history held back as the vault: the most recent candles, which no bot is bred or checked on */
+export const VAULT = 0.15;
+
+/** the paces a top five is kept for, and the bot builder's styles in each */
+export const PACES: { id: string; name: string; styles: StyleId[] }[] = [
+  { id: "scalp", name: "Scalping", styles: ["scalp15", "scalp"] },
+  { id: "intraday", name: "Intraday", styles: ["intraday15", "intraday"] },
+  { id: "swing", name: "Swing", styles: ["swing", "week"] },
+  { id: "position", name: "Position", styles: ["position", "hold"] },
+];
+export const paceIdOf = (style: StyleId): string =>
+  PACES.find((p) => p.styles.includes(style))?.id ?? "swing";
 export const FARM_DEFAULTS: FarmCfg = {
   coins: ["BTC", "ETH", "SOL"],
-  styles: ["intraday", "swing"],
+  styles: ["scalp", "intraday", "swing"],
   sides: "both",
   pace: "gentle",
   maxDD: 0.2,
@@ -120,6 +135,7 @@ export type Stage =
   | "random"
   | "nudge"
   | "shuffle"
+  | "vault"
   | "proof";
 export const STAGES: { id: Stage; name: string; plain: string }[] = [
   {
@@ -171,10 +187,16 @@ export const STAGES: { id: Stage; name: string; plain: string }[] = [
       "Its trades in 1,000 random orders: the unlucky orders’ drawdown stayed within the limit.",
   },
   {
-    id: "proof",
-    name: "Significant after every bot tried",
+    id: "vault",
+    name: "Made money in the vault",
     plain:
-      "The more bots are tried, the better the luckiest of them looks — so the bar for “significant” rises with every bot that reaches the unseen data (Benjamini–Hochberg: of the bots called significant, at most 1 in 10 should be flukes). Those that miss it go on the watch list and are forward-tested anyway.",
+      "The most recent 15 % of the history is locked away: no bot is bred or checked on it. A bot that passes everything else is tested on it once — its first result on data nothing has seen. If it loses there, it is out, and so is its kind: one look each.",
+  },
+  {
+    id: "proof",
+    name: "Significant after every kind tried",
+    plain:
+      "The more ideas are tried, the better the luckiest of them looks — so the bar for “significant” rises with every kind of bot (pace, strategies, filters) that reaches the unseen data (Benjamini–Hochberg: of those called significant, at most 1 in 10 should be flukes). Copies of a kind are one idea, counted once. Those that miss the bar are candidates: listed, and tested on fresh data all the same.",
   },
 ];
 
@@ -259,6 +281,8 @@ export interface Survivor {
   };
   /** its return each day of the unseen stretch (how survivors fit together is read from these) */
   daily?: { d0: number; r: number[] };
+  /** its result in the vault, the moment it was found (its fresh-data record starts with this) */
+  vault?: { bars: number; trades: number; ret: number; days: number };
   /** the equity curve over the whole history, thinned (for the panel) */
   curve: number[];
   split: number;
@@ -316,6 +340,32 @@ export interface FarmState {
   blocks?: BlockStat[];
   /** the survivors that fit together best as one portfolio */
   team?: Team | null;
+  /** the five best still standing at each pace: proven on fresh data first, then significant, then by score */
+  tops?: PaceBoard[];
+  /** bots that trained well but are copies of a kind already held or already ruled out: not tested again */
+  dupes?: number;
+  /** kinds of bot that reached the unseen data (what the significance bar allows for) */
+  kinds?: number;
+  /** how the candles are doing (set by the desktop service): stale or missing markets, and when it tries again */
+  data?: {
+    ok: boolean;
+    stale: string[];
+    missing: string[];
+    error: string;
+    tries: number;
+    lastOkAt: number;
+    checkedAt: number;
+    nextTryAt: number;
+  } | null;
+}
+
+export interface PaceBoard {
+  id: string;
+  name: string;
+  rows: Survivor[];
+  /** survivors held at this pace, and how many are still standing */
+  held: number;
+  live: number;
 }
 
 export interface BlockStat {
@@ -358,7 +408,7 @@ export interface Team {
 
 /** what is saved between sessions */
 export interface FarmSave {
-  v: 1 | 2;
+  v: 1 | 2 | 3;
   cfg: FarmCfg;
   gen: number;
   tried: number;
@@ -373,6 +423,12 @@ export interface FarmSave {
   /** the best bot of each niche */
   archive?: { flow: Flow; fit: number }[];
   pbo?: number[];
+  /** kinds that had their one look at the vault and lost, or faded on fresh data (hashed) */
+  burned?: string[];
+  /** kinds that reached the unseen data (hashed) */
+  entered?: string[];
+  dupes?: number;
+  kindsFloor?: number;
 }
 
 const keyOf = (f: Flow) =>
@@ -410,6 +466,36 @@ const blockKeys = (f: Flow): string[] => [
   ...(f.strategies.length > 1 ? [`join:${f.combine}`] : []),
 ];
 
+/** a short fingerprint of a kind (two 32-bit FNV-1a hashes) */
+const hash = (x: string): string => {
+  let a = 0x811c9dc5;
+  let b = 0x01000193;
+  for (let i = 0; i < x.length; i++) {
+    const c = x.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193);
+    b = Math.imul(b ^ c, 0x811c9dc5) + 0x9e3779b9;
+  }
+  return (a >>> 0).toString(36) + (b >>> 0).toString(36);
+};
+const kindOf = (f: Flow) => hash(familyOf(f));
+
+const STAGE_RANK: Record<Ladder, number> = {
+  proven: 4,
+  proving: 3,
+  incubating: 2,
+  new: 1,
+  faded: 0,
+};
+
+/** one pace's own population: the paces are bred side by side, so each has its own top five */
+interface Island {
+  style: StyleId;
+  pop: Ind[];
+  cursor: number;
+  best: number;
+  stale: number;
+}
+
 interface Ind {
   flow: Flow;
   key: string;
@@ -440,8 +526,52 @@ export class Farm {
   /** the same markets with the models fitted on the first 70 % of the TRAINING bars only: the last 30 % of them scores a learned rule honestly */
   private inner: Record<string, Ctx[]> = {};
   private funding = false;
-  private pop: Ind[] = [];
-  private cursor = 0;
+  private islands = new Map<StyleId, Island>();
+  private cur: Island = {
+    style: "intraday",
+    pop: [],
+    cursor: 0,
+    best: -Infinity,
+    stale: 0,
+  };
+  private turn = -1;
+  private get pop(): Ind[] {
+    return this.cur.pop;
+  }
+  private set pop(v: Ind[]) {
+    this.cur.pop = v;
+  }
+  private get cursor(): number {
+    return this.cur.cursor;
+  }
+  private set cursor(v: number) {
+    this.cur.cursor = v;
+  }
+  private get best(): number {
+    return this.cur.best;
+  }
+  private set best(v: number) {
+    this.cur.best = v;
+  }
+  private get stale(): number {
+    return this.cur.stale;
+  }
+  private set stale(v: number) {
+    this.cur.stale = v;
+  }
+  /** the whole history (vault included), for the forward tests: the same models as the search's own, fitted on the same training bars */
+  private fwd: Record<string, Ctx[]> = {};
+  /** kinds that hold a survivor, kinds ruled out for good, and kinds that reached the unseen data */
+  private heldKinds = new Set<string>();
+  private burned = new Set<string>();
+  private entered = new Set<string>();
+  dupes = 0;
+  /** a save from before kinds were counted: how many it is taken to have tried (its gauntlet entrants, 2,000 at most) */
+  private kindsFloor = 0;
+  /** the lists on the screen: worked out again on a steady clock, not at every bot */
+  private board: { at: number; ids: Record<string, string[]> } | null = null;
+  private boardDirty = true;
+  private teamAt = 0;
   private seen = new Map<string, number>();
   private queue: Ind[] = [];
   survivors: Survivor[] = [];
@@ -456,12 +586,11 @@ export class Farm {
     random: 0,
     nudge: 0,
     shuffle: 0,
+    vault: 0,
     proof: 0,
   };
   recent: Reject[] = [];
   startedAt: number;
-  private best = -Infinity;
-  private stale = 0;
   private stamps: number[] = [];
   fleet: FleetItem[] = [];
   dataTo = 0;
@@ -495,26 +624,60 @@ export class Farm {
     this.costs = o.costs ?? COSTS;
     this.stress = o.stress ?? 2;
     this.startedAt = this.now();
-    if (o.save && (o.save.v === 1 || o.save.v === 2)) this.restore(o.save);
+    if (o.save && [1, 2, 3].includes(o.save.v)) this.restore(o.save);
   }
 
   // ---------- data ----------
 
-  /** the candles to breed on, by timeframe ('1h', '4h' …); called again with fresher candles to forward-test the survivors */
+  /**
+   * The candles, by timeframe ('1h', '4h' …); called again with fresher
+   * candles to forward-test the survivors.
+   *
+   * The most recent 15 % of each timeframe's history is the VAULT: it is cut
+   * off before anything is bred, trained or put through the gauntlet, so no
+   * choice the farm makes can lean on it. A bot that passes the gauntlet is
+   * tested on it once — a fresh-data result the moment it is found, instead
+   * of weeks later — and its forward test then carries on into the candles
+   * that arrive. As new candles come in the vault moves forward with them.
+   */
   setMarkets(byTf: Record<string, Market[]>) {
     this.ctxs = {};
     this.inner = {};
+    this.fwd = {};
     // other candles: the stretches of the training years the overfit meter compares are no longer the same
     this.genBlocks = {};
     for (const [tf, ms] of Object.entries(byTf)) {
-      const ok = ms.filter((m) => m.bars.length >= 400);
+      const ok = ms.filter((m) => m.bars.length >= 500);
       if (!ok.length) continue;
-      const withB = withBench(ok);
-      this.ctxs[tf] = withB.map((m, k) =>
+      // one cut in time for every coin: where the longest history's last 15 % begins
+      const longest = ok.reduce((a, b) =>
+        b.bars.length > a.bars.length ? b : a,
+      );
+      const tCut =
+        longest.bars[Math.floor(longest.bars.length * (1 - VAULT))].time;
+      const short = ok
+        .map((m) => {
+          const i = m.bars.findIndex((b) => b.time >= tCut);
+          const k = i < 0 ? m.bars.length : i;
+          return {
+            ...m,
+            bars: m.bars.slice(0, k),
+            funding: m.funding ? m.funding.slice(0, k) : m.funding,
+          };
+        })
+        .filter((m) => m.bars.length >= 400);
+      if (!short.length) continue;
+      const names = new Set(short.map((m) => m.coin));
+      const sB = withBench(short);
+      const fB = withBench(ok.filter((m) => names.has(m.coin)));
+      this.ctxs[tf] = sB.map((m, k) =>
         ctxOf(m, Math.floor(m.bars.length * 0.7), 42 + k),
       );
-      this.inner[tf] = withB.map((m, k) =>
+      this.inner[tf] = sB.map((m, k) =>
         ctxOf(m, Math.floor(Math.floor(m.bars.length * 0.7) * 0.7), 42 + k),
+      );
+      this.fwd[tf] = fB.map((m, k) =>
+        ctxOf(m, this.ctxs[tf][k].trainEnd, 42 + k),
       );
     }
     this.funding = Object.values(byTf).some((ms) =>
@@ -682,8 +845,8 @@ export class Farm {
   }
 
   /** a random bot built from the blocks */
-  randomFlow(): Flow | null {
-    const styles = this.styles();
+  randomFlow(only?: StyleId): Flow | null {
+    const styles = this.styles().filter((x) => !only || x === only);
     if (!styles.length) return null;
     for (let attempt = 0; attempt < 30; attempt++) {
       const style = this.pick(styles);
@@ -842,7 +1005,7 @@ export class Farm {
       }
       if (this.valid(f) && keyOf(f) !== keyOf(f0)) return f;
     }
-    return this.randomFlow() ?? f0;
+    return this.randomFlow(f0.style) ?? f0;
   }
 
   /** a child of two bots: each block from one or the other */
@@ -903,7 +1066,7 @@ export class Farm {
   private seedPop(n: number) {
     const out: Ind[] = [];
     for (let i = 0; i < n * 3 && out.length < n; i++) {
-      const f = this.randomFlow();
+      const f = this.randomFlow(this.cur.style);
       if (f) out.push({ flow: f, key: keyOf(f), fit: NaN, done: false });
     }
     return out;
@@ -948,8 +1111,12 @@ export class Farm {
 
   /** a parent for the next generation: mostly the fitter of two from the population, sometimes the champion of a random niche */
   private parent(): Flow {
-    if (this.archive.size && this.rnd() < 0.3)
-      return this.pick([...this.archive.values()]).flow;
+    if (this.rnd() < 0.3) {
+      const mine = [...this.archive.values()].filter(
+        (a) => a.flow.style === this.cur.style,
+      );
+      if (mine.length) return this.pick(mine).flow;
+    }
     return this.tournament().flow;
   }
 
@@ -986,7 +1153,9 @@ export class Farm {
       this.stale = 0;
       this.best = -Infinity;
       for (const x of scored.slice(0, 2)) add(x.flow, x.fit);
-      const champs = [...this.archive.values()].sort((a, b) => b.fit - a.fit);
+      const champs = [...this.archive.values()]
+        .filter((a) => a.flow.style === this.cur.style)
+        .sort((a, b) => b.fit - a.fit);
       for (const c of this.some(champs.slice(0, 24), 8)) add(this.mutate(c.flow));
     } else {
       // the best carried over: no more than two of a kind
@@ -1010,19 +1179,27 @@ export class Farm {
         );
       }
     }
-    // bred from the survivors: refinements of bots that passed, and pairs of them merged into one
-    const live = this.survivors.filter((x) => x.stage !== "faded");
+    // bred from the survivors of this pace: two of them merged into one, or one changed into a new kind
+    // (a copy of a kind that already holds its place would never be tested, so only new kinds are kept)
+    const live = this.survivors.filter(
+      (x) => x.stage !== "faded" && x.style === this.cur.style,
+    );
     let guard = 0;
     const want = Math.min(4, live.length);
     let made = 0;
-    while (made < want && guard++ < 40) {
+    while (made < want && guard++ < 60) {
       const a = this.pick(live);
-      const mates = live.filter((x) => x !== a && x.style === a.style);
+      const mates = live.filter((x) => x !== a);
       const child =
         mates.length && this.rnd() < 0.6
           ? this.merge(a.flow, this.pick(mates).flow)
           : this.mutate(a.flow);
-      if (!this.seen.has(keyOf(child)) && add(child)) made++;
+      if (
+        !this.taken(child) &&
+        !this.seen.has(keyOf(child)) &&
+        add(child)
+      )
+        made++;
     }
     for (const x of this.seedPop(N - next.length)) add(x.flow);
     this.pop = next;
@@ -1377,6 +1554,22 @@ export class Farm {
         ...x.ctxs.map((c) => c.m.bars[c.trainEnd]?.time ?? Infinity),
       ),
     };
+    // 8 — the vault: the most recent candles, which nothing above has touched
+    const fw = this.forwardOf(x.spec, x.tfH, x.coins, s.seenTo);
+    if (fw && fw.bars > 0) {
+      s.forward = fw;
+      s.vault = { bars: fw.bars, trades: fw.trades, ret: fw.ret, days: fw.days };
+      s.stage = ladderOf(s);
+      if (s.stage === "faded")
+        return {
+          ok: false,
+          at: "vault",
+          why:
+            fw.ret < 0
+              ? `lost ${(-fw.ret * 100).toFixed(1)} % over ${fw.trades} trades in the vault — the ${Math.round(fw.days)} most recent days, which nothing had seen`
+              : `fell ${(fw.maxDD * 100).toFixed(0)} % in the vault, further than it ever did before`,
+        };
+    }
     s.score = scoreOf(s);
     return { ok: true, s };
   }
@@ -1391,7 +1584,7 @@ export class Farm {
   ): Forward | null {
     const tf =
       tfH === 24 ? "1d" : tfH < 1 ? `${Math.round(tfH * 60)}m` : `${tfH}h`;
-    const all = this.ctxs[tf];
+    const all = this.fwd[tf];
     if (!all) return null;
     const want = new Set(coins.map((c) => c.toUpperCase()));
     const ctxs = all.filter((c) => want.has(c.m.coin.toUpperCase()));
@@ -1441,9 +1634,31 @@ export class Farm {
       s.forward = fw && fw.bars > 0 ? fw : s.forward;
       s.stage = ladderOf(s);
       s.score = scoreOf(s);
+      // a kind that faded on fresh data has had its chance
+      if (s.stage === "faded") this.burn(s.flow);
     }
     this.prune();
     this.rank();
+    this.boardDirty = true;
+    this.teamAt = 0;
+  }
+
+  // ---------- one survivor of a kind ----------
+
+  /** this kind already holds a survivor, or has been ruled out: a copy of it is not tested again */
+  taken(f: Flow): boolean {
+    const k = kindOf(f);
+    return this.heldKinds.has(k) || this.burned.has(k);
+  }
+
+  private burn(f: Flow) {
+    this.burned.add(kindOf(f));
+    if (this.burned.size > 20_000)
+      this.burned.delete(this.burned.values().next().value as string);
+  }
+
+  private reindex() {
+    this.heldKinds = new Set(this.survivors.map((s) => kindOf(s.flow)));
   }
 
   /** the strategies deployed in the swarm, checked on the candles since they were deployed */
@@ -1506,14 +1721,24 @@ export class Farm {
     what: "idle" | "trained" | "rejected" | "survived";
     name?: string;
   } {
-    if (!this.styles().length) return { what: "idle" };
+    const styles = this.styles();
+    if (!styles.length) return { what: "idle" };
+    // the gauntlet runs on the bots that trained well, one at a time
+    const g = this.queue.shift();
+    if (g) return this.runGauntlet(g);
+    // each pace has its own population; they take turns, one bot at a time
+    this.turn = (this.turn + 1) % styles.length;
+    const style = styles[this.turn];
+    let isl = this.islands.get(style);
+    if (!isl) {
+      isl = { style, pop: [], cursor: 0, best: -Infinity, stale: 0 };
+      this.islands.set(style, isl);
+    }
+    this.cur = isl;
     if (!this.pop.length) {
       this.pop = this.seedPop(40);
       this.cursor = 0;
     }
-    // the gauntlet runs on the bots that trained well, one at a time
-    const g = this.queue.shift();
-    if (g) return this.runGauntlet(g);
     while (this.cursor < this.pop.length && this.pop[this.cursor].done)
       this.cursor++;
     if (this.cursor >= this.pop.length) {
@@ -1560,12 +1785,15 @@ export class Farm {
     this.funnel.bred++;
     this.stamps.push(this.now());
     if (this.stamps.length > 200) this.stamps.shift();
-    if (
-      r.is &&
-      r.fit >= TRAIN_MIN_SHARPE &&
-      !this.survivors.some((s) => s.key === ind.key)
-    ) {
+    if (r.is && r.fit >= TRAIN_MIN_SHARPE) {
+      // a copy of a kind that already holds its place (or was ruled out) is not put through the gauntlet again:
+      // the copies were most of the work, and each one was another look at the same data for the same idea
+      if (this.taken(ind.flow)) {
+        this.dupes++;
+        return { what: "trained", name: buildSpec(ind.flow).spec.name };
+      }
       this.funnel.trained++;
+      this.entered.add(kindOf(ind.flow));
       this.note(ind.flow, "pass");
       (ind as Ind & { is?: Perf }).fit = r.fit;
       this.queue.push({ ...ind, is: r.is } as Ind & { is: Perf });
@@ -1589,12 +1817,14 @@ export class Farm {
       };
     }
     if (!res.ok) {
+      // its one look at the vault is used up
+      if (res.at === "vault") this.burn(g.flow);
       this.noteFail(res.at);
       this.recent.unshift({ name, at: res.at, why: res.why, t: this.now() });
       this.recent = this.recent.slice(0, 12);
       return { what: "rejected", name };
     }
-    // every check passed; significance (allowing for every bot tried) decides the top five or the watch list
+    // every check passed; fresh data and significance (allowing for every kind tried) decide where it stands in its pace's top five
     for (const st of [
       "holdout",
       "steady",
@@ -1602,17 +1832,14 @@ export class Farm {
       "random",
       "nudge",
       "shuffle",
+      "vault",
     ] as Stage[])
       this.funnel[st]++;
     this.note(g.flow, "surv");
-    // the same result from the same family is the same bot: kept once
-    const twin = this.survivors.find(
-      (x) =>
-        familyOf(x.flow) === familyOf(res.s.flow) &&
-        Math.abs(x.oos.sharpe - res.s.oos.sharpe) < 1e-6 &&
-        x.oos.trades === res.s.oos.trades,
-    );
+    // one survivor of a kind: a second bot of the same kind that slipped into the queue is not kept
+    const twin = this.heldKinds.has(kindOf(res.s.flow));
     if (!twin) this.survivors.push(res.s);
+    this.reindex();
     this.prune();
     this.rank();
     const sig = !twin && res.s.sig;
@@ -1620,8 +1847,8 @@ export class Farm {
       name,
       at: sig ? "proof" : "shuffle",
       why: sig
-        ? `SURVIVED every check — beat ${res.s.beat} of 100 random bots, ${res.s.nudge.kept} of ${res.s.nudge.tried} nudges kept, t = ${res.s.oos.t.toFixed(1)}: significant even after the ${this.funnel.trained.toLocaleString()} bots that reached the unseen data`
-        : `passed every check, but t = ${res.s.oos.t.toFixed(1)} on the unseen data is not yet significant after ${this.funnel.trained.toLocaleString()} bots tried there: on the watch list, forward-testing`,
+        ? `SURVIVED every check — beat ${res.s.beat} of 100 random bots, ${res.s.nudge.kept} of ${res.s.nudge.tried} nudges kept, ${vaultWords(res.s)}, t = ${res.s.oos.t.toFixed(1)}: significant even after ${Math.max(this.entered.size, this.kindsFloor).toLocaleString()} kinds of bot tried`
+        : `passed every check — ${vaultWords(res.s)}; t = ${res.s.oos.t.toFixed(1)} is not yet significant after ${Math.max(this.entered.size, this.kindsFloor).toLocaleString()} kinds tried: a candidate, forward-testing`,
       t: this.now(),
     });
     this.recent = this.recent.slice(0, 12);
@@ -1638,7 +1865,13 @@ export class Farm {
    * those called significant, at most about 1 in 10 should be flukes.
    */
   rank() {
-    const M = Math.max(1, this.funnel.trained, this.survivors.length);
+    // one idea, one test: the count is of KINDS of bot that reached the unseen data, not of every copy
+    const M = Math.max(
+      1,
+      this.entered.size,
+      this.kindsFloor,
+      this.survivors.length,
+    );
     const byP = [...this.survivors]
       .map((s) => {
         if (!(s.p! >= 0)) s.p = 1 - ncdf(s.oos.t);
@@ -1647,14 +1880,16 @@ export class Farm {
       .sort((a, b) => a.p! - b.p!);
     // q-values: the smallest false-discovery rate at which each would be called significant
     let q = 1;
+    let flipped = false;
     for (let k = byP.length - 1; k >= 0; k--) {
       q = Math.min(q, (byP[k].p! * M) / (k + 1));
       byP[k].q = q;
+      if (byP[k].sig !== q <= FDR) flipped = true;
       byP[k].sig = q <= FDR;
     }
+    if (flipped) this.boardDirty = true;
     // the last step of the funnel is how many stand as significant NOW (it can fall as more bots are tried)
     this.funnel.proof = byP.filter((x) => x.sig).length;
-    this.teamCache = null;
   }
 
   /** the funnel counts each stage a bot PASSED; a rejection at a stage means it passed the ones before */
@@ -1666,6 +1901,7 @@ export class Farm {
       "random",
       "nudge",
       "shuffle",
+      "vault",
       "proof",
     ];
     for (const st of order) {
@@ -1674,49 +1910,110 @@ export class Farm {
     }
   }
 
+  /** at most 40 standing and 8 faded at each pace: those with the least behind them go first */
   private prune() {
-    // at most 60 kept: faded ones go first, then the weakest
-    if (this.survivors.length <= 60) return;
-    this.survivors.sort(
-      (a, b) =>
-        Number(a.stage === "faded") - Number(b.stage === "faded") ||
-        b.score - a.score,
-    );
-    this.survivors = this.survivors.slice(0, 60);
-  }
-
-  /** the five best still standing — significant on the unseen data, or proven on fresh data — no two from the same family (pace, strategies, filters) */
-  top(): Survivor[] {
-    return this.pickFive((s) => s.sig || s.stage === "proven");
-  }
-
-  /** the watch list: passed the four checks, not significant, still standing */
-  watch(): Survivor[] {
-    const top = new Set(this.top().map((s) => s.id));
-    return this.pickFive((s) => !top.has(s.id) && !s.sig);
-  }
-
-  private pickFive(ok: (s: Survivor) => boolean): Survivor[] {
-    const rank: Record<Ladder, number> = {
-      proven: 4,
-      proving: 3,
-      incubating: 2,
-      new: 1,
-      faded: 0,
-    };
-    const live = this.survivors
-      .filter((s) => s.stage !== "faded" && ok(s))
-      .sort((a, b) => rank[b.stage] - rank[a.stage] || b.score - a.score);
-    const out: Survivor[] = [];
-    const fam = new Set<string>();
-    for (const s of live) {
-      const k = familyOf(s.flow);
-      if (fam.has(k)) continue;
-      fam.add(k);
-      out.push(s);
-      if (out.length === 5) break;
+    const keep: Survivor[] = [];
+    for (const p of PACES) {
+      const mine = this.survivors.filter((s) => paceIdOf(s.style) === p.id);
+      const order = (a: Survivor, b: Survivor) =>
+        STAGE_RANK[b.stage] - STAGE_RANK[a.stage] ||
+        Number(b.sig) - Number(a.sig) ||
+        b.score - a.score;
+      keep.push(
+        ...mine.filter((s) => s.stage !== "faded").sort(order).slice(0, 40),
+        ...mine
+          .filter((s) => s.stage === "faded")
+          .sort((a, b) => b.foundAt - a.foundAt)
+          .slice(0, 8),
+      );
     }
-    return out;
+    if (keep.length !== this.survivors.length) {
+      const ids = new Set(keep.map((s) => s.id));
+      this.survivors = this.survivors.filter((s) => ids.has(s.id));
+      this.reindex();
+    }
+  }
+
+  /**
+   * The five best still standing at each pace: proven on fresh data first,
+   * then proving, then the rest; significant ahead of not; then by score.
+   *
+   * The lists are worked out on a steady clock (every 20 seconds, or at once
+   * when fresh candles arrive, a stage or a significance changes, or a pace
+   * has fewer than five to show) — not at every bot — and a strategy already
+   * listed keeps its place unless a newcomer is clearly better (15 % on the
+   * score, or further up the ladder). A screen that reshuffles every second
+   * cannot be read.
+   */
+  tops(): PaceBoard[] {
+    const t = this.now();
+    const groups = PACES.filter(
+      (p) =>
+        p.styles.some((x) => this.cfg.styles.includes(x)) ||
+        this.survivors.some((s) => paceIdOf(s.style) === p.id),
+    );
+    const liveOf = (id: string) =>
+      this.survivors.filter(
+        (s) => s.stage !== "faded" && paceIdOf(s.style) === id,
+      );
+    const byId = new Map(this.survivors.map((s) => [s.id, s]));
+    const stale =
+      !this.board ||
+      this.boardDirty ||
+      t - this.board.at >= 20_000 ||
+      t < this.board.at ||
+      groups.some((p) => {
+        const ids = this.board!.ids[p.id] ?? [];
+        return (
+          ids.some((id) => !byId.has(id) || byId.get(id)!.stage === "faded") ||
+          (ids.length < 5 && liveOf(p.id).length > ids.length)
+        );
+      });
+    if (stale) {
+      const ids: Record<string, string[]> = {};
+      for (const p of groups) {
+        const was = new Set(this.board?.ids[p.id] ?? []);
+        const adj = (s: Survivor) => s.score * (was.has(s.id) ? 1.15 : 1);
+        ids[p.id] = liveOf(p.id)
+          .sort(
+            (a, b) =>
+              STAGE_RANK[b.stage] - STAGE_RANK[a.stage] ||
+              Number(b.sig) - Number(a.sig) ||
+              adj(b) - adj(a),
+          )
+          .slice(0, 5)
+          .map((s) => s.id);
+      }
+      this.board = { at: t, ids };
+      this.boardDirty = false;
+    }
+    return groups.map((p) => ({
+      id: p.id,
+      name: p.name,
+      rows: (this.board!.ids[p.id] ?? [])
+        .map((id) => byId.get(id))
+        .filter((s): s is Survivor => !!s),
+      held: this.survivors.filter((s) => paceIdOf(s.style) === p.id).length,
+      live: liveOf(p.id).length,
+    }));
+  }
+
+  /** the five best over every pace (the research strip, and what a fading deployed strategy is replaced with) */
+  top(): Survivor[] {
+    return this.tops()
+      .flatMap((p) => p.rows)
+      .sort(
+        (a, b) =>
+          STAGE_RANK[b.stage] - STAGE_RANK[a.stage] ||
+          Number(b.sig) - Number(a.sig) ||
+          b.score - a.score,
+      )
+      .slice(0, 5);
+  }
+
+  /** (the watch list is now part of each pace's top five, marked as candidates) */
+  watch(): Survivor[] {
+    return [];
   }
 
   /**
@@ -1729,8 +2026,13 @@ export class Farm {
    * chosen on that same stretch, so its numbers flatter it a little; the
    * forward test is the judge.
    */
-  team(): Team | null {
-    if (this.teamCache) return this.teamCache;
+  team(fresh = false): Team | null {
+    // worked out at most once a minute (and when fresh candles arrive): its members should not change by the second
+    const t = this.now();
+    if (!fresh && this.teamAt && t - this.teamAt < 60_000 && t >= this.teamAt)
+      return this.teamCache;
+    this.teamAt = t || 1;
+    this.teamCache = null;
     const live = this.survivors
       .filter((s) => s.stage !== "faded" && s.daily && s.daily.r.length >= 45)
       .sort((a, b) => b.score - a.score)
@@ -1886,7 +2188,10 @@ export class Farm {
       gen: this.gen,
       tried: this.tried,
       rate: this.rate(),
-      population: this.pop.length,
+      population: [...this.islands.values()].reduce(
+        (a, i) => a + i.pop.length,
+        0,
+      ),
       funnel: { ...this.funnel },
       ladder,
       top: this.top(),
@@ -1899,6 +2204,9 @@ export class Farm {
       note,
       error,
       entrants: this.funnel.trained,
+      kinds: Math.max(this.entered.size, this.kindsFloor),
+      dupes: this.dupes,
+      tops: this.tops(),
       pbo: this.overfit(),
       niches: this.archive.size,
       blocks: this.blocks(),
@@ -1908,13 +2216,15 @@ export class Farm {
 
   save(): FarmSave {
     return {
-      v: 2,
+      v: 3,
       cfg: this.cfg,
       gen: this.gen,
       tried: this.tried,
       funnel: { ...this.funnel },
       survivors: this.survivors,
-      population: this.pop.map((x) => x.flow),
+      population: [...this.islands.values()].flatMap((i) =>
+        i.pop.map((x) => x.flow),
+      ),
       seen: [...this.seen.keys()].slice(-5000),
       startedAt: this.startedAt,
       recent: this.recent,
@@ -1925,6 +2235,10 @@ export class Farm {
         .sort((a, b) => b.fit - a.fit)
         .slice(0, 80),
       pbo: this.pboHist,
+      burned: [...this.burned].slice(-20_000),
+      entered: [...this.entered].slice(-50_000),
+      dupes: this.dupes,
+      kindsFloor: this.kindsFloor,
     };
   }
 
@@ -1932,16 +2246,44 @@ export class Farm {
     this.gen = s.gen;
     this.tried = s.tried;
     this.funnel = { ...this.funnel, ...s.funnel };
-    this.survivors = s.survivors ?? [];
-    this.pop = (s.population ?? []).map((flow) => ({
-      flow,
-      key: keyOf(flow),
-      fit: NaN,
-      done: false,
-    }));
+    // one survivor of a kind: of the copies an earlier version kept, the one with the most behind it stays
+    const best = new Map<string, Survivor>();
+    for (const x of [...(s.survivors ?? [])].sort(
+      (a, b) =>
+        STAGE_RANK[b.stage] - STAGE_RANK[a.stage] ||
+        (b.forward?.trades ?? 0) - (a.forward?.trades ?? 0) ||
+        b.score - a.score,
+    )) {
+      const k = kindOf(x.flow);
+      if (!best.has(k)) best.set(k, x);
+    }
+    this.survivors = [...best.values()];
+    this.reindex();
+    for (const flow of s.population ?? []) {
+      if (!STYLE_MAP[flow?.style]) continue;
+      let isl = this.islands.get(flow.style);
+      if (!isl) {
+        isl = { style: flow.style, pop: [], cursor: 0, best: -Infinity, stale: 0 };
+        this.islands.set(flow.style, isl);
+      }
+      if (isl.pop.length < 40)
+        isl.pop.push({ flow, key: keyOf(flow), fit: NaN, done: false });
+    }
     for (const k of s.seen ?? []) this.seen.set(k, NaN);
     // the population's own bots are trained again (their scores were not saved)
-    for (const x of this.pop) this.seen.delete(x.key);
+    for (const isl of this.islands.values())
+      for (const x of isl.pop) this.seen.delete(x.key);
+    for (const k of s.burned ?? []) this.burned.add(k);
+    for (const k of s.entered ?? []) this.entered.add(k);
+    // a save from before kinds were counted: the kinds it is known to have tried
+    this.kindsFloor = s.kindsFloor ?? 0;
+    if (!s.entered) {
+      this.kindsFloor = Math.min(2000, s.funnel?.trained ?? 0);
+      for (const x of this.survivors) this.entered.add(kindOf(x.flow));
+      for (const a of s.archive ?? []) if (a?.flow) this.entered.add(kindOf(a.flow));
+    }
+    for (const x of this.survivors) if (x.stage === "faded") this.burn(x.flow);
+    this.dupes = s.dupes ?? 0;
     this.startedAt = s.startedAt ?? this.startedAt;
     this.recent = s.recent ?? [];
     for (const [k, v] of Object.entries(s.stats ?? {}))
@@ -1989,7 +2331,14 @@ export function scoreOf(
   return v;
 }
 
+/** a survivor's vault result in words */
+const vaultWords = (s: Survivor) =>
+  s.vault && s.vault.trades
+    ? `${s.vault.ret >= 0 ? "+" : ""}${(s.vault.ret * 100).toFixed(1)} % over ${s.vault.trades} trade${s.vault.trades === 1 ? "" : "s"} in the vault`
+    : "no trades in the vault yet";
+
 export const farmKey = keyOf;
+export const farmKind = kindOf;
 export const farmNiche = nicheOf;
 
 /** a bar-by-bar return series as one return a day (UTC), for comparing strategies of different paces */
