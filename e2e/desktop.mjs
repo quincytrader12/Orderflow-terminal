@@ -287,7 +287,9 @@ try {
   expect((await page.locator('[data-farm] [data-status] > div').count()) === 4, 'a status strip at the top: the engine, its data, what is standing, the search');
   await page.click('[data-farm] button:has-text("Settings")');
   await page.fill('.farm-settings input', 'BTC');
-  for (const id of ['swing', 'position']) if (await page.locator(`.farm-settings [data-style="${id}"].active`).count()) await page.click(`.farm-settings [data-style="${id}"]`);
+  // the 1- and 5-minute scalping paces are on by default: this run has seeded only hourly and 15-minute candles
+  expect((await page.locator('.farm-settings [data-style="scalp1"].active').count()) === 1 && (await page.locator('.farm-settings [data-style="scalp5"].active').count()) === 1, 'the 1- and 5-minute scalping paces are bred by default');
+  for (const id of ['swing', 'position', 'scalp1', 'scalp5']) if (await page.locator(`.farm-settings [data-style="${id}"].active`).count()) await page.click(`.farm-settings [data-style="${id}"]`);
   if (!(await page.locator('.farm-settings [data-style="intraday"].active').count())) await page.click('.farm-settings [data-style="intraday"]');
   await page.click('.farm-settings .chip:has-text("Full")');
   await page.click('.farm-settings button:has-text("Apply and run")');
