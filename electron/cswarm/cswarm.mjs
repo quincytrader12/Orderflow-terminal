@@ -22,6 +22,7 @@ import { AmtEngine, INTRADAY_PRESET } from '../amt/engine.mjs';
 import { AGENT_NAME, CCOUNCIL_DEFAULTS, councilR, dirOf, features, MARK, oddsR, PROPOSERS, rClass, trainForest } from './brain.mjs';
 import { newBook, recordClose, RISK_DEFAULTS, riskGate, shiftBook, sizeTrade, updateBook } from './risk.mjs';
 import { atrOf, dailyTrendOf, manageTrend, Shadow, TREND_AGENT_DEFAULTS, trendCandidate } from './agents.mjs';
+import { entryStyle, MicroWatch } from './micro.mjs';
 import { liveDirection, liveMarket, liveSignal, manageLab, specNeeds } from '../../src/lab/live.ts';
 import { alignFunding } from '../lab/lab.mjs';
 
@@ -37,6 +38,14 @@ export const CSWARM_DEFAULTS = {
   /** taker fee and slippage per side, bps (Hyperliquid base tier: 4.5 bps taker) */
   feeBps: 4.5,
   slippageBps: 2,
+  /** the fee for an order that rests in the book and is filled there (Hyperliquid base tier: 1.5 bps maker) */
+  makerFeeBps: 1.5,
+  /**
+   * Smarter entries: rest at the best bid (or offer) for a maker fill, timed by the order book;
+   * not filled within waitMs, the price is taken if it has moved no more than chaseBps — further,
+   * the entry is skipped (chasing would cost more than the edge). Exits are never delayed.
+   */
+  entry: { maker: true, waitMs: 5000, chaseBps: 5 },
   risk: { ...RISK_DEFAULTS },
   council: { ...CCOUNCIL_DEFAULTS },
 };
@@ -48,6 +57,7 @@ export function mergeCfg(p = {}) {
   delete c.agents.scalper;
   c.risk = { ...RISK_DEFAULTS, ...(p?.risk ?? {}) };
   c.council = { ...CCOUNCIL_DEFAULTS, ...(p?.council ?? {}) };
+  c.entry = { ...CSWARM_DEFAULTS.entry, ...(p?.entry ?? {}) };
   c.coins = Array.isArray(p?.coins) && p.coins.length ? p.coins.map((x) => String(x).toUpperCase().trim()).filter(Boolean).slice(0, 8) : CSWARM_DEFAULTS.coins;
   return c;
 }
@@ -56,6 +66,8 @@ export function mergeCfg(p = {}) {
 const isUsdish = (c) => !c || /^(USD|USDC|USDT)$/i.test(String(c));
 export const symbolFor = (coin, exchangeId = 'hyperliquid') => (exchangeId === 'hyperliquid' ? `${coin}/USDC:USDC` : `${coin}/USDT:USDT`);
 const tidy = (v) => (Number.isFinite(v) ? Number(v.toPrecision(6)) : v);
+/** an entry not taken on purpose (the price ran away while waiting at the bid): said, not an error */
+const skipped = (why) => Object.assign(new Error(why), { skip: true });
 const usd = (v) => `${v < 0 ? '−' : ''}$${Math.abs(v).toFixed(2)}`;
 
 export class CryptoSwarm {
@@ -64,8 +76,10 @@ export class CryptoSwarm {
    * @param o.db { get(key), set(key, value) }
    * @param o.emit (channel, payload) => void — 'state' and 'event' to the app
    */
-  constructor({ ccxt, db, emit = () => {}, now = Date.now, log = () => {}, labDeployed = () => [], onClosed = () => {} }) {
+  constructor({ ccxt, db, emit = () => {}, now = Date.now, log = () => {}, labDeployed = () => [], onClosed = () => {}, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
     this.ccxt = ccxt;
+    /** waiting for a resting entry to fill (tests pass their own) */
+    this.sleep = sleep;
     /** each closed position, for the trade journal */
     this.onClosed = onClosed;
     /** the Strategy Lab's strategies deployed into this swarm */
@@ -137,7 +151,7 @@ export class CryptoSwarm {
 
   setConfig(patch) {
     if (this.running) throw new Error('stop the crypto swarm before changing its settings');
-    this.cfg = mergeCfg({ ...this.cfg, ...patch, agents: { ...this.cfg.agents, ...(patch?.agents ?? {}) }, risk: { ...this.cfg.risk, ...(patch?.risk ?? {}) }, council: { ...this.cfg.council, ...(patch?.council ?? {}) } });
+    this.cfg = mergeCfg({ ...this.cfg, ...patch, agents: { ...this.cfg.agents, ...(patch?.agents ?? {}) }, risk: { ...this.cfg.risk, ...(patch?.risk ?? {}) }, council: { ...this.cfg.council, ...(patch?.council ?? {}) }, entry: { ...this.cfg.entry, ...(patch?.entry ?? {}) } });
     this.db.set('cswarm:cfg', this.cfg);
     this.pushState(true);
     return this.cfg;
@@ -207,7 +221,7 @@ export class CryptoSwarm {
 
   setupCoin(coin) {
     const c = this.cfg;
-    const cs = { coin, symbol: symbolFor(coin, c.exchangeId), sid: `cswarm-${coin}`, price: NaN, funding: null, daily: null, dailyAt: 0, hourly: [], hourlyAt: 0, lastBar: 0, lab: {}, labLast: {}, engines: {}, busy: false, feed: 'connecting', feedError: null };
+    const cs = { coin, symbol: symbolFor(coin, c.exchangeId), sid: `cswarm-${coin}`, price: NaN, funding: null, daily: null, dailyAt: 0, hourly: [], hourlyAt: 0, lastBar: 0, lab: {}, labLast: {}, engines: {}, busy: false, feed: 'connecting', feedError: null, micro: new MicroWatch() };
     const eq = this.equity() > 0 ? this.equity() : c.paperStartUsd;
     for (const agent of ['auction']) {
       if (!c.agents[agent]) continue;
@@ -234,6 +248,10 @@ export class CryptoSwarm {
       if (Number.isFinite(m.stats?.fundingRate)) cs.funding = m.stats.fundingRate;
       return;
     }
+    // the Microstructure agent's own view of the last seconds
+    if (m.kind === 'book') cs.micro.onBook(m.bids, m.asks, cs.micro.lastT || this.now());
+    else if (m.kind === 'liquidations') cs.micro.onLiquidations(m.items);
+    else if (m.kind === 'trades') for (const t of m.trades) cs.micro.onTrade(t);
     for (const [agent, e] of Object.entries(cs.engines)) {
       if (m.kind === 'book') e.onBook(m.bids, m.asks);
       else if (m.kind === 'liquidations') e.onLiquidations(m.items);
@@ -508,6 +526,7 @@ export class CryptoSwarm {
       volBps,
       va: e?.sessionVa ?? e?.va ?? null,
       agentWin: mine.length >= 5 ? mine.filter((p) => p.pnl > 0).length / mine.length : 0.5,
+      micro: cs.micro ? cs.micro.read(cs.micro.lastT || this.now()) : null,
     };
   }
 
@@ -602,23 +621,24 @@ export class CryptoSwarm {
         e?.filled({ price: pos.entry, qty: pos.qty, fee: pos.fees });
         this.positions.push(pos);
         this.positions = this.positions.slice(-400);
-        this.say(agent, `${coin}: ${pos.side === 'buy' ? 'LONG' : 'SHORT'} ${tidy(pos.qty)} @ ${tidy(pos.entry)} — stop ${tidy(pos.stop)}, target ${tidy(pos.target)}, risking ${usd(pos.riskUsd)} to make ${usd(this.potential(pos))}`, 'trade');
+        this.say(agent, `${coin}: ${pos.side === 'buy' ? 'LONG' : 'SHORT'} ${tidy(pos.qty)} @ ${tidy(pos.entry)} — stop ${tidy(pos.stop)}, target ${tidy(pos.target)}, risking ${usd(pos.riskUsd)} to make ${usd(this.potential(pos))}${pos.entryHow ? ` · ${pos.entryHow}` : ''}`, 'trade');
         this.notify('setup', pos);
         this.persist();
       })
       .catch((err) => {
         cs.busy = false;
         this.inFlight = false;
-        e?.failed(err);
-        this.say('risk', `${coin}: entry order failed — ${err?.message ?? err}`, 'error');
+        e?.failed(err?.skip ? 'entry skipped' : err);
+        if (err?.skip) this.say(agent, `${coin}: entry skipped — ${err.message}`, 'pass');
+        else this.say('risk', `${coin}: entry order failed — ${err?.message ?? err}`, 'error');
       });
   }
 
   /** The fill: the stop and target stay at their levels (structure, not distance); the risk is re-measured from the fill. */
-  filledAt(pos, fill) {
+  filledAt(pos, fill, feeBps = this.cfg.feeBps) {
     pos.entry = fill;
     pos.notional = fill * pos.qty;
-    pos.fees = (pos.notional * this.cfg.feeBps) / 1e4;
+    pos.fees = (pos.notional * feeBps) / 1e4;
     pos.risk = Math.abs(fill - pos.stop) || pos.risk;
     pos.riskUsd = pos.risk * pos.qty;
   }
@@ -629,12 +649,83 @@ export class CryptoSwarm {
     return gross - pos.notional * (2 * this.cfg.feeBps) / 1e4;
   }
 
+  /**
+   * How to enter (smarter entries): rest at the best bid (offer) for a maker fill, or take the
+   * price now — when there is no book to time it, when the book and tape are pushing hard its way
+   * (a resting order would be left behind), or when the best price is already past the stop.
+   */
+  entryPlan(cs, pos) {
+    const e = this.cfg.entry;
+    const top = cs?.micro?.top();
+    if (!e?.maker || !top) return { take: true, why: '' };
+    const dir = dirOf(pos.side);
+    const st = entryStyle(cs.micro.read(cs.micro.lastT || this.now()), dir);
+    if (st.take) return { take: true, why: st.why };
+    const price = dir > 0 ? top.bid : top.ask;
+    if (!(price > 0) || (price - pos.stop) * dir <= 0) return { take: true, why: '' };
+    return { take: false, price, why: st.why };
+  }
+
+  /** what an entry saved: the maker fee against the taker fee and the slippage, in bps */
+  makerSaving() {
+    const c = this.cfg;
+    return (c.feeBps + c.slippageBps - c.makerFeeBps).toFixed(1);
+  }
+
   openPaper(pos) {
     const c = this.cfg;
     const dir = dirOf(pos.side);
     pos.askEntry = pos.entry;
-    this.filledAt(pos, pos.entry * (1 + (dir * c.slippageBps) / 1e4));
-    this.paper.cash -= pos.fees;
+    const cs = this.coins.get(pos.coin);
+    const plan = this.entryPlan(cs, pos);
+    const taker = (why) => {
+      this.filledAt(pos, pos.entry * (1 + (dir * c.slippageBps) / 1e4));
+      this.paper.cash -= pos.fees;
+      if (why) pos.entryHow = why;
+    };
+    if (plan.take) return taker(plan.why);
+    // resting at the best price: filled only if trades print through it while it waits (the queue ahead is cleared)
+    return (async () => {
+      const from = cs.micro.lastT;
+      await this.sleep(c.entry.waitMs);
+      const { lo, hi } = cs.micro.rangeSince(from + 1);
+      if (dir > 0 ? lo < plan.price : hi > plan.price) {
+        this.filledAt(pos, plan.price, c.makerFeeBps);
+        this.paper.cash -= pos.fees;
+        pos.entryHow = `filled resting at the ${dir > 0 ? 'bid' : 'offer'} (maker) — about ${this.makerSaving()} bps cheaper than taking it`;
+        return;
+      }
+      const now = cs.price > 0 ? cs.price : plan.price;
+      const moved = (((now - plan.price) * dir) / plan.price) * 1e4;
+      if (moved > c.entry.chaseBps) throw skipped(`the price moved ${moved.toFixed(1)} bps away while it waited at ${tidy(plan.price)} — chasing would cost more than the edge`);
+      pos.entry = now;
+      taker(`not filled resting at ${tidy(plan.price)} within ${c.entry.waitMs / 1000} s — taken at the price`);
+    })();
+  }
+
+  /** Live, resting: a post-only limit at the best price, watched for a few seconds, cancelled if not filled. */
+  async liveMaker(pos, plan) {
+    const c = this.cfg;
+    let r;
+    try {
+      r = await this.ccxt.placeOrder(this.secretId, { symbol: pos.symbol, side: pos.side, type: 'limit', sizeMode: 'base', size: pos.qty, price: plan.price, postOnly: true });
+    } catch (err) {
+      return { filled: 0, amount: 0, avg: plan.price, note: `resting order refused (${err?.message ?? err})` };
+    }
+    const per = r.baseQty && r.amount ? r.baseQty / r.amount : 1;
+    let st = null;
+    const done = (x) => x && (x.status === 'closed' || x.filled >= (r.amount ?? 0) * 0.999);
+    for (let i = 0; i < Math.ceil(c.entry.waitMs / 1000); i++) {
+      await this.sleep(1000);
+      st = await this.ccxt.orderStatus(this.secretId, r.id, pos.symbol).catch(() => st);
+      if (done(st)) break;
+    }
+    if (!done(st)) {
+      await this.ccxt.cancelOrder(this.secretId, r.id, pos.symbol).catch(() => undefined);
+      st = await this.ccxt.orderStatus(this.secretId, r.id, pos.symbol).catch(() => st);
+    }
+    const amount = st?.filled ?? 0;
+    return { filled: amount * per, amount, avg: st?.average > 0 ? st.average : plan.price };
   }
 
   async openLive(pos) {
@@ -642,15 +733,59 @@ export class CryptoSwarm {
     const dir = dirOf(pos.side);
     // the price the decision was made at: the gap to the fill is the real slippage (the journal measures it)
     pos.askEntry = pos.entry;
-    const r = await this.ccxt.placeOrder(this.secretId, { symbol: pos.symbol, side: pos.side, type: 'market', sizeMode: 'base', size: pos.qty });
-    pos.qty = r.baseQty ?? pos.qty;
-    pos.amount = r.amount ?? pos.qty;
-    this.filledAt(pos, r.price ?? pos.entry);
-    pos.fillsReal = r.average !== null && r.average !== undefined;
-    if (r.fee && isUsdish(r.fee.currency)) {
-      pos.fees = r.fee.cost;
-      pos.feeReal = true;
+    const cs = this.coins.get(pos.coin);
+    const plan = this.entryPlan(cs, pos);
+    let qty = 0;
+    let amount = 0;
+    let cost = 0;
+    let fees = 0;
+    let real = true;
+    let how = plan.why;
+    const market = async (size) => {
+      const r = await this.ccxt.placeOrder(this.secretId, { symbol: pos.symbol, side: pos.side, type: 'market', sizeMode: 'base', size });
+      const got = r.baseQty ?? size;
+      qty += got;
+      amount += r.amount ?? got;
+      cost += got * (r.price ?? pos.entry);
+      if (r.fee && isUsdish(r.fee.currency)) fees += r.fee.cost;
+      else {
+        fees += (got * (r.price ?? pos.entry) * c.feeBps) / 1e4;
+        real = false;
+      }
+      pos.fillsReal = r.average !== null && r.average !== undefined;
+    };
+    if (plan.take) await market(pos.qty);
+    else {
+      const m = await this.liveMaker(pos, plan);
+      if (m.filled > 0) {
+        qty += m.filled;
+        amount += m.amount;
+        cost += m.filled * m.avg;
+        fees += (m.filled * m.avg * c.makerFeeBps) / 1e4;
+        real = false;
+      }
+      const left = pos.qty - qty;
+      const px = cs?.price > 0 ? cs.price : plan.price;
+      if (left * px < 1) how = `filled resting at the ${dir > 0 ? 'bid' : 'offer'} (maker) — about ${this.makerSaving()} bps cheaper than taking it`;
+      else {
+        const moved = (((px - plan.price) * dir) / plan.price) * 1e4;
+        if (moved <= c.entry.chaseBps) {
+          await market(left);
+          how = m.filled > 0 ? 'part filled resting at the best price, the rest taken' : `not filled resting at ${tidy(plan.price)} within ${c.entry.waitMs / 1000} s${m.note ? ` (${m.note})` : ''} — taken at the price`;
+        } else if (qty * px >= c.risk.minNotional * 1.02) how = `part filled resting at the best price; the price then moved ${moved.toFixed(1)} bps away and the rest was not chased`;
+        else {
+          // too little to keep (under the exchange's smallest order): closed again, and the entry skipped
+          if (amount > 0) await this.ccxt.placeOrder(this.secretId, { symbol: pos.symbol, side: dir > 0 ? 'sell' : 'buy', type: 'market', sizeMode: 'contracts', size: amount, reduceOnly: true }).catch(() => undefined);
+          throw skipped(`the price moved ${moved.toFixed(1)} bps away while it waited at ${tidy(plan.price)} — chasing would cost more than the edge`);
+        }
+      }
     }
+    pos.qty = qty;
+    pos.amount = amount;
+    this.filledAt(pos, cost / qty);
+    pos.fees = fees;
+    pos.feeReal = real;
+    if (how) pos.entryHow = how;
     this.liveFlow = (this.liveFlow ?? 0) - pos.fees;
     // the exchange-side disaster stop, half a risk unit beyond the swarm's own stop
     pos.stopTrigger = pos.stop - dir * 0.5 * pos.risk;

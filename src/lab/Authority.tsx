@@ -14,7 +14,7 @@ import { useCSwarm } from '../cswarm/store';
 import { desktop, type LabBook } from '../desktop/bridge';
 import type { Authority, LabDeployed } from './store';
 
-const BOT: Record<string, string> = { forest: 'the forest', guardian: 'Guardian', risk: 'Risk', score: 'not enough votes', trend: 'Trend', tape: 'Tape', crowd: 'Crowd' };
+const BOT: Record<string, string> = { forest: 'the forest', guardian: 'Guardian', risk: 'Risk', score: 'not enough votes', trend: 'Trend', tape: 'Tape', micro: 'Micro (timing)', crowd: 'Crowd' };
 const r2 = (x: number) => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(1)}R`;
 
 export function AuthoritySwitch({ d, compact }: { d: LabDeployed; compact?: boolean }) {

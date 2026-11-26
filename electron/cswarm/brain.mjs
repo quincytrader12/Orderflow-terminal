@@ -19,13 +19,14 @@
 //   Guardian     market conditions: a wide spread or a volatility spike is a veto.
 //   Forest       the statistics, learned from every paper, live and shadow trade.
 //   Risk         the compounding risk manager (risk.mjs): a gate is a veto.
+import { microVote } from './micro.mjs';
 import { Forest } from '../../src/cswarm/forest.ts';
 
 export const PROPOSERS = ['auction', 'trend', 'lab'];
 /** each proposer's number as the forest reads it — fixed for good (the retired Scalper keeps 0), so what the forest learned keeps its meaning */
 export const AGENT_INDEX = { scalper: 0, auction: 1, trend: 2, lab: 3 };
-export const COUNCIL = ['auction', 'trend', 'tape', 'crowd', 'guardian', 'forest', 'risk'];
-export const AGENT_NAME = { scalper: 'Scalper', auction: 'Auctioneer', trend: 'Trend', lab: 'Lab', tape: 'Tape', crowd: 'Crowd', guardian: 'Guardian', forest: 'Forest', risk: 'Risk' };
+export const COUNCIL = ['auction', 'trend', 'tape', 'micro', 'crowd', 'guardian', 'forest', 'risk'];
+export const AGENT_NAME = { scalper: 'Scalper', auction: 'Auctioneer', trend: 'Trend', lab: 'Lab', tape: 'Tape', micro: 'Micro', crowd: 'Crowd', guardian: 'Guardian', forest: 'Forest', risk: 'Risk' };
 const COINS = ['BTC', 'ETH', 'SOL'];
 
 export const dirOf = (side) => (side === 'buy' ? 1 : -1);
@@ -166,6 +167,8 @@ export function councilR(inp, cfg = CCOUNCIL_DEFAULTS) {
   else if (flow >= cfg.tapeFor) votes.push({ bot: 'tape', stance: 'for', weight: 1, why: `aggressive flow with it (delta ${flow.toFixed(2)})${bookTxt}` });
   else if (flow <= cfg.tapeAgainst) votes.push({ bot: 'tape', stance: 'against', weight: 1, why: `aggressive flow against it (delta ${flow.toFixed(2)})${bookTxt}` });
   else votes.push({ bot: 'tape', stance: 'abstain', weight: 0, why: `flow mixed (delta ${flow.toFixed(2)})${bookTxt}` });
+  // the microstructure: the last seconds of the book, the tape and the forced orders — on timing only
+  votes.push({ bot: 'micro', ...microVote(x.micro, dir) });
   // the crowd
   if (!Number.isFinite(x.funding)) votes.push({ bot: 'crowd', stance: 'abstain', weight: 0, why: 'no funding read' });
   else {

@@ -26,9 +26,9 @@ export const LAB_DEFAULTS = {
   meta: true,
   funding: true,
 };
-export const TF_H = { '15m': 0.25, '1h': 1, '4h': 4, '1d': 24 };
+export const TF_H = { '1m': 1 / 60, '15m': 0.25, '1h': 1, '4h': 4, '1d': 24 };
 /** the most history worth downloading per timeframe, in years (a year of 15-minute candles is 35,000 of them) */
-export const MAX_YEARS = { '15m': 1 };
+export const MAX_YEARS = { '1m': 30 / 365, '15m': 1 };
 /**
  * The edge finder reads more history for its slow paces than a single test needs: a swing or
  * position strategy trades a few times a month, and only years of candles give it enough trades

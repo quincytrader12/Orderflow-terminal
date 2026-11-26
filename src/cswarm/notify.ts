@@ -11,7 +11,7 @@ import { getSettings } from '../store/settings';
 import { alertHere } from '../alerts/here';
 
 const MARK = { for: '✓', against: '✗', abstain: '–', veto: '⛔' } as const;
-const NAME: Record<string, string> = { scalper: 'Scalper', auction: 'Auctioneer', trend: 'Trend', tape: 'Tape', crowd: 'Crowd', guardian: 'Guardian', forest: 'Forest', risk: 'Risk' };
+const NAME: Record<string, string> = { scalper: 'Scalper', auction: 'Auctioneer', trend: 'Trend', tape: 'Tape', micro: 'Micro', crowd: 'Crowd', guardian: 'Guardian', forest: 'Forest', risk: 'Risk' };
 
 export const px = (p: number | null | undefined) => {
   if (p === null || p === undefined || !Number.isFinite(p)) return '—';

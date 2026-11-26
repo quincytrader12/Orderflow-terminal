@@ -124,7 +124,7 @@ export const VAULT = 0.15;
 
 /** the paces a top five is kept for, and the bot builder's styles in each */
 export const PACES: { id: string; name: string; styles: StyleId[] }[] = [
-  { id: "scalp", name: "Scalping", styles: ["scalp15", "scalp"] },
+  { id: "scalp", name: "Scalping", styles: ["scalp1", "scalp15", "scalp"] },
   { id: "intraday", name: "Intraday", styles: ["intraday15", "intraday"] },
   { id: "swing", name: "Swing", styles: ["swing", "week"] },
   { id: "position", name: "Position", styles: ["position", "hold"] },

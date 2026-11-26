@@ -33,7 +33,7 @@ import { Core3D, webglAvailable } from './core3d';
 
 const reduced = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 const usd = (x: number, d = 2) => `${x >= 0 ? '+' : '−'}${fmtUsd(Math.abs(x), d)}`;
-const AGENT: Record<string, string> = { scalper: 'Scalper', auction: 'Auctioneer', trend: 'Trend', lab: 'Lab', tape: 'Tape', crowd: 'Crowd', guardian: 'Guardian', forest: 'Forest', risk: 'Risk', swarm: 'Swarm', council: 'Council' };
+const AGENT: Record<string, string> = { scalper: 'Scalper', auction: 'Auctioneer', trend: 'Trend', lab: 'Lab', tape: 'Tape', micro: 'Micro', crowd: 'Crowd', guardian: 'Guardian', forest: 'Forest', risk: 'Risk', swarm: 'Swarm', council: 'Council' };
 
 /** A number that glides to its new value. */
 function Num({ value, format }: { value: number; format: (v: number) => string }) {
@@ -750,7 +750,7 @@ export function CommandCenter() {
       <section className="cc-core cc-card" aria-label="Swarm core">
         <CoreView key={theme} input={input} onSelect={setPick} />
         <div className="cc-core-agents">
-          {(['auction', 'trend', 'lab', 'tape', 'crowd', 'guardian', 'forest', 'risk'] as const).map((a) => (
+          {(['auction', 'trend', 'lab', 'tape', 'micro', 'crowd', 'guardian', 'forest', 'risk'] as const).map((a) => (
             <span key={a} className={`cc-agent ${st.running && (a !== 'lab' || depOn.length) ? 'on' : ''}`}>
               <i /> {AGENT[a]}
             </span>

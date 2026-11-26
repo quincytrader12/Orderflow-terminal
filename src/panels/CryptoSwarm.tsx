@@ -297,6 +297,18 @@ function Rules({ st, busy, run }: { st: CSwarmState; busy: string; run: (w: stri
       {row('Pause after', <NumberInput value={r.lossStreak} onChange={(lossStreak) => save({ risk: { lossStreak: Math.max(0, Math.round(lossStreak)) } })} min={0} step={1} suffix="losses" />, `in a row, for ${r.pauseMin} minutes (0 = off)`)}
       {row('Account floor', <NumberInput value={Math.round(r.floorShare * 100)} onChange={(v) => save({ risk: { floorShare: v / 100 } })} min={10} step={5} suffix="% of start" />, `stops trading under it; once the account reaches ${r.lockAt}× its start, the floor rises to ${Math.round(r.lockShare * 100)}% of its high — profits are locked in`)}
       {row('Edge sizing', <NumberInput value={Math.round(r.kellyShare * 100)} onChange={(v) => save({ risk: { kellyShare: v / 100 } })} min={0} step={5} suffix="% Kelly" />, `after ${r.minTrades} closed trades, size follows the record (between half and 1.5× the normal risk)`)}
+      <div className="section-title">Entries — smarter fills</div>
+      {(() => {
+        const en = c.entry ?? { maker: true, waitMs: 5000, chaseBps: 5 };
+        const set = (p: Partial<typeof en>) => save({ entry: { ...en, ...p } });
+        return (
+          <>
+            {row('Rest at the best price first', <input type="checkbox" checked={en.maker} onChange={(e) => set({ maker: e.target.checked })} />, `an entry waits at the best bid (or offer) for a maker fill — ${c.makerFeeBps ?? 1.5} bps instead of ${c.feeBps} bps plus slippage — unless the order book and the tape are pushing hard its way (then it takes the price at once). Stops and exits are never delayed`)}
+            {row('Wait for a fill', <NumberInput value={en.waitMs / 1000} onChange={(v) => set({ waitMs: Math.max(1, Math.min(30, v)) * 1000 })} min={1} step={1} suffix="s" />, 'not filled by then: the resting order is cancelled')}
+            {row('Chase at most', <NumberInput value={en.chaseBps} onChange={(chaseBps) => set({ chaseBps: Math.max(0, chaseBps) })} min={0} step={1} suffix="bps" />, 'if the price has moved further than this from where it waited, the trade is skipped — chasing would cost more than the edge')}
+          </>
+        );
+      })()}
       <div className="section-title">Paper account</div>
       {row('Paper start', <NumberInput value={c.paperStartUsd} onChange={(paperStartUsd) => save({ paperStartUsd })} min={10} step={10} suffix="USDC" />, 'what the paper account starts with (about R500 ≈ $27–30)')}
       <div className="swarm-rule">

@@ -237,7 +237,11 @@ export function signalOf(c: Ctx, s: StrategySpec): Int8Array {
  * Run a strategy over bars [from, to). `gate(i, side)` (optional) can veto an
  * entry signalled at bar i — the meta-labeller's hook.
  */
-export function backtest(c: Ctx, s: StrategySpec, from: number, to: number, costs: Costs = COSTS, gate?: (i: number, side: 1 | -1) => boolean, sigIn?: Int8Array): BTResult {
+/** what trading on these candles really costs: on 1-minute candles slippage counts double (a minute's move is small next to the spread, and fills come later than the candle says) */
+export const costsFor = (tfH: number, costs: Costs): Costs => (tfH < 0.1 ? { ...costs, slipBps: costs.slipBps * 2 } : costs);
+
+export function backtest(c: Ctx, s: StrategySpec, from: number, to: number, costs0: Costs = COSTS, gate?: (i: number, side: 1 | -1) => boolean, sigIn?: Int8Array): BTResult {
+  const costs = costsFor(c.m.tfH, costs0);
   beat();
   const b = c.m.bars;
   const sig = sigIn ?? signalOf(c, s);

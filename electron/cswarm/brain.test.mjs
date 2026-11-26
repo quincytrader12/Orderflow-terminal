@@ -92,7 +92,7 @@ describe('crypto swarm brain', () => {
   it('the council: proposer and risk carry a clean trade; the tape against it or a veto stops it', () => {
     const go = councilR({ cand: cand(), odds: oddsOk, riskGate: null, sizeNote: 'risking 1% ($0.30)' });
     expect(go.trade).toBe(true);
-    expect(go.votes.map((v) => v.bot)).toEqual(['auction', 'trend', 'tape', 'crowd', 'guardian', 'forest', 'risk']);
+    expect(go.votes.map((v) => v.bot)).toEqual(['auction', 'trend', 'tape', 'micro', 'crowd', 'guardian', 'forest', 'risk']);
     const tapeAgainst = councilR({ cand: cand({ ctx: { ...cand().ctx, flow: { deltaRatio: -0.5 }, daily: null } }), odds: { ...oddsOk, expR: 0.05 }, riskGate: null, sizeNote: '' });
     expect(tapeAgainst.trade).toBe(false);
     expect(councilR({ cand: cand({ ctx: { ...cand().ctx, book: { imbalance: 0, spreadBps: 20 } } }), odds: oddsOk, riskGate: null, sizeNote: '' }).summary).toBe('vetoed by Guardian');

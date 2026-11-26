@@ -22,14 +22,14 @@
 import { regimeSide, type Combine, type RuleRef, type Sizing, type StrategySpec } from './backtest';
 import { EXIT_DEFAULT, FILTER_MAP, SIGNAL_MAP, type Family, type Params } from './library';
 
-export type StyleId = 'scalp15' | 'intraday15' | 'scalp' | 'intraday' | 'swing' | 'week' | 'position' | 'hold';
+export type StyleId = 'scalp1' | 'scalp15' | 'intraday15' | 'scalp' | 'intraday' | 'swing' | 'week' | 'position' | 'hold';
 
 export interface Style {
   id: StyleId;
   name: string;
   /** what it means, in one line */
   plain: string;
-  timeframe: '15m' | '1h' | '4h' | '1d';
+  timeframe: '1m' | '15m' | '1h' | '4h' | '1d';
   tfH: number;
   /** the style whose picks suit this one too (the 15-minute styles take the hourly ones' advice) */
   like?: StyleId;
@@ -46,6 +46,7 @@ export interface Style {
 }
 
 export const STYLES: Style[] = [
+  { id: 'scalp1', name: 'Scalping — 1-minute candles, minutes', plain: 'The fastest pace: trades over within minutes on 1-minute candles, built on the same rules as the other paces.', timeframe: '1m', tfH: 1 / 60, years: 30 / 365, L: 15, holdH: 0.5, stop: 1.5, like: 'scalp15', note: 'Thirty days of 1-minute candles (43,000). Costs decide everything at this speed: every test charges double slippage on top of the fees, and the signal is only acted on at the next candle — the edge has to survive that.' },
   { id: 'scalp15', name: 'Scalping — 15-minute candles, minutes to hours', plain: 'The fastest the Lab trades: many trades a day on 15-minute candles, each over within a couple of hours.', timeframe: '15m', tfH: 0.25, years: 0.5, L: 3, holdH: 2, stop: 1.5, like: 'scalp', note: 'Six months of history (17,000 candles). At this speed fees and slippage take a large share of every trade — the test counts them, and many ideas that look good on a chart do not survive them.' },
   { id: 'intraday15', name: 'Intraday — 15-minute candles, closed within a day', plain: 'Several trades a day on 15-minute candles, none held overnight.', timeframe: '15m', tfH: 0.25, years: 1, L: 8, holdH: 12, stop: 2, like: 'intraday', note: 'A year of history (35,000 candles): the first test downloads it, later ones reuse it.' },
   { id: 'scalp', name: 'Scalping — quick trades, hours', plain: 'Many quick trades, in and out within a few hours, small moves.', timeframe: '1h', tfH: 1, years: 1, L: 12, holdH: 6, stop: 1.5, note: 'On 1-hour candles: scalping over hours. For faster trading choose a 15-minute style.' },
@@ -70,8 +71,8 @@ export interface Option {
 }
 
 const fast = (s: Style) => s.L <= 24;
-/** a floor on a look-back (written for hourly candles), a quarter as long on 15-minute ones */
-const fl = (s: Style, hours: number) => (s.tfH < 1 ? hours / 4 : hours);
+/** a floor on a look-back (written for hourly candles), a quarter as long on 15-minute ones; on 1-minute candles the same count of candles (20 → 20 minutes) */
+const fl = (s: Style, hours: number) => (s.tfH < 0.1 ? hours : s.tfH < 1 ? hours / 4 : hours);
 const slow = (s: Style) => s.L >= 720;
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
 

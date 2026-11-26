@@ -599,6 +599,10 @@ export interface CSwarmConfig {
   paperStartUsd: number;
   feeBps: number;
   slippageBps: number;
+  /** the fee for an order that rests in the book (maker) */
+  makerFeeBps?: number;
+  /** smarter entries: rest at the best price first, wait this long, chase no further than this */
+  entry?: { maker: boolean; waitMs: number; chaseBps: number };
   risk: CSwarmRisk;
   council: Record<string, number>;
 }
@@ -789,7 +793,7 @@ export interface NovusApi {
     /** the optimizer: versions of a strategy measured inside the training years (never on the unseen data) */
     optimize?(specs: { id: string; spec: StrategySpec }[], patch?: Partial<LabConfig>): Promise<VariantScore[]>;
     /** candles from the Lab's history cache (topped up from the exchange): up to three years */
-    bars?(coin: string, tf: '15m' | '1h' | '4h' | '1d', years: number): Promise<{ bars: { time: number; open: number; high: number; low: number; close: number; volume: number }[]; source: string }>;
+    bars?(coin: string, tf: '1m' | '15m' | '1h' | '4h' | '1d', years: number): Promise<{ bars: { time: number; open: number; high: number; low: number; close: number; volume: number }[]; source: string }>;
     deploy(args: { rank?: number; spec?: StrategySpec; tfH?: number; stats?: LabDeployed['stats']; authority?: Authority }, targets?: { crypto: boolean; meme: boolean }, coins?: string[]): Promise<string>;
     undeploy(id: string): Promise<void>;
     toggle(id: string, on: boolean): Promise<void>;
