@@ -528,6 +528,10 @@ export interface CSwarmVote {
 }
 export interface CSwarmPosition {
   id: string;
+  /** how it was entered (smarter entries): a maker fill, taken at the price, part filled */
+  entryHow?: string;
+  /** when Micro held the entry for better timing, and what came of it */
+  heldHow?: string;
   mode: 'paper' | 'live';
   coin: string;
   symbol: string;
@@ -602,7 +606,7 @@ export interface CSwarmConfig {
   /** the fee for an order that rests in the book (maker) */
   makerFeeBps?: number;
   /** smarter entries: rest at the best price first, wait this long, chase no further than this */
-  entry?: { maker: boolean; waitMs: number; chaseBps: number };
+  entry?: { maker: boolean; waitMs: number; chaseBps: number; holdSec?: number };
   risk: CSwarmRisk;
   council: Record<string, number>;
 }

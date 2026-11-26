@@ -22,7 +22,7 @@ import { AmtEngine, INTRADAY_PRESET } from '../amt/engine.mjs';
 import { AGENT_NAME, CCOUNCIL_DEFAULTS, councilR, dirOf, features, MARK, oddsR, PROPOSERS, rClass, trainForest } from './brain.mjs';
 import { newBook, recordClose, RISK_DEFAULTS, riskGate, shiftBook, sizeTrade, updateBook } from './risk.mjs';
 import { atrOf, dailyTrendOf, manageTrend, Shadow, TREND_AGENT_DEFAULTS, trendCandidate } from './agents.mjs';
-import { entryStyle, MicroWatch } from './micro.mjs';
+import { entryStyle, MicroWatch, microVote } from './micro.mjs';
 import { liveDirection, liveMarket, liveSignal, manageLab, specNeeds } from '../../src/lab/live.ts';
 import { alignFunding } from '../lab/lab.mjs';
 
@@ -44,8 +44,11 @@ export const CSWARM_DEFAULTS = {
    * Smarter entries: rest at the best bid (or offer) for a maker fill, timed by the order book;
    * not filled within waitMs, the price is taken if it has moved no more than chaseBps — further,
    * the entry is skipped (chasing would cost more than the edge). Exits are never delayed.
+   * holdSec: when the Microstructure agent says the timing is bad (a liquidation cascade against the
+   * trade, a burst of selling into a long, a book leaning against it), the entry waits up to this
+   * long for it to clear — for every trade, a strategy deployed "as tested" included (0 = off).
    */
-  entry: { maker: true, waitMs: 5000, chaseBps: 5 },
+  entry: { maker: true, waitMs: 5000, chaseBps: 5, holdSec: 30 },
   risk: { ...RISK_DEFAULTS },
   council: { ...CCOUNCIL_DEFAULTS },
 };
@@ -611,7 +614,8 @@ export class CryptoSwarm {
       equityAtEntry: equity,
     };
     cs.busy = true;
-    const exec = this.mode === 'live' ? this.openLive(pos) : Promise.resolve(this.openPaper(pos));
+    // the Microstructure agent times the entry (a tested strategy's too): bad timing waits, the trade itself stands
+    const exec = this.timingHold(cs, pos).then(() => (pos.mode === 'live' ? this.openLive(pos) : this.openPaper(pos)));
     this.inFlight = true;
     exec
       .then(() => {
@@ -621,7 +625,7 @@ export class CryptoSwarm {
         e?.filled({ price: pos.entry, qty: pos.qty, fee: pos.fees });
         this.positions.push(pos);
         this.positions = this.positions.slice(-400);
-        this.say(agent, `${coin}: ${pos.side === 'buy' ? 'LONG' : 'SHORT'} ${tidy(pos.qty)} @ ${tidy(pos.entry)} — stop ${tidy(pos.stop)}, target ${tidy(pos.target)}, risking ${usd(pos.riskUsd)} to make ${usd(this.potential(pos))}${pos.entryHow ? ` · ${pos.entryHow}` : ''}`, 'trade');
+        this.say(agent, `${coin}: ${pos.side === 'buy' ? 'LONG' : 'SHORT'} ${tidy(pos.qty)} @ ${tidy(pos.entry)} — stop ${tidy(pos.stop)}, target ${tidy(pos.target)}, risking ${usd(pos.riskUsd)} to make ${usd(this.potential(pos))}${pos.heldHow ? ` · ${pos.heldHow}` : ''}${pos.entryHow ? ` · ${pos.entryHow}` : ''}`, 'trade');
         this.notify('setup', pos);
         this.persist();
       })
@@ -666,6 +670,44 @@ export class CryptoSwarm {
     return { take: false, price, why: st.why };
   }
 
+  /**
+   * Timing (the Microstructure agent at work on every entry, "as tested" included): if the last
+   * seconds say now is a bad moment — a cascade against the trade, a burst the other way, a book
+   * leaning against it — wait for that to clear, up to entry.holdSec, checking once a second. The
+   * trade is not cancelled for timing alone; it is skipped only if the setup itself breaks while it
+   * waits (the stop or the target is reached, or the price runs further away than the chase limit).
+   */
+  async timingHold(cs, pos) {
+    const e = this.cfg.entry;
+    const hold = e?.holdSec ?? 0;
+    if (!(hold > 0) || !cs?.micro) return;
+    const dir = dirOf(pos.side);
+    const read = () => cs.micro.read(Math.max(cs.micro.lastT, this.now()));
+    let v = microVote(read(), dir);
+    if (v.stance !== 'against') return;
+    const why = v.why.split(' — ')[0];
+    const from = pos.entry;
+    pos.askEntry = from;
+    let waited = 0;
+    while (v.stance === 'against' && waited < hold) {
+      await this.sleep(1000);
+      waited++;
+      if (!this.running) throw skipped('the swarm stopped while the entry waited for better timing');
+      const px = cs.price;
+      if (px > 0 && (px - pos.stop) * dir <= 0) throw skipped(`the price reached the stop (${tidy(pos.stop)}) while it waited for better timing — the setup failed before it was entered`);
+      if (px > 0 && (px - pos.target) * dir >= 0) throw skipped(`the price reached the target (${tidy(pos.target)}) while it waited for better timing — the move happened without it`);
+      v = microVote(read(), dir);
+    }
+    const now = cs.price > 0 ? cs.price : from;
+    const moved = (((now - from) * dir) / from) * 1e4;
+    // a held trade that runs away is often a winner: it is still taken unless a quarter of its room to the stop is gone
+    const room = Math.max(e.chaseBps, (0.25 * Math.abs(from - pos.stop) * 1e4) / from);
+    if (moved > room) throw skipped(`the price moved ${moved.toFixed(1)} bps away while it waited for better timing (more than a quarter of the way to the stop gone) — chasing would cost more than the edge`);
+    pos.entry = now;
+    const better = -moved >= 0.5 ? `, ${(-moved).toFixed(1)} bps better` : '';
+    pos.heldHow = v.stance === 'against' ? `Micro held it ${waited} s (${why}); still not clear, entered${better}` : `Micro held it ${waited} s until the timing cleared (${why})${better}`;
+  }
+
   /** what an entry saved: the maker fee against the taker fee and the slippage, in bps */
   makerSaving() {
     const c = this.cfg;
@@ -675,7 +717,7 @@ export class CryptoSwarm {
   openPaper(pos) {
     const c = this.cfg;
     const dir = dirOf(pos.side);
-    pos.askEntry = pos.entry;
+    pos.askEntry ??= pos.entry;
     const cs = this.coins.get(pos.coin);
     const plan = this.entryPlan(cs, pos);
     const taker = (why) => {
@@ -732,7 +774,7 @@ export class CryptoSwarm {
     const c = this.cfg;
     const dir = dirOf(pos.side);
     // the price the decision was made at: the gap to the fill is the real slippage (the journal measures it)
-    pos.askEntry = pos.entry;
+    pos.askEntry ??= pos.entry;
     const cs = this.coins.get(pos.coin);
     const plan = this.entryPlan(cs, pos);
     let qty = 0;

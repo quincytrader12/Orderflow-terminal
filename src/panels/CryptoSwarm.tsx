@@ -299,12 +299,13 @@ function Rules({ st, busy, run }: { st: CSwarmState; busy: string; run: (w: stri
       {row('Edge sizing', <NumberInput value={Math.round(r.kellyShare * 100)} onChange={(v) => save({ risk: { kellyShare: v / 100 } })} min={0} step={5} suffix="% Kelly" />, `after ${r.minTrades} closed trades, size follows the record (between half and 1.5× the normal risk)`)}
       <div className="section-title">Entries — smarter fills</div>
       {(() => {
-        const en = c.entry ?? { maker: true, waitMs: 5000, chaseBps: 5 };
+        const en = { holdSec: 30, ...(c.entry ?? { maker: true, waitMs: 5000, chaseBps: 5 }) };
         const set = (p: Partial<typeof en>) => save({ entry: { ...en, ...p } });
         return (
           <>
             {row('Rest at the best price first', <input type="checkbox" checked={en.maker} onChange={(e) => set({ maker: e.target.checked })} />, `an entry waits at the best bid (or offer) for a maker fill — ${c.makerFeeBps ?? 1.5} bps instead of ${c.feeBps} bps plus slippage — unless the order book and the tape are pushing hard its way (then it takes the price at once). Stops and exits are never delayed`)}
             {row('Wait for a fill', <NumberInput value={en.waitMs / 1000} onChange={(v) => set({ waitMs: Math.max(1, Math.min(30, v)) * 1000 })} min={1} step={1} suffix="s" />, 'not filled by then: the resting order is cancelled')}
+            {row('Micro: wait for better timing', <NumberInput value={en.holdSec} onChange={(v) => set({ holdSec: Math.max(0, Math.min(120, Math.round(v))) })} min={0} step={5} suffix="s at most" />, 'when Micro reads bad timing — a liquidation cascade against the trade, a burst the other way, the order book leaning against it — the entry waits for it to clear, checking every second. Works for every trade, strategies deployed "as tested" included: the trade still happens (only the moment changes), unless the stop or the target is reached while it waits. 0 = off')}
             {row('Chase at most', <NumberInput value={en.chaseBps} onChange={(chaseBps) => set({ chaseBps: Math.max(0, chaseBps) })} min={0} step={1} suffix="bps" />, 'if the price has moved further than this from where it waited, the trade is skipped — chasing would cost more than the edge')}
           </>
         );

@@ -40,8 +40,9 @@ export class MicroWatch {
     this.cfg = { ...MICRO_DEFAULTS, ...cfg };
     this.book = null;
     this.bookT = 0;
-    /** recent trades: [t, price, notional, +1 buy / −1 sell] */
+    /** recent trades: [t, price, notional, +1 buy / −1 sell]; those before `head` have expired */
     this.trades = [];
+    this.head = 0;
     /** recent forced orders: [t, notional, +1 shorts squeezed (buy) / −1 longs liquidated (sell)] */
     this.liqs = [];
     /** the usual notional per window (slow average), for bursts */
@@ -76,7 +77,14 @@ export class MicroWatch {
 
   trim(now) {
     const keep = Math.max(this.cfg.flowSec * 6, this.cfg.liqSec) * SEC;
-    while (this.trades.length && this.trades[0][0] < now - keep) this.trades.shift();
+    // expired trades are skipped by moving a bookmark (shifting a long list for every trade is slow
+    // in a busy market); the list is compacted only once the expired part is large
+    const tr = this.trades;
+    while (this.head < tr.length && tr[this.head][0] < now - keep) this.head++;
+    if (this.head > 4096 && this.head * 2 > tr.length) {
+      tr.splice(0, this.head);
+      this.head = 0;
+    }
     while (this.liqs.length && this.liqs[0][0] < now - this.cfg.liqSec * SEC) this.liqs.shift();
     // the usual pace: once a window, a slow average of each window's notional
     if (now - this.paceAt >= this.cfg.flowSec * SEC) {
@@ -92,7 +100,7 @@ export class MicroWatch {
     let sell = 0;
     let first = null;
     let last = null;
-    for (let i = this.trades.length - 1; i >= 0; i--) {
+    for (let i = this.trades.length - 1; i >= this.head; i--) {
       const [t, p, n, s] = this.trades[i];
       if (t < now - sec * SEC) break;
       if (s > 0) buy += n;
@@ -107,7 +115,7 @@ export class MicroWatch {
   rangeSince(t0) {
     let lo = Infinity;
     let hi = -Infinity;
-    for (let i = this.trades.length - 1; i >= 0 && this.trades[i][0] >= t0; i--) {
+    for (let i = this.trades.length - 1; i >= this.head && this.trades[i][0] >= t0; i--) {
       lo = Math.min(lo, this.trades[i][1]);
       hi = Math.max(hi, this.trades[i][1]);
     }

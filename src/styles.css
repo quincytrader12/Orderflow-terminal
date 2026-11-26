@@ -4189,7 +4189,8 @@ table.grid.meme-tape td {
   padding-bottom: 6px;
 }
 .cc-gauges {
-  grid-template-columns: repeat(10, 1fr);
+  /* only the gauges at work are shown: the row is as wide as their number */
+  grid-template-columns: repeat(var(--n, 10), 1fr);
   gap: 6px;
 }
 .cc-gauges .cc-gauge svg {

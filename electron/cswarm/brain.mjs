@@ -202,7 +202,8 @@ export function councilR(inp, cfg = CCOUNCIL_DEFAULTS) {
     const hard = votes.find((v) => v.stance === 'veto' && SAFETY.includes(v.bot));
     for (const v of votes) if (v.stance === 'veto' && !SAFETY.includes(v.bot)) v.stance = 'against';
     const advice = votes.filter((v) => v.stance === 'against').length;
-    const summary = hard ? `vetoed by ${AGENT_NAME[hard.bot]} (safety)` : `TRADE — a tested strategy: only Guardian and Risk can stop it (the council advises ${fors} for, ${advice} against, score ${score.toFixed(1)})`;
+    const timing = votes.find((v) => v.bot === 'micro' && v.stance === 'against') ? ' · Micro times the entry' : '';
+    const summary = hard ? `vetoed by ${AGENT_NAME[hard.bot]} (safety)` : `TRADE — a tested strategy: only Guardian and Risk can stop it (the council advises ${fors} for, ${advice} against, score ${score.toFixed(1)})${timing}`;
     return { trade: !hard, score, votes, summary, advisory: true };
   }
   const veto = votes.find((v) => v.stance === 'veto');

@@ -580,6 +580,10 @@ export function CommandCenter() {
   const passes = recent.filter((l) => l.kind === 'pass').length;
   const councilRate = trades + passes ? trades / (trades + passes) : null;
   const depOn = (lab?.deployed ?? []).filter((d) => d.on && d.targets.crypto);
+  // what is at work: an agent switched off has no gauge; the council's pass rate only means something
+  // when some trades are the council's to decide (a strategy deployed "as tested" is not)
+  const agentOn = (a: 'auction' | 'trend') => !!st?.cfg.agents[a];
+  const councilDecides = agentOn('auction') || agentOn('trend') || depOn.some((d) => d.authority !== 'tested');
   const labOpen = n.open.filter((p) => (p.agent as string) === 'lab').length;
   const maxOpen = st?.cfg.risk.maxOpen ?? 1;
   const ft = st?.forest.trained;
@@ -593,8 +597,7 @@ export function CommandCenter() {
     caption: st?.running ? `${coins.length} coins in the core · ${proposals} proposals in the last hour · ${depOn.length} Lab strateg${depOn.length === 1 ? 'y' : 'ies'} deployed` : 'swarm off — start it to fill the core',
     inputs: [
       { label: 'Feeds live', value: `${feedsOk}/${coins.length}`, rate: coins.length ? feedsOk / coins.length : 0 },
-      { label: 'Auctioneer', value: `${warm('auction')} warm`, rate: coins.length ? warm('auction') / coins.length : 0 },
-      { label: 'Trend', value: `${warm('trend')} warm`, rate: coins.length ? warm('trend') / coins.length : 0 },
+      ...(['auction', 'trend'] as const).filter(agentOn).map((a) => ({ label: AGENT[a], value: `${warm(a)} warm`, rate: coins.length ? warm(a) / coins.length : 0 })),
       { label: 'Lab strategies', value: `${depOn.length} on`, rate: Math.min(1, depOn.length / 3) },
       { label: 'Funding', value: `${fmtNum(fundingApr * 24 * 365 / 100, 0)}% a yr`, rate: Math.min(1, fundingApr / 2) },
     ],
@@ -631,6 +634,12 @@ export function CommandCenter() {
   if (!st) return <div className="cc"><div className="cc-empty muted" style={{ gridColumn: '1 / -1', padding: 40 }}>{error || 'Connecting to the crypto swarm…'}</div></div>;
 
   const by = st.byAgent as Record<string, { trades: number; wins: number; pnl: number; avgR: number | null } | undefined>;
+  const en = st.cfg.entry;
+  const microOn = !en || en.maker || (en.holdSec ?? 30) > 0;
+  const lastEntries = [...st.closed, ...st.open].slice(-50);
+  const makerFills = lastEntries.filter((p) => /maker/.test(p.entryHow ?? '')).length;
+  const timed = lastEntries.filter((p) => !!p.heldHow).length;
+  const improved = lastEntries.filter((p) => /maker/.test(p.entryHow ?? '') || /bps better/.test(p.heldHow ?? '')).length;
   const agentGauge = (id: 'auction' | 'trend', i: number) => {
     const b = by[id];
     const on = st.cfg.agents[id];
@@ -750,7 +759,7 @@ export function CommandCenter() {
       <section className="cc-core cc-card" aria-label="Swarm core">
         <CoreView key={theme} input={input} onSelect={setPick} />
         <div className="cc-core-agents">
-          {(['auction', 'trend', 'lab', 'tape', 'micro', 'crowd', 'guardian', 'forest', 'risk'] as const).map((a) => (
+          {(['auction', 'trend', 'lab', 'tape', 'micro', 'crowd', 'guardian', 'forest', 'risk'] as const).filter((a) => (a !== 'auction' && a !== 'trend') || agentOn(a)).map((a) => (
             <span key={a} className={`cc-agent ${st.running && (a !== 'lab' || depOn.length) ? 'on' : ''}`}>
               <i /> {AGENT[a]}
             </span>
@@ -817,10 +826,10 @@ export function CommandCenter() {
 
       <div className="cc-bottom">
         <Card n="08" title="Swarm gauges" className="cc-gauges-card">
-          <div className="cc-gauges">
+          <div className="cc-gauges" style={{ '--n': 7 + (agentOn('auction') ? 1 : 0) + (agentOn('trend') ? 1 : 0) + (councilDecides ? 1 : 0) + (microOn ? 1 : 0) } as React.CSSProperties}>
             <Gauge value={coins.length ? feedsOk / coins.length : null} text={`${feedsOk}/${coins.length}`} label="Guardian" sub={st.running ? 'feeds live · spreads and spikes watched' : 'watching when the swarm runs'} color={GC[0]} dim={!st.running} />
-            {agentGauge('auction', 1)}
-            {agentGauge('trend', 2)}
+            {agentOn('auction') && agentGauge('auction', 1)}
+            {agentOn('trend') && agentGauge('trend', 2)}
             <Gauge
               value={depOn.length ? Math.min(1, depOn.length / 3) : null}
               text={`${depOn.length} on`}
@@ -831,7 +840,18 @@ export function CommandCenter() {
               onClick={() => setDrawer('deploy')}
               title="The deploy gate: Strategy Lab strategies plug in here. Each trades as tested or lets the council decide; Guardian and Risk always check every trade."
             />
-            <Gauge value={councilRate} text={councilRate === null ? '—' : `${Math.round(councilRate * 100)}%`} label="Council" sub={`${trades} traded · ${passes} passed (1 h)`} color={GC[4]} dim={councilRate === null} />
+            {councilDecides && <Gauge value={councilRate} text={councilRate === null ? '—' : `${Math.round(councilRate * 100)}%`} label="Council" sub={`${trades} traded · ${passes} passed (1 h)`} color={GC[4]} dim={councilRate === null} />}
+            {microOn && (
+              <Gauge
+                value={lastEntries.length ? improved / lastEntries.length : null}
+                text={lastEntries.length ? `${improved}/${lastEntries.length}` : '—'}
+                label="Micro · entries"
+                sub={lastEntries.length ? `${makerFills} maker fills · ${timed} timed` : 'times every entry · none yet'}
+                color={GC[4]}
+                dim={!lastEntries.length}
+                title="The Microstructure agent at work on every entry, strategies deployed as tested included: entries filled cheaper resting in the book (maker), and entries it held for better timing that then got in at a better price, out of the last 50."
+              />
+            )}
             <Gauge value={ft ? ft.accuracy : st.forest.samples ? Math.min(1, st.forest.samples / 200) : null} text={ft?.accuracy != null ? `${Math.round(ft.accuracy * 100)}%` : `${st.forest.samples}`} label="Forest" sub={ft ? `accuracy · ${ft.n} trades learned` : `${st.forest.samples} samples · learning`} color={GC[5]} dim={!ft} />
             <Gauge value={1 - Math.min(1, dd / Math.max(0.01, st.cfg.risk.ddCut2))} text={`${st.cfg.risk.riskPct}%`} label="Optimizer" sub={`risk a trade · drawdown ${(dd * 100).toFixed(1)}%`} color={dd >= st.cfg.risk.ddCut1 ? GC[8] : GC[7]} dim={dd >= st.cfg.risk.ddCut1} />
             <Gauge value={n.open.length / Math.max(1, maxOpen)} text={`${n.open.length}/${maxOpen}`} label="Exposure" sub={`positions · ${fmtUsd(n.open.reduce((a, p) => a + p.notional, 0), 0)} notional`} color={GC[6]} dim={!n.open.length} />
