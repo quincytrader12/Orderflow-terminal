@@ -155,10 +155,13 @@ describe('rules that read bitcoin beside the coin', () => {
 describe('a deployed strategy, live', () => {
   it('says what it reads beside the coin, and is given it in the backtest’s shape', () => {
     const sp = (id: string, filters: StrategySpec['filters'] = []): StrategySpec => ({ name: id, signal: { id, p: gridOf(SIGNAL_MAP[id].grid)[0] }, filters, exit: EXIT_DEFAULT, sides: 'both' });
-    expect(specNeeds(sp('tsmom'))).toEqual({ bench: false, funding: false });
-    expect(specNeeds(sp('pairs'))).toEqual({ bench: true, funding: false });
-    expect(specNeeds(sp('carry'))).toEqual({ bench: false, funding: true });
-    expect(specNeeds(sp('tsmom', [{ id: 'btctrend', p: { lookback: 1200 } }, { id: 'crowd', p: { band: 0.2 } }]))).toEqual({ bench: true, funding: true });
+    expect(specNeeds(sp('tsmom'))).toEqual({ bench: false, funding: false, features: false });
+    expect(specNeeds(sp('pairs'))).toEqual({ bench: true, funding: false, features: false });
+    expect(specNeeds(sp('carry'))).toEqual({ bench: false, funding: true, features: false });
+    // a learned rule reads the feature table (a 30-day volatility among it): the swarm keeps a longer history for it
+    expect(specNeeds(sp('nn')).features).toBe(true);
+    expect(specNeeds({ ...sp('tsmom'), meta: { model: {} } } as never).features).toBe(true);
+    expect(specNeeds(sp('tsmom', [{ id: 'btctrend', p: { lookback: 1200 } }, { id: 'crowd', p: { band: 0.2 } }]))).toEqual({ bench: true, funding: true, features: false });
     expect(specNeeds({ ...sp('tsmom'), also: [{ id: 'btclead', p: { n: 1, k: 1 } }] }).bench).toBe(true);
 
     const { btc, coin } = pair(900, 3);

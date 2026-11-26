@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -603,5 +603,23 @@ describe('funding history is light on the exchanges', () => {
     expect(d).toMatchObject({ ok: true, late: ['BTC 1h'], limited: true });
     const e = lab.farmHealth({ markets: { '1h': [] }, stale: ['BTC 1h'], missing: [], late: [], error: 'hyperliquid 429 Too Many Requests' });
     expect(e).toMatchObject({ ok: false, limited: true });
+  });
+});
+
+describe('the high-frequency paces join saved settings', () => {
+  const saved = (cfg) => {
+    const dir = mkdtempSync(join(tmpdir(), 'lab-'));
+    writeFileSync(join(dir, 'farm.json'), JSON.stringify({ cfg, wanted: false }));
+    return new LabService({ ccxt: {}, dir, emit: () => {}, makeWorker: inlineWorker, now: () => Date.UTC(2026, 10, 26) });
+  };
+  it('a farm that scalps also breeds on 1- and 5-minute candles; one that does not scalp is left as it is', () => {
+    const a = saved({ v: 3, coins: ['BTC', 'ETH'], styles: ['scalp15', 'intraday', 'swing'] });
+    expect(a.farmCfg.styles).toEqual(['scalp5', 'scalp1', 'scalp15', 'intraday', 'swing']);
+    expect(a.farmCfg.v).toBe(4);
+    const b = saved({ v: 3, coins: ['BTC'], styles: ['swing', 'position'] });
+    expect(b.farmCfg.styles).toEqual(['swing', 'position']);
+    // once saved under the new version, taking them off again sticks
+    const c = saved({ v: 4, coins: ['BTC'], styles: ['scalp15'] });
+    expect(c.farmCfg.styles).toEqual(['scalp15']);
   });
 });

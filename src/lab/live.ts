@@ -48,9 +48,14 @@ export interface LiveSignal {
 }
 
 /** what a strategy reads beside the coin's own candles: bitcoin's price, the funding history */
-export function specNeeds(spec: StrategySpec): { bench: boolean; funding: boolean } {
+/** the rules that learn from the feature table (which reads a 30-day volatility, among others) */
+const LEARNED = new Set(['nn', 'rf', 'ols', 'candle']);
+
+export function specNeeds(spec: StrategySpec): { bench: boolean; funding: boolean; features: boolean } {
   const rules = [spec.signal, ...(spec.also ?? [])];
   return {
+    // it reads the feature table: a learned rule, or the learned skip-this-signal model
+    features: rules.some((r) => LEARNED.has(r.id)) || !!(spec.meta?.model || spec.meta?.nn),
     bench: rules.some((r) => SIGNAL_MAP[r.id]?.needsBench) || spec.filters.some((f) => FILTER_MAP[f.id]?.usesBench),
     funding: rules.some((r) => SIGNAL_MAP[r.id]?.needsFunding) || spec.filters.some((f) => FILTER_MAP[f.id]?.needsFunding),
   };

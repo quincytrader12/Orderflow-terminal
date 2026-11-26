@@ -22,14 +22,14 @@
 import { regimeSide, type Combine, type RuleRef, type Sizing, type StrategySpec } from './backtest';
 import { EXIT_DEFAULT, FILTER_MAP, SIGNAL_MAP, type Family, type Params } from './library';
 
-export type StyleId = 'scalp1' | 'scalp15' | 'intraday15' | 'scalp' | 'intraday' | 'swing' | 'week' | 'position' | 'hold';
+export type StyleId = 'scalp1' | 'scalp5' | 'scalp15' | 'intraday15' | 'scalp' | 'intraday' | 'swing' | 'week' | 'position' | 'hold';
 
 export interface Style {
   id: StyleId;
   name: string;
   /** what it means, in one line */
   plain: string;
-  timeframe: '1m' | '15m' | '1h' | '4h' | '1d';
+  timeframe: '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
   tfH: number;
   /** the style whose picks suit this one too (the 15-minute styles take the hourly ones' advice) */
   like?: StyleId;
@@ -47,6 +47,7 @@ export interface Style {
 
 export const STYLES: Style[] = [
   { id: 'scalp1', name: 'Scalping — 1-minute candles, minutes', plain: 'The fastest pace: trades over within minutes on 1-minute candles, built on the same rules as the other paces.', timeframe: '1m', tfH: 1 / 60, years: 30 / 365, L: 15, holdH: 0.5, stop: 1.5, like: 'scalp15', note: 'Thirty days of 1-minute candles (43,000). Costs decide everything at this speed: every test charges double slippage on top of the fees, and the signal is only acted on at the next candle — the edge has to survive that.' },
+  { id: 'scalp5', name: 'Scalping — 5-minute candles, minutes to an hour', plain: 'Fast scalping on 5-minute candles: several trades a day per coin, each over within about an hour.', timeframe: '5m', tfH: 1 / 12, years: 120 / 365, L: 12, holdH: 1, stop: 1.5, like: 'scalp15', note: 'Four months of 5-minute candles (34,500). At this speed costs decide everything: every test charges double slippage on top of the fees, and the signal is only acted on at the next candle.' },
   { id: 'scalp15', name: 'Scalping — 15-minute candles, minutes to hours', plain: 'The fastest the Lab trades: many trades a day on 15-minute candles, each over within a couple of hours.', timeframe: '15m', tfH: 0.25, years: 0.5, L: 3, holdH: 2, stop: 1.5, like: 'scalp', note: 'Six months of history (17,000 candles). At this speed fees and slippage take a large share of every trade — the test counts them, and many ideas that look good on a chart do not survive them.' },
   { id: 'intraday15', name: 'Intraday — 15-minute candles, closed within a day', plain: 'Several trades a day on 15-minute candles, none held overnight.', timeframe: '15m', tfH: 0.25, years: 1, L: 8, holdH: 12, stop: 2, like: 'intraday', note: 'A year of history (35,000 candles): the first test downloads it, later ones reuse it.' },
   { id: 'scalp', name: 'Scalping — quick trades, hours', plain: 'Many quick trades, in and out within a few hours, small moves.', timeframe: '1h', tfH: 1, years: 1, L: 12, holdH: 6, stop: 1.5, note: 'On 1-hour candles: scalping over hours. For faster trading choose a 15-minute style.' },
@@ -172,6 +173,12 @@ export const STRATEGIES: StrategyOption[] = [
   { id: 'dow', group: 'Timing and seasons', name: 'Monday effect', plain: 'Buys at the start of Monday and holds for the day (a documented weekday pattern in bitcoin).', suits: ['intraday'], signal: 'dow', nature: 'event', holdH: 24, longOnly: true, params: () => ({ day: 1 }) },
   // against bitcoin
   { id: 'pairs', group: 'Against bitcoin (relative value)', name: 'Pairs trade: the coin against bitcoin', plain: 'Coins move with bitcoin. When a coin gets unusually cheap against bitcoin it buys the coin, when unusually rich it sells — betting the gap closes. Add the bitcoin hedge (Risk) to make it a true market-neutral pairs trade.', suits: ['scalp', 'intraday', 'swing'], signal: 'pairs', nature: 'event', needsBtc: true, params: (s) => ({ window: clamp(s.L * 7, fl(s, 168), 720), k: 2 }) },
+  // high frequency: rules built for 1- and 5-minute candles
+  { id: 'ofi', group: 'Order flow (high frequency)', name: 'Order-flow pressure (bulk volume)', plain: 'Estimates who is buying and selling aggressively from each candle\'s move and volume; trades with the flow while the last few candles lean hard one way. Built for 1- and 5-minute candles.', suits: ['scalp15', 'scalp', 'intraday15'], signal: 'ofi', nature: 'state', holdH: 1, params: (s) => ({ n: s.tfH < 0.1 ? 15 : s.tfH < 1 ? 8 : 4, th: 0.35 }) },
+  { id: 'qhour', group: 'Order flow (high frequency)', name: 'Quarter-hour opening flow', plain: 'Trading algorithms run on the clock: a strong move in the first minute of a quarter-hour (:00, :15, :30, :45) sets the side for the next hours (a 2026 study on Binance futures). Needs 1- or 5-minute candles.', suits: ['scalp15', 'intraday15'], signal: 'qhour', nature: 'state', holdH: 4, params: () => ({ k: 1.5, hold: 4, vol: 1 }) },
+  { id: 'nyorb5', group: 'Intraday (the day’s own structure)', name: 'US-open range breakout (first 5 minutes)', plain: 'The first minutes after the US stock market opens (9:30 New York) set a range; trades the first close beyond it, in that direction, until the US close. The 5-minute version did best in the research. Needs 1-, 5- or 15-minute candles.', suits: ['scalp15', 'intraday15'], signal: 'nyorb5', nature: 'event', holdH: 6.5, params: (s) => ({ m: s.tfH <= 1 / 12 + 1e-9 ? 5 : 15 }) },
+  { id: 'vwapband', group: 'Buy the dip / sell the rip', name: 'VWAP band snap-back', plain: 'Sells a close far above the day\'s volume-weighted average price (beyond its bands), buys one far below, on a candle that has already turned back — for the snap back toward the average.', suits: ['scalp15', 'scalp', 'intraday15'], signal: 'vwapband', nature: 'event', holdH: 2, params: () => ({ k: 2, conf: 1 }) },
+  { id: 'emapull', group: 'Trend following', name: 'Pullback to the fast average (9/21 EMA)', plain: 'The scalper\'s staple: in a trend (fast average above a rising slow one), buys a dip that touches the fast average and closes back above it; the mirror to sell.', suits: ['scalp15', 'intraday15', 'scalp', 'intraday'], signal: 'emapull', nature: 'event', params: () => ({ f: 9, s: 21 }) },
   { id: 'btclead', group: 'Against bitcoin (relative value)', name: 'Bitcoin leads, the coin catches up', plain: 'When bitcoin has moved and a coin has not yet followed by its usual amount, trades the coin in bitcoin’s direction. News reaches bitcoin first; the published effect is fastest over minutes.', suits: ['scalp', 'intraday'], signal: 'btclead', nature: 'event', needsBtc: true, params: (s) => ({ n: s.tfH < 1 ? 0.25 : clamp(Math.round(s.L / 12), 1, 24), k: 1 }) },
   { id: 'rsbtc', group: 'Against bitcoin (relative value)', name: 'Relative strength: coins beating bitcoin', plain: 'Coins that have been beating bitcoin tend to keep beating it for weeks, and laggards keep lagging. It buys a coin that has outrun bitcoin by more than its usual wobble and sells one that has fallen behind. Add the bitcoin hedge (Risk) to trade the difference alone.', suits: ['swing', 'week', 'position'], signal: 'rsbtc', nature: 'state', needsBtc: true, params: (s) => ({ lookback: clamp(s.L * 3, fl(s, 168), 720), k: 0.5 }) },
   // carry

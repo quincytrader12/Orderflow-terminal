@@ -124,7 +124,7 @@ export const VAULT = 0.15;
 
 /** the paces a top five is kept for, and the bot builder's styles in each */
 export const PACES: { id: string; name: string; styles: StyleId[] }[] = [
-  { id: "scalp", name: "Scalping", styles: ["scalp1", "scalp15", "scalp"] },
+  { id: "scalp", name: "Scalping", styles: ["scalp1", "scalp5", "scalp15", "scalp"] },
   { id: "intraday", name: "Intraday", styles: ["intraday15", "intraday"] },
   { id: "swing", name: "Swing", styles: ["swing", "week"] },
   { id: "position", name: "Position", styles: ["position", "hold"] },
@@ -134,7 +134,7 @@ export const paceIdOf = (style: StyleId): string =>
 export const FARM_DEFAULTS: FarmCfg = {
   hl: true,
   coins: ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"],
-  styles: ["scalp", "intraday", "swing", "position"],
+  styles: ["scalp1", "scalp5", "scalp", "intraday", "swing", "position"],
   sides: "both",
   pace: "gentle",
   maxDD: 0.2,
@@ -833,6 +833,7 @@ export class Farm {
       if (
         !sig ||
         (sig.intraday && st.tfH >= 24) ||
+        (sig.maxTfH !== undefined && st.tfH > sig.maxTfH + 1e-9) ||
         (sig.needsFunding && !this.funding) ||
         (s.needsBtc && !btcPair)
       )

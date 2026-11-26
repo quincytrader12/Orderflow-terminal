@@ -24,7 +24,15 @@ import { newBook, recordClose, RISK_DEFAULTS, riskGate, shiftBook, sizeTrade, up
 import { atrOf, dailyTrendOf, manageTrend, Shadow, TREND_AGENT_DEFAULTS, trendCandidate } from './agents.mjs';
 import { entryStyle, MicroWatch, microVote } from './micro.mjs';
 import { liveDirection, liveMarket, liveSignal, manageLab, specNeeds } from '../../src/lab/live.ts';
-import { alignFunding } from '../lab/lab.mjs';
+import { alignFunding, spliceCandles } from '../lab/lab.mjs';
+
+/**
+ * How many candles a deployed strategy is kept warm on: at least 3,000, and at least eight days
+ * of them — many rules look back a week (a week of 1-minute candles is 10,080), so a
+ * 1-minute strategy on 3,000 candles would never be warmed up and never fire. A strategy that
+ * learns from the feature table (which reads a 30-day volatility) gets 32 days. At most 12,000.
+ */
+export const labBarsFor = (tfH, features = false) => Math.min(12_000, Math.max(3000, Math.ceil(((features ? 32 : 8) * 24) / tfH)));
 
 const MIN = 60_000;
 const HOUR = 3_600_000;
@@ -396,15 +404,20 @@ export class CryptoSwarm {
       const tf = tfH === 24 ? '1d' : tfH < 1 ? `${Math.round(tfH * 60)}m` : `${tfH}h`;
       // look again soon enough to catch each candle's close: every minute on 15-minute candles, every ten on daily ones
       const every = Math.min(10 * MIN, Math.max(MIN, (tfH * HOUR) / 15));
-      const L = (cs.lab[tfH] ??= { bars: [], at: 0 });
+      const L = (cs.lab[tfH] ??= { bars: [], at: 0, want: 0 });
+      const mine = strategies.filter((x) => x.tfH === tfH);
+      const needs = mine.map((d) => specNeeds(d.spec));
+      const want = labBarsFor(tfH, needs.some((x) => x.features));
       try {
-        if (!L.bars.length) {
-          L.bars = await this.ccxt.history(this.cfg.exchangeId, cs.symbol, tf, now - 3000 * tfH * HOUR, 3000);
+        // the first look, or a newly deployed strategy that needs a longer history than is held
+        if (!L.bars.length || want > (L.want ?? 0)) {
+          L.bars = await this.labHistory(cs.coin, cs.symbol, tf, tfH, now, want);
           L.at = now;
+          L.want = want;
         } else if (now - L.at >= every) {
           const fresh = await this.ccxt.ohlcv(this.cfg.exchangeId, cs.symbol, tf, 10);
           const last = L.bars[L.bars.length - 1]?.time ?? 0;
-          L.bars = [...L.bars.filter((b) => b.time < (fresh[0]?.time ?? Infinity)), ...fresh].filter((b, i, a) => i === 0 || b.time > a[i - 1].time).slice(-3000);
+          L.bars = [...L.bars.filter((b) => b.time < (fresh[0]?.time ?? Infinity)), ...fresh].filter((b, i, a) => i === 0 || b.time > a[i - 1].time).slice(-want);
           L.at = now;
           if ((L.bars[L.bars.length - 1]?.time ?? 0) <= last) continue;
         } else continue;
@@ -415,12 +428,13 @@ export class CryptoSwarm {
       const closed = L.bars.filter((b) => b.time + tfH * HOUR <= now);
       // what these strategies read beside the coin's candles: bitcoin's price (pairs, bitcoin's lead, the
       // market filter) and the funding history (carry, crowding) — as in their backtest
-      const mine = strategies.filter((x) => x.tfH === tfH);
-      const needs = mine.map((d) => specNeeds(d.spec));
       const btc = needs.some((x) => x.bench) && cs.coin !== 'BTC' ? await this.labBench(tfH, tf, now) : null;
       const funding = needs.some((x) => x.funding) ? await this.labFunding(cs, closed, tfH, now) : null;
       const market = liveMarket(cs.coin, tfH, closed, { btc, funding });
       for (const d of mine) {
+        // a breath between strategies: one slow calculation (a learned rule on many candles) never holds up the app
+        await new Promise((r) => setImmediate(r));
+        if (!this.running) return;
         const pos = this.openOn(cs.coin);
         // an opposite signal closes the Lab's own trade, if the rules say so
         if (pos && pos.agent === 'lab' && pos.labId === d.id && d.spec.exit.onFlip && !pos.closing) {
@@ -438,17 +452,37 @@ export class CryptoSwarm {
     }
   }
 
+  /**
+   * A deployed strategy's history: enough candles to warm it up (labBarsFor). Hyperliquid keeps
+   * only its last 5,000 candles of each size, so on fast candles the older ones come from Binance,
+   * scaled to Hyperliquid's price where they overlap — the same joined history the edge finder
+   * tested the strategy on.
+   */
+  async labHistory(coin, symbol, tf, tfH, now, want = labBarsFor(tfH)) {
+    const ex = this.cfg.exchangeId;
+    const bars = await this.ccxt.history(ex, symbol, tf, now - want * tfH * HOUR, want);
+    // only where Hyperliquid's 5,000-candle limit is the reason it came back short (1-minute candles)
+    if (bars.length >= want * 0.9 || ex !== 'hyperliquid' || want <= 5000) return bars;
+    try {
+      const long = await this.ccxt.history('binance', `${coin}/USDT`, tf, now - want * tfH * HOUR, want);
+      return long.length > bars.length ? spliceCandles(long, bars).bars.slice(-want) : bars;
+    } catch {
+      return bars;
+    }
+  }
+
   /** bitcoin's candles on a timeframe, shared by every coin's Lab strategies that read them */
   async labBench(tfH, tf, now) {
     const B = ((this.bench ??= {})[tfH] ??= { bars: [], at: 0 });
     const symbol = symbolFor('BTC', this.cfg.exchangeId);
     try {
       if (!B.bars.length) {
-        B.bars = await this.ccxt.history(this.cfg.exchangeId, symbol, tf, now - 3000 * tfH * HOUR, 3000);
+        B.bars = await this.labHistory('BTC', symbol, tf, tfH, now);
+        B.want = labBarsFor(tfH);
         B.at = now;
       } else if (now - B.at >= Math.min(10 * MIN, Math.max(MIN, (tfH * HOUR) / 15))) {
         const fresh = await this.ccxt.ohlcv(this.cfg.exchangeId, symbol, tf, 10);
-        B.bars = [...B.bars.filter((b) => b.time < (fresh[0]?.time ?? Infinity)), ...fresh].filter((b, i, a) => i === 0 || b.time > a[i - 1].time).slice(-3000);
+        B.bars = [...B.bars.filter((b) => b.time < (fresh[0]?.time ?? Infinity)), ...fresh].filter((b, i, a) => i === 0 || b.time > a[i - 1].time).slice(-labBarsFor(tfH));
         B.at = now;
       }
     } catch (err) {

@@ -8,7 +8,7 @@ import type { MonteCarlo, Perf } from './stats';
 
 export interface LabConfig {
   coins: string[];
-  timeframe: '1m' | '15m' | '1h' | '4h' | '1d';
+  timeframe: '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
   years: number;
   source: 'auto' | 'binance' | 'okx' | 'bybit' | 'hyperliquid';
   isShare: number;

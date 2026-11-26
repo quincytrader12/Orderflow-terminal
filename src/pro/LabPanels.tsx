@@ -665,7 +665,7 @@ export function LabBuilder({ config: c, setConfig }: PanelProps<BuilderConfig>) 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const s = c.spec;
-  const tfH = status ? ({ '1m': 1 / 60, '15m': 0.25, '1h': 1, '4h': 4, '1d': 24 } as const)[status.cfg.timeframe] : 1;
+  const tfH = status ? ({ '1m': 1 / 60, '5m': 1 / 12, '15m': 0.25, '1h': 1, '4h': 4, '1d': 24 } as const)[status.cfg.timeframe] : 1;
   const set = (patch: Partial<StrategySpec>) => {
     const next = { ...s, ...patch };
     setConfig({ spec: { ...next, name: nameOf(next) } });

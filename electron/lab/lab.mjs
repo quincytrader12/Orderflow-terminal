@@ -26,9 +26,9 @@ export const LAB_DEFAULTS = {
   meta: true,
   funding: true,
 };
-export const TF_H = { '1m': 1 / 60, '15m': 0.25, '1h': 1, '4h': 4, '1d': 24 };
+export const TF_H = { '1m': 1 / 60, '5m': 1 / 12, '15m': 0.25, '1h': 1, '4h': 4, '1d': 24 };
 /** the most history worth downloading per timeframe, in years (a year of 15-minute candles is 35,000 of them) */
-export const MAX_YEARS = { '1m': 30 / 365, '15m': 1 };
+export const MAX_YEARS = { '1m': 30 / 365, '5m': 120 / 365, '15m': 1 };
 /**
  * The edge finder reads more history for its slow paces than a single test needs: a swing or
  * position strategy trades a few times a month, and only years of candles give it enough trades
@@ -176,7 +176,10 @@ export class LabService {
       if (!this.farmCfg.styles.includes('position')) this.farmCfg.styles = [...this.farmCfg.styles, 'position'];
       if (this.farmCfg.coins.join() === 'BTC,ETH,SOL') this.farmCfg.coins = [...FARM_DEFAULTS.coins];
     }
-    this.farmCfg.v = 3;
+    // settings from before the high-frequency paces: a farm that scalps also breeds on 1- and 5-minute candles
+    if (farm?.cfg && !(farm.cfg.v >= 4) && this.farmCfg.styles.some((x) => x === 'scalp' || x === 'scalp15'))
+      for (const id of ['scalp1', 'scalp5']) if (!this.farmCfg.styles.includes(id)) this.farmCfg.styles = [id, ...this.farmCfg.styles];
+    this.farmCfg.v = 4;
     this.farmCfg.coins = this.farmCfg.coins.slice(0, FARM_MAX_COINS);
     this.farmSnap = farm?.state ? { ...farm.state, running: false } : null;
     this.farmW = null;

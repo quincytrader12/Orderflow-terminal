@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CryptoSwarm, mergeCfg, symbolFor } from './cswarm.mjs';
+import { CryptoSwarm, labBarsFor, mergeCfg, symbolFor } from './cswarm.mjs';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -86,6 +86,33 @@ describe('the Lab agent, live', () => {
     await sw.slow();
     expect(ex.ccxt.history.mock.calls.map((c) => c[1])).toEqual(['ETH/USDC:USDC']);
     expect(ex.ccxt.fundingHistory).not.toHaveBeenCalled();
+  });
+
+  it("a 1-minute strategy is warmed up on eight days of candles: Hyperliquid's last 5,000, the older ones from Binance scaled to its price", async () => {
+    const now = Date.UTC(2026, 10, 5, 12);
+    const ex = fakeExchange(now);
+    const M1 = HOUR / 60;
+    ex.ccxt.history = vi.fn(async (id, _sym, _tf, _from, max) => {
+      const n = id === 'hyperliquid' ? 5000 : max;
+      const px = id === 'hyperliquid' ? 101 : 100;
+      return Array.from({ length: n }, (_, i) => ({ time: now - (n - i) * M1, open: px, high: px + 1, low: px - 1, close: px, volume: 5 }));
+    });
+    const deployed = [{ id: 'm', on: true, tfH: 1 / 60, coins: ['ETH'], spec: { name: 'mom', signal: { id: 'tsmom', p: { lookback: 15 } }, filters: [], exit: { stopAtr: 2, targetR: 0, trailAtr: 0, maxBars: 30, onFlip: true, stopVol: 0 }, sides: 'both' } }];
+    sw = new CryptoSwarm({ ccxt: ex.ccxt, db: memDb(), now: () => now, labDeployed: () => deployed });
+    sw.setConfig({ coins: ['ETH'], agents: { auction: false, trend: false, lab: true } });
+    await sw.start();
+    await sw.slow();
+    const calls = ex.ccxt.history.mock.calls;
+    expect(calls.map((c) => [c[0], c[1], c[2]])).toEqual([['hyperliquid', 'ETH/USDC:USDC', '1m'], ['binance', 'ETH/USDT', '1m']]);
+    expect(labBarsFor(1 / 60)).toBe(11_520);
+    const L = sw.coins.get('ETH').lab[1 / 60].bars;
+    expect(L).toHaveLength(11_520);
+    // the older candles are scaled to Hyperliquid's price: no jump at the seam
+    expect(L[0].close).toBeCloseTo(101, 6);
+    expect(L[L.length - 1].close).toBe(101);
+    // 5-minute and slower candles fit in Hyperliquid's own history: no Binance download
+    expect(labBarsFor(1 / 12)).toBe(3000);
+    expect(labBarsFor(0.25)).toBe(3000);
   });
 
   it('a strategy tested on 15-minute candles reads 15-minute candles live, and looks every minute', async () => {

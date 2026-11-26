@@ -413,12 +413,12 @@ try {
   const ccText = await page.locator('.cc').innerText();
   expect(/SWARM COMMAND/.test(ccText) && /PAPER/.test(ccText) && /\$30\.00/.test(ccText), 'the Command Center shows the swarm, its paper account and $30');
   expect((await page.locator('.cc-gauge').count()) === 11, 'eleven swarm gauges: the agents, the deploy gate, the council, Micro, the forest, the optimizer and the limits');
-  expect(/Micro · entries/.test(await page.locator('.cc-gauges').innerText()), 'Micro has its own gauge: how the entries were made');
+  expect(/Micro · entries/i.test(await page.locator('.cc-gauges').innerText()), 'Micro has its own gauge: how the entries were made');
   // only what is at work has a gauge: both agents off and nothing deployed → no agent gauges, no council gauge
   await page.evaluate(() => window.novus.cswarm.config({ agents: { auction: false, trend: false } }));
   await page.waitForFunction(() => document.querySelectorAll('.cc-gauge').length === 8, null, { timeout: 10_000 }).catch(() => undefined);
   const g8 = await page.locator('.cc-gauges').innerText();
-  expect((await page.locator('.cc-gauge').count()) === 8 && !/Auctioneer|Council/.test(g8) && /Micro · entries/.test(g8) && /Guardian/.test(g8), `switched-off agents and a council with nothing to decide have no gauge; Micro, Guardian and the limits stay (${(await page.locator('.cc-gauge').count())} shown)`);
+  expect((await page.locator('.cc-gauge').count()) === 8 && !/Auctioneer|Council/i.test(g8) && /Micro · entries/i.test(g8) && /Guardian/i.test(g8), `switched-off agents and a council with nothing to decide have no gauge; Micro, Guardian and the limits stay (${(await page.locator('.cc-gauge').count())} shown)`);
   await page.evaluate(() => window.novus.cswarm.config({ agents: { auction: true, trend: true } }));
   await page.waitForFunction(() => document.querySelectorAll('.cc-gauge').length === 11, null, { timeout: 10_000 }).catch(() => undefined);
   await page.locator('.cc-gauge.clickable').first().click();

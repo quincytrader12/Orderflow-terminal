@@ -15,6 +15,7 @@ import { fitBest, garchVar, type GarchFit } from './garch';
 import { fitForest, fitMLP, fitRidge, predictForest, predictMLP, predictRidge, type ForestModel, type MLP, type Ridge } from './ml';
 import { fitHmm2, hmmFilter, hurstRS, kalmanTrend, ouRolling, varianceRatio, volEstimate, type Hmm2 } from './quant';
 import { CANDLE_FEATURES, candleShape } from './shape';
+import { ncdf } from './stats';
 import { adx, atr, ema, hiPrev, loPrev, logRets, pctRank, retN, rsi, rstd, rvol, sma, volZ, type Bar } from './series';
 
 export interface Market {
@@ -535,6 +536,8 @@ export interface SignalDef {
   needsBench?: boolean;
   /** only meaningful on bars shorter than a day */
   intraday?: boolean;
+  /** only meaningful on candles this short or shorter, in hours (a quarter-hour's first minute needs 1- or 5-minute candles) */
+  maxTfH?: number;
   /** exits that suit the rule (the search varies them) */
   exit: Partial<ExitSpec>;
   compute: (c: Ctx, p: Params) => Int8Array;
@@ -1397,6 +1400,202 @@ export const SIGNALS: SignalDef[] = [
       return Int8Array.from(f.z, (z, i) => (Number.isFinite(z) && f.beta[i] > 0 && f.r2[i] >= 0.5 ? (z < -p.k ? 1 : z > p.k ? -1 : 0) : 0));
     },
     describe: (p) => `fit the coin against bitcoin over ${hrs(p.window)}; buy when it is more than ${p.k} standard deviations cheap against bitcoin, sell when as rich (only while the two move together)`,
+  },
+  // ---------- high frequency: built for 1- and 5-minute candles ----------
+  {
+    id: 'ofi',
+    name: 'Order-flow pressure (bulk volume)',
+    family: 'volume',
+    papers: ['elo16', 'cks14', 'wbxz22'],
+    rationale: 'Over minutes, prices are pushed by order-flow imbalance — aggressive buying against aggressive selling. Candles do not say who was aggressive, but the bulk-volume method estimates it: each candle\'s volume is split into buys and sells by how big its move was against the usual size (a large up candle is mostly buying). When the last few candles\' volume leans hard one way, the flow is one-sided and the next minutes tend to follow it. Measured on stocks and futures; one test on crypto 1-minute flow found it did not survive costs — the test here decides, with costs.',
+    grid: { n: [5, 15, 30], th: [0.25, 0.35, 0.5] },
+    intraday: true,
+    maxTfH: 1,
+    exit: { stopAtr: 1.5, targetR: 1.5, maxBars: 15, onFlip: true },
+    compute: (c, p) => {
+      const b = c.m.bars;
+      const r = lrets(c);
+      const W = Math.max(20, H(c, 24));
+      const sd = cached(c, `sdr${W}`, () => rstd(r, W));
+      const n = Math.max(2, Math.round(p.n));
+      const out = state(b.length);
+      const sv = new Float64Array(b.length);
+      let num = 0;
+      let den = 0;
+      for (let i = 1; i < b.length; i++) {
+        const s = sd[i - 1];
+        const v = b[i].volume > 0 ? b[i].volume : 0;
+        // the buy share of this candle's volume: Φ(move / its usual size); signed volume is buys − sells
+        sv[i] = s > 0 && Number.isFinite(r[i]) ? (2 * ncdf(r[i] / s) - 1) * v : 0;
+        num += sv[i];
+        den += v;
+        if (i >= n) {
+          num -= sv[i - n];
+          den -= b[i - n].volume > 0 ? b[i - n].volume : 0;
+        }
+        if (i < W + n || den <= 0) continue;
+        const imb = num / den;
+        out[i] = imb > p.th ? 1 : imb < -p.th ? -1 : 0;
+      }
+      return out;
+    },
+    describe: (p) => `long while the last ${p.n} candles' volume is more than ${Math.round(p.th * 100)}% net buying (estimated from each candle's move), short while as much net selling`,
+  },
+  {
+    id: 'qhour',
+    name: 'Quarter-hour opening flow',
+    family: 'seasonal',
+    papers: ['kh26', 'elo16'],
+    rationale: 'Trading algorithms run on the clock: crypto futures volume and volatility burst at the minute, the five minutes and above all the quarter-hour (:00, :15, :30, :45). Kim & Hansen find that the order imbalance in a quarter-hour\'s first moments predicts the returns of the next hours. Here the first candle of each quarter-hour stands in for those moments (its move against the usual size, on 1- or 5-minute candles); a strong one sets the side for the hours after. An independent rebuild found the pattern real but hard to trade after costs — the test shows whether it is.',
+    grid: { k: [1, 1.5, 2], hold: [1, 4], vol: [0, 1] },
+    intraday: true,
+    maxTfH: 1 / 12,
+    exit: { stopAtr: 2, targetR: 0, maxBars: 240, onFlip: true },
+    compute: (c, p) => {
+      const b = c.m.bars;
+      const out = state(b.length);
+      if (c.m.tfH > 1 / 12 + 1e-9) return out;
+      const r = lrets(c);
+      const W = Math.max(20, H(c, 24));
+      const sd = cached(c, `sdr${W}`, () => rstd(r, W));
+      const vz = cached(c, 'vz', () => volZ(c.m.bars, H(c, 168)));
+      const holdBars = Math.max(1, Math.round(p.hold / c.m.tfH));
+      let side = 0;
+      let until = -1;
+      for (let i = W + 1; i < b.length; i++) {
+        const minute = Math.round(b[i].time / 60_000) % 15;
+        if (minute === 0 && sd[i - 1] > 0 && (!p.vol || vz[i] > 0)) {
+          const z = r[i] / sd[i - 1];
+          if (Math.abs(z) > p.k) {
+            side = z > 0 ? 1 : -1;
+            until = i + holdBars;
+          }
+        }
+        if (i > until) side = 0;
+        out[i] = side;
+      }
+      return out;
+    },
+    describe: (p) => `when a quarter-hour opens (:00, :15, :30, :45) with a move of more than ${p.k}× the usual size${p.vol ? ' on above-normal volume' : ''}, trade in its direction for up to ${p.hold} hour${p.hold > 1 ? 's' : ''}`,
+  },
+  {
+    id: 'nyorb5',
+    name: 'US-open range breakout (the first minutes)',
+    family: 'breakout',
+    papers: ['zba24o', 'za23o', 'emuw19'],
+    rationale: 'Zarattini, Barbon & Aziz find the opening-range breakout pays most when the range is the first five minutes after the US stock market opens (9:30 New York), on stocks with unusual activity. Crypto\'s volume and volatility jump at that hour too, as US money arrives. The first close beyond the opening minutes\' high or low is traded in its direction, until the US close at the latest. On US stocks it was profitable after costs; a replication on index CFDs found nothing left after costs — the test here decides for crypto.',
+    grid: { m: [5, 15, 30] },
+    intraday: true,
+    maxTfH: 0.25,
+    exit: { stopAtr: 1.5, targetR: 0, maxBars: 78, onFlip: false },
+    compute: (c, p) => {
+      const b = c.m.bars;
+      const out = state(b.length);
+      const mins = c.m.tfH * 60;
+      if (mins > p.m + 1e-9) return out;
+      let day = -1;
+      let hi = -Infinity;
+      let lo = Infinity;
+      let side = 0;
+      for (let i = 0; i < b.length; i++) {
+        const t = b[i].time;
+        const local = t / 3_600_000 + nyOffset(t);
+        const d = Math.floor(local / 24);
+        const m = Math.round((((local % 24) + 24) % 24) * 60);
+        const wd = new Date(d * 86_400_000).getUTCDay();
+        if (d !== day) {
+          day = d;
+          hi = -Infinity;
+          lo = Infinity;
+          side = 0;
+        }
+        if (wd === 0 || wd === 6) continue;
+        // the opening range: candles that open from 9:30 and close by 9:30 + m minutes
+        if (m >= 570 && m + mins <= 570 + p.m + 1e-9) {
+          hi = Math.max(hi, b[i].high);
+          lo = Math.min(lo, b[i].low);
+          continue;
+        }
+        if (m < 570 + p.m || m + mins > 960 || !Number.isFinite(hi)) {
+          if (m + mins > 960) side = 0;
+          continue;
+        }
+        if (!side) side = b[i].close > hi ? 1 : b[i].close < lo ? -1 : 0;
+        out[i] = side;
+      }
+      return out;
+    },
+    describe: (p) => `on US trading days, the first ${p.m} minutes after 9:30 New York set a range; trade the first close beyond it, in its direction, until 16:00 New York at the latest`,
+  },
+  {
+    id: 'vwapband',
+    name: 'VWAP band snap-back',
+    family: 'reversion',
+    papers: ['bbd22', 'wbxz22', 'kw26'],
+    rationale: 'The day\'s volume-weighted average price is where most of the day\'s business was done; its bands — the volume-weighted spread of prices around it — mark how far price usually strays. A close beyond a wide band is often impatient or forced flow, and those who take the other side are paid as price settles back (short-term reversal in crypto is mostly pay for providing liquidity, Bianchi et al.). With confirmation, it waits for a candle that already turns back.',
+    grid: { k: [1.5, 2, 2.5], conf: [0, 1] },
+    intraday: true,
+    maxTfH: 1,
+    exit: { stopAtr: 1.5, targetR: 1, maxBars: 24, onFlip: false },
+    compute: (c, p) => {
+      const b = c.m.bars;
+      const out = state(b.length);
+      const { k } = sessionOf(c, 0);
+      const warm = Math.max(3, Math.round(1 / c.m.tfH));
+      let w = 0;
+      let pv = 0;
+      let pv2 = 0;
+      for (let i = 0; i < b.length; i++) {
+        if (k[i] === 0) {
+          w = 0;
+          pv = 0;
+          pv2 = 0;
+        }
+        const v = b[i].volume > 0 ? b[i].volume : 0;
+        const tp = (b[i].high + b[i].low + b[i].close) / 3;
+        w += v;
+        pv += tp * v;
+        pv2 += tp * tp * v;
+        if (k[i] < warm || w <= 0) continue;
+        const vw = pv / w;
+        const sd = Math.sqrt(Math.max(0, pv2 / w - vw * vw));
+        if (!(sd > 0)) continue;
+        const z = (b[i].close - vw) / sd;
+        const down = b[i].close < b[i].open;
+        const up = b[i].close > b[i].open;
+        if (z > p.k && (!p.conf || down)) out[i] = -1;
+        else if (z < -p.k && (!p.conf || up)) out[i] = 1;
+      }
+      return out;
+    },
+    describe: (p) => `sell a close more than ${p.k} band-widths above the day's VWAP, buy one as far below${p.conf ? ' — only on a candle that has already turned back' : ''} (the day starts at 00:00 UTC)`,
+  },
+  {
+    id: 'emapull',
+    name: 'Pullback to the fast average (EMA)',
+    family: 'trend',
+    papers: ['blr92', 'lmw00'],
+    rationale: 'The scalper\'s staple: with a fast exponential average above a rising slow one, the trend is up; a dip that touches the fast average and closes back above it is a cheap entry into that trend (and the mirror for downtrends). Moving-average rules have been studied for decades (Brock, Lakonishok & LeBaron) — whether this one leaves anything after costs at minute speed is what the test is for.',
+    grid: { f: [9, 20], s: [21, 50] },
+    exit: { stopAtr: 1.5, targetR: 2, maxBars: 30, onFlip: false },
+    compute: (c, p) => {
+      const b = c.m.bars;
+      const out = state(b.length);
+      if (p.f >= p.s) return out;
+      const cl = close(c);
+      const ef = cached(c, `ema${p.f}`, () => ema(cl, p.f));
+      const es = cached(c, `ema${p.s}`, () => ema(cl, p.s));
+      const back = 5;
+      for (let i = p.s + back; i < b.length; i++) {
+        if (!Number.isFinite(ef[i]) || !Number.isFinite(es[i - back])) continue;
+        const upTrend = ef[i] > es[i] && es[i] > es[i - back];
+        const dnTrend = ef[i] < es[i] && es[i] < es[i - back];
+        if (upTrend && b[i].low <= ef[i] && b[i].close > ef[i] && b[i].close > b[i].open) out[i] = 1;
+        else if (dnTrend && b[i].high >= ef[i] && b[i].close < ef[i] && b[i].close < b[i].open) out[i] = -1;
+      }
+      return out;
+    },
+    describe: (p) => `with the ${p.f}-candle average above a rising ${p.s}-candle one, buy a dip that touches the fast average and closes back above it (the mirror to sell)`,
   },
   {
     id: 'btclead',
